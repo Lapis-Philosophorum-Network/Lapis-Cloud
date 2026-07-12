@@ -1,0 +1,326 @@
+package network.lapis.cloud.server.db
+
+import dev.kuml.erm.model.ErmDataType
+import dev.kuml.erm.model.ErmModel
+import io.kotest.core.spec.style.FunSpec
+import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
+import io.kotest.matchers.shouldBe
+import network.lapis.cloud.server.db.tables.DirectMessageTable
+import network.lapis.cloud.server.db.tables.MailingDeliveryLogTable
+import network.lapis.cloud.server.db.tables.MailingListSubscriptionTable
+import network.lapis.cloud.server.db.tables.MailingListTable
+import network.lapis.cloud.server.db.tables.MailingMessageTable
+import org.jetbrains.exposed.v1.jdbc.JdbcTransaction
+import org.jetbrains.exposed.v1.jdbc.transactions.transaction
+import java.io.File
+
+/**
+ * ADR-0016 (MDA persistence pipeline) — communication domain.
+ *
+ * Verifies that `lapis-server/src/main/kuml/03-communication.kuml.kts` is a faithful model of
+ * both (a) the real, Flyway-migrated H2 schema (`mailing_list`/`mailing_list_subscription`/
+ * `mailing_message`/`mailing_delivery_log`/`direct_message`), and (b) the hand-written
+ * `MailingListTable`/`MailingListSubscriptionTable`/`MailingMessageTable`/
+ * `MailingDeliveryLogTable`/`DirectMessageTable` Exposed objects.
+ *
+ * Mirrors [SchemaDriftTest] (foundation domain), [ContributionSchemaDriftTest] (contribution
+ * domain) and [DocumentSchemaDriftTest] (document domain) — see [SchemaDriftTest]'s KDoc for the
+ * full designModelStrategy option B rationale (verification-only artifact; hand-written `Table`
+ * objects remain the actually-compiled/actually-imported-by-N-files runtime artifact).
+ */
+class CommunicationSchemaDriftTest :
+    FunSpec({
+        beforeSpec { DatabaseConfig.connect() }
+
+        val scriptFile = File(KumlModelLoader.kumlSourceDir, "03-communication.kuml.kts")
+        val model: ErmModel by lazy { KumlModelLoader.loadErmModel(scriptFile) }
+
+        /** Resolves an `ErmForeignKey.targetEntityId` back to its entity name within [model]. */
+        fun ErmModel.entityNameOf(entityId: String): String? = entities.firstOrNull { it.id == entityId }?.name
+
+        test("model declares exactly the five communication entities plus the Member stub") {
+            model.entities.map { it.name }.toSet() shouldBe
+                setOf(
+                    "member",
+                    "mailing_list",
+                    "mailing_list_subscription",
+                    "mailing_message",
+                    "mailing_delivery_log",
+                    "direct_message",
+                )
+        }
+
+        // ── (1) Model vs. real H2-migrated schema ───────────────────────────────
+
+        test("mailing_list table shape matches the real migrated schema") {
+            val entity = model.entities.single { it.name == "mailing_list" }
+            val real = transaction { introspectCommunicationTable("mailing_list") }
+
+            entity.attributes.map { it.name }.toSet() shouldBe real.columns.keys
+
+            entity.attributes.forEach { attr ->
+                val col = real.columns.getValue(attr.name!!)
+                withClue("column '${attr.name}'") {
+                    col.nullable shouldBe attr.nullable
+                }
+            }
+            // created_by has a real FK in the migrated schema, but (same rationale as document's
+            // folder_id/created_by) is modelled as a plain «Column» attribute, not a UML
+            // association — the derived default name would be "member_id", not the real schema's
+            // "created_by".
+            real.foreignKeys["created_by"] shouldBe "member"
+            entity.attributeByName("created_by")?.foreignKey shouldBe null
+        }
+
+        test("mailing_list_subscription table shape matches the real migrated schema") {
+            val entity = model.entities.single { it.name == "mailing_list_subscription" }
+            val real = transaction { introspectCommunicationTable("mailing_list_subscription") }
+
+            entity.attributes.map { it.name }.toSet() shouldBe real.columns.keys
+
+            entity.attributes.forEach { attr ->
+                val col = real.columns.getValue(attr.name!!)
+                withClue("column '${attr.name}'") {
+                    col.nullable shouldBe attr.nullable
+                }
+            }
+            // Both FKs on this table match UmlToErmTransformer's association-derived default
+            // name exactly ("mailing_list_id" / "member_id"), so both are real UML associations.
+            real.foreignKeys["mailing_list_id"] shouldBe "mailing_list"
+            real.foreignKeys["member_id"] shouldBe "member"
+            model.entityNameOf(entity.attributeByName("mailing_list_id")?.foreignKey?.targetEntityId ?: "") shouldBe "mailing_list"
+            model.entityNameOf(entity.attributeByName("member_id")?.foreignKey?.targetEntityId ?: "") shouldBe "member"
+        }
+
+        test("mailing_list_subscription's composite UNIQUE constraint has no kUML ERM equivalent (accepted gap, pinned)") {
+            // uq_mailing_subscription_list_member UNIQUE (mailing_list_id, member_id) in
+            // V4__communication.sql. Same accepted gap as contribution's
+            // uq_contribution_member_tier_period and document's uq_document_version_number —
+            // ErmProfileNames' «Column».unique tag is single-column only.
+            val real = transaction { introspectCommunicationTable("mailing_list_subscription") }
+            real.compositeUniqueConstraints shouldContainExactlyInAnyOrder
+                listOf(setOf("mailing_list_id", "member_id"))
+
+            val entity = model.entities.single { it.name == "mailing_list_subscription" }
+            entity.attributes.none { it.unique } shouldBe true
+        }
+
+        test("mailing_message table shape matches the real migrated schema") {
+            val entity = model.entities.single { it.name == "mailing_message" }
+            val real = transaction { introspectCommunicationTable("mailing_message") }
+
+            entity.attributes.map { it.name }.toSet() shouldBe real.columns.keys
+
+            entity.attributes.forEach { attr ->
+                val col = real.columns.getValue(attr.name!!)
+                withClue("column '${attr.name}'") {
+                    col.nullable shouldBe attr.nullable
+                }
+            }
+            // mailing_list_id matches the association-derived default and is a real UML
+            // association; sent_by does not (would derive "member_id") and is a plain «Column».
+            real.foreignKeys["mailing_list_id"] shouldBe "mailing_list"
+            real.foreignKeys["sent_by"] shouldBe "member"
+            model.entityNameOf(entity.attributeByName("mailing_list_id")?.foreignKey?.targetEntityId ?: "") shouldBe "mailing_list"
+            entity.attributeByName("sent_by")?.foreignKey shouldBe null
+        }
+
+        test("mailing_delivery_log table shape matches the real migrated schema") {
+            val entity = model.entities.single { it.name == "mailing_delivery_log" }
+            val real = transaction { introspectCommunicationTable("mailing_delivery_log") }
+
+            entity.attributes.map { it.name }.toSet() shouldBe real.columns.keys
+
+            entity.attributes.forEach { attr ->
+                val col = real.columns.getValue(attr.name!!)
+                withClue("column '${attr.name}'") {
+                    col.nullable shouldBe attr.nullable
+                }
+            }
+            // Both FKs on this table match UmlToErmTransformer's association-derived default
+            // name exactly ("mailing_message_id" / "member_id"), so both are real UML
+            // associations.
+            real.foreignKeys["mailing_message_id"] shouldBe "mailing_message"
+            real.foreignKeys["member_id"] shouldBe "member"
+            model.entityNameOf(entity.attributeByName("mailing_message_id")?.foreignKey?.targetEntityId ?: "") shouldBe "mailing_message"
+            model.entityNameOf(entity.attributeByName("member_id")?.foreignKey?.targetEntityId ?: "") shouldBe "member"
+        }
+
+        test("direct_message table shape matches the real schema (sender_id/recipient_id as plain columns, two-FK-collision gap pinned)") {
+            val entity = model.entities.single { it.name == "direct_message" }
+            val real = transaction { introspectCommunicationTable("direct_message") }
+
+            entity.attributes.map { it.name }.toSet() shouldBe real.columns.keys
+
+            entity.attributes.forEach { attr ->
+                val col = real.columns.getValue(attr.name!!)
+                withClue("column '${attr.name}'") {
+                    col.nullable shouldBe attr.nullable
+                }
+            }
+            // The two-associations-to-the-same-target collision case flagged in the retrofit
+            // plan and in UmlToErmTransformer.addForeignKey's own KDoc. Empirically verified
+            // during implementation (against both this script and
+            // UmlToErmAssociationTest's own "two FK associations from the same class to the same
+            // target disambiguate via role names" fixture) that the FIRST declared association of
+            // such a pair always claims the plain class-derived default name ("member_id")
+            // regardless of role, and only the SECOND falls back to a role-derived name — so a
+            // real association pair here would never resolve to "sender_id" AND "recipient_id"
+            // together (one side always ends up "member_id"). Both FKs are therefore modelled as
+            // plain «Column» UUID attributes instead, per the retrofit plan's risk-note fallback
+            // strategy. Real FK existence/target is still independently pinned here.
+            real.foreignKeys["sender_id"] shouldBe "member"
+            real.foreignKeys["recipient_id"] shouldBe "member"
+            entity.attributeByName("sender_id")?.foreignKey shouldBe null
+            entity.attributeByName("recipient_id")?.foreignKey shouldBe null
+        }
+
+        // ── (2) Model vs. hand-written Exposed Table objects ────────────────────
+
+        test("mailing_list entity column-name set matches the hand-written MailingListTable 1:1") {
+            model.entities
+                .single { it.name == "mailing_list" }
+                .attributes
+                .map { it.name } shouldContainExactlyInAnyOrder MailingListTable.columns.map { it.name }
+        }
+
+        test("mailing_list_subscription entity column-name set matches the hand-written MailingListSubscriptionTable 1:1") {
+            model.entities
+                .single { it.name == "mailing_list_subscription" }
+                .attributes
+                .map { it.name } shouldContainExactlyInAnyOrder MailingListSubscriptionTable.columns.map { it.name }
+        }
+
+        test("mailing_message entity column-name set matches the hand-written MailingMessageTable 1:1") {
+            model.entities
+                .single { it.name == "mailing_message" }
+                .attributes
+                .map { it.name } shouldContainExactlyInAnyOrder MailingMessageTable.columns.map { it.name }
+        }
+
+        test("mailing_delivery_log entity column-name set matches the hand-written MailingDeliveryLogTable 1:1") {
+            model.entities
+                .single { it.name == "mailing_delivery_log" }
+                .attributes
+                .map { it.name } shouldContainExactlyInAnyOrder MailingDeliveryLogTable.columns.map { it.name }
+        }
+
+        test("direct_message entity column-name set matches the hand-written DirectMessageTable 1:1") {
+            model.entities
+                .single { it.name == "direct_message" }
+                .attributes
+                .map { it.name } shouldContainExactlyInAnyOrder DirectMessageTable.columns.map { it.name }
+        }
+
+        test("mailing_message.status is modelled as VARCHAR(20), matching the real schema (enum-fidelity gap, documented)") {
+            // Same accepted gap as MemberStatus/AccountRole/BillingInterval/ContributionStatus/
+            // DocumentAccessLevel in the prior domains — explicit «Column».sqlType="VARCHAR(20)"
+            // override takes precedence over kUML's enum-to-VARCHAR+CHECK fallback path, matching
+            // the real V4__communication.sql's plain `VARCHAR(20)` with no CHECK constraint.
+            val status = model.entities.single { it.name == "mailing_message" }.attributeByName("status")
+            status?.type shouldBe ErmDataType.Custom("VARCHAR(20)")
+        }
+
+        test("mailing_delivery_log.delivery_status is modelled as VARCHAR(30), matching the real schema (enum-fidelity gap, documented)") {
+            val deliveryStatus =
+                model.entities
+                    .single { it.name == "mailing_delivery_log" }
+                    .attributeByName("delivery_status")
+            deliveryStatus?.type shouldBe ErmDataType.Custom("VARCHAR(30)")
+        }
+    })
+
+/** Result of introspecting one real table's shape via `information_schema`, including composite uniques. */
+private data class IntrospectedCommunicationTable(
+    val columns: Map<String, IntrospectedCommunicationColumn>,
+    /** FK column name -> referenced table name. */
+    val foreignKeys: Map<String, String>,
+    /** Each element is the full column-name set of one multi-column UNIQUE constraint (2+ columns). */
+    val compositeUniqueConstraints: List<Set<String>>,
+)
+
+private data class IntrospectedCommunicationColumn(
+    val nullable: Boolean,
+)
+
+/**
+ * ANSI `information_schema` walk for a single table's columns, nullability, FK targets and
+ * composite UNIQUE constraints. Mirrors [DocumentSchemaDriftTest]'s (private,
+ * document-domain-scoped) `introspectDocumentTable`.
+ */
+private fun JdbcTransaction.introspectCommunicationTable(tableName: String): IntrospectedCommunicationTable {
+    val nullableByColumn = mutableMapOf<String, Boolean>()
+    exec(
+        """
+        SELECT column_name, is_nullable
+        FROM information_schema.columns
+        WHERE table_name = '$tableName'
+        """.trimIndent(),
+    ) { rs ->
+        while (rs.next()) {
+            nullableByColumn[rs.getString("column_name")] = rs.getString("is_nullable") == "YES"
+        }
+    }
+
+    val fkByColumn = mutableMapOf<String, String>()
+    exec(
+        """
+        SELECT kcu.column_name AS fk_column, tc2.table_name AS ref_table
+        FROM information_schema.table_constraints tc
+        JOIN information_schema.key_column_usage kcu
+            ON tc.constraint_name = kcu.constraint_name
+            AND tc.table_schema = kcu.table_schema
+        JOIN information_schema.referential_constraints rc
+            ON tc.constraint_name = rc.constraint_name
+            AND tc.constraint_schema = rc.constraint_schema
+        JOIN information_schema.table_constraints tc2
+            ON rc.unique_constraint_name = tc2.constraint_name
+            AND rc.unique_constraint_schema = tc2.table_schema
+        WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_name = '$tableName'
+        """.trimIndent(),
+    ) { rs ->
+        while (rs.next()) {
+            fkByColumn[rs.getString("fk_column")] = rs.getString("ref_table")
+        }
+    }
+
+    val uniqueColumnsByConstraint = mutableMapOf<String, MutableSet<String>>()
+    exec(
+        """
+        SELECT tc.constraint_name, kcu.column_name
+        FROM information_schema.table_constraints tc
+        JOIN information_schema.key_column_usage kcu
+            ON tc.constraint_name = kcu.constraint_name
+            AND tc.table_schema = kcu.table_schema
+        WHERE tc.constraint_type = 'UNIQUE' AND tc.table_name = '$tableName'
+        """.trimIndent(),
+    ) { rs ->
+        while (rs.next()) {
+            uniqueColumnsByConstraint
+                .getOrPut(rs.getString("constraint_name")) { mutableSetOf() }
+                .add(rs.getString("column_name"))
+        }
+    }
+
+    val columns =
+        nullableByColumn.mapValues { (_, nullable) ->
+            IntrospectedCommunicationColumn(nullable = nullable)
+        }
+    val compositeUniques = uniqueColumnsByConstraint.values.filter { it.size > 1 }.map { it.toSet() }
+    return IntrospectedCommunicationTable(
+        columns = columns,
+        foreignKeys = fkByColumn,
+        compositeUniqueConstraints = compositeUniques,
+    )
+}
+
+/** Small local stand-in for Kotest's `withClue` to keep imports minimal (mirrors SchemaDriftTest's). */
+private inline fun <T> withClue(
+    clue: String,
+    block: () -> T,
+): T =
+    try {
+        block()
+    } catch (e: AssertionError) {
+        throw AssertionError("$clue: ${e.message}", e)
+    }

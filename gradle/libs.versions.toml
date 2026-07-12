@@ -14,6 +14,7 @@ flyway                  = "12.11.0"
 postgresql              = "42.7.13"
 h2                      = "2.4.240"
 hikaricp                = "7.1.0"
+kuml                    = "0.31.0"
 
 [plugins]
 kotlin-multiplatform    = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
@@ -56,3 +57,30 @@ flyway-database-postgresql      = { module = "org.flywaydb:flyway-database-postg
 postgresql                      = { module = "org.postgresql:postgresql", version.ref = "postgresql" }
 h2                               = { module = "com.h2database:h2", version.ref = "h2" }
 hikaricp                        = { module = "com.zaxxer:HikariCP", version.ref = "hikaricp" }
+
+# kUML MDA persistence pipeline (ADR-0016) — test-scoped only (SchemaDriftTest evaluates
+# design.kuml.kts and diffs the generated SQL DDL / Exposed Kotlin against the real schema
+# and the hand-written Table objects). Never added to `implementation`/`api`: kUML's own
+# transitive deps (Kotlin scripting host, ELK layout engine, etc.) are irrelevant to and
+# potentially conflicting with the Ktor server's runtime dependency graph. The `dev.kuml`
+# Gradle *plugin* itself is unpublished (404 on Gradle Plugin Portal) — these are plain
+# published library coordinates from Maven Central, resolved as regular dependencies.
+kuml-core-model                 = { module = "dev.kuml:kuml-core-model", version.ref = "kuml" }
+kuml-core-dsl                   = { module = "dev.kuml:kuml-core-dsl", version.ref = "kuml" }
+kuml-core-script                = { module = "dev.kuml:kuml-core-script", version.ref = "kuml" }
+kuml-metamodel-uml              = { module = "dev.kuml:kuml-metamodel-uml", version.ref = "kuml" }
+kuml-metamodel-erm              = { module = "dev.kuml:kuml-metamodel-erm", version.ref = "kuml" }
+kuml-profile-api                = { module = "dev.kuml:kuml-profile-api", version.ref = "kuml" }
+kuml-profile-erm                = { module = "dev.kuml:kuml-profile-erm", version.ref = "kuml" }
+kuml-codegen-api                = { module = "dev.kuml:kuml-codegen-api", version.ref = "kuml" }
+kuml-codegen-m2m                = { module = "dev.kuml:kuml-codegen-m2m", version.ref = "kuml" }
+kuml-transform-uml-to-erm       = { module = "dev.kuml:kuml-transform-uml-to-erm", version.ref = "kuml" }
+kuml-codegen-m2m-exposed        = { module = "dev.kuml:kuml-codegen-m2m-exposed", version.ref = "kuml" }
+kuml-gen-sql                    = { module = "dev.kuml:kuml-gen-sql", version.ref = "kuml" }
+# kuml-core-script only exposes kotlin-scripting-jvm-host via its runtimeElements variant, not
+# apiElements — invisible on a consumer's *compile* classpath by default, so KumlScriptHost's
+# `kotlin.script.experimental.api.*` return types (ResultWithDiagnostics, ScriptDiagnostic) fail
+# to resolve at compile time without this explicit addition.
+kotlin-scripting-jvm-host        = { module = "org.jetbrains.kotlin:kotlin-scripting-jvm-host", version.ref = "kotlin" }
+kotlin-scripting-common          = { module = "org.jetbrains.kotlin:kotlin-scripting-common", version.ref = "kotlin" }
+kotlin-scripting-jvm             = { module = "org.jetbrains.kotlin:kotlin-scripting-jvm", version.ref = "kotlin" }

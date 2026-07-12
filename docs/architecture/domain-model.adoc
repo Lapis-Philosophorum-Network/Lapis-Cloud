@@ -13,9 +13,43 @@ Fremdschluessel brauchen. Das vollstaendige Mitglieder-Stammdatenmodell (Antrags
 Rollen- und Berechtigungskonzept, Auth/Session) folgt in V0.1.2-V0.1.4 und ersetzt diesen Stub, ohne
 die hier definierten Fremdschluessel zu brechen.
 
-Persistenz-Erzeugung: Da die `uml-to-exposed`-MDA-Pipeline (ADR-0016) fuer dieses Repository noch
-nicht existiert, sind die Exposed-Tabellen unter `lapis-server/src/main/kotlin/.../db/tables` von Hand
-geschrieben. Dieses Diagramm bleibt bis dahin ein **dokumentarisches** Artefakt, keine Codegen-Quelle.
+Persistenz-Erzeugung: Die `uml-to-erm`/`erm-to-exposed`-MDA-Pipeline (ADR-0016, kUML-Module
+`kuml-transform-uml-to-erm` + `kuml-codegen-m2m-exposed`, Maven Central) existiert seit V3.4.x —
+der `dev.kuml` Gradle-*Plugin* selbst ist allerdings unveroeffentlicht. Fuer **Foundation**
+(`Member`/`Account`, dieser Stub; `lapis-server/src/main/kuml/00-foundation.kuml.kts`),
+**Beitragsverwaltung** (`MembershipTier`/`Contribution`;
+`lapis-server/src/main/kuml/01-contribution.kuml.kts`), **Dokumentenablage**
+(`DocumentFolder`/`Document`/`DocumentVersion`;
+`lapis-server/src/main/kuml/02-document.kuml.kts`) und **Kommunikation**
+(`MailingList`/`MailingListSubscription`/`MailingMessage`/`MailingDeliveryLog`/`DirectMessage`;
+`lapis-server/src/main/kuml/03-communication.kuml.kts`) sind diese `.kuml.kts`-Dateien seit der
+MDA-Persistence-Retrofit-Welle das versionierte, per domaenenspezifischem `SchemaDriftTest`
+(`lapis-server/src/test/kotlin/network/lapis/cloud/server/db/{SchemaDriftTest,
+ContributionSchemaDriftTest, DocumentSchemaDriftTest, CommunicationSchemaDriftTest}.kt`) gegen das
+echte Flyway-migrierte Schema und die handgeschriebenen Exposed-`Table`-Objekte verifizierte
+Source-of-Truth-Modell — nicht mehr rein dokumentarisch. Die handgeschriebenen Exposed-Tabellen
+unter `lapis-server/src/main/kotlin/.../db/tables` bleiben bewusst der kompilierte/tatsaechlich
+importierte Artefakt (designModelStrategy Option B: Enum-zu-VARCHAR-Downgrade und fehlender
+Kotlin-Objektnamen-Override machen einen vollstaendigen generierten-und-kompilierten Swap fuer
+dieses Repository aktuell verlustbehaftet bzw. disruptiv — siehe die Kopfkommentare in den
+jeweiligen `.kuml.kts`-Dateien und CLAUDE.md's kUML-Repo-Konventionen im Vault fuer die volle
+Begruendung). Die Dokumentenablage-Domaene brachte einen weiteren, ueber Foundation/
+Beitragsverwaltung hinausgehenden Modellierungs-Kompromiss mit sich: `document.folder_id`,
+`document.created_by` und `document_version.uploaded_by` sind als einfache `«Column»`-UUID-
+Attribute statt als UML-Assoziationen modelliert, weil `UmlToErmTransformer`s Assoziations-zu-FK-
+Spaltennamensableitung (`snake_case(singular(Zielklasse)) + "_id"`) nicht mit den echten
+Spaltennamen uebereinstimmt und keine DSL-seitige Override-Moeglichkeit existiert (Details in
+`02-document.kuml.kts`s Kopfkommentar). Die Kommunikations-Domaene bestaetigt denselben
+Namensableitungs-Kompromiss (`mailing_list.created_by`, `mailing_message.sent_by`) und deckt
+zusaetzlich den im Retrofit-Plan als Risiko benannten Fall zweier Assoziationen von derselben
+Klasse zum selben Ziel auf: `direct_message.sender_id` und `direct_message.recipient_id`
+referenzieren beide `member`, aber `UmlToErmTransformer`s Rollennamen-basierte Kollisions-
+Aufloesung liefert bei einem echten Assoziationspaar nur `member_id`/`<rolle>_id`, nie beide
+gewuenschten Spaltennamen gemeinsam — empirisch verifiziert waehrend dieser Welle. Beide
+Fremdschluessel sind daher ebenfalls als einfache `«Column»`-Attribute modelliert (Details in
+`03-communication.kuml.kts`s Kopfkommentar und `CommunicationSchemaDriftTest`). Damit sind alle
+vier V0.1.5-Domaenen (Foundation, Beitragsverwaltung, Dokumentenablage, Kommunikation) nicht mehr
+rein dokumentarisch, sondern durch je einen `SchemaDriftTest` verifiziert.
 
 == Diagramm
 
