@@ -26,6 +26,7 @@ object PersonalDataRegistry {
             CommunicationPersonalData,
             GovernancePersonalData,
             LtrPersonalData,
+            WahlPersonalData,
         )
 
     /**
@@ -42,6 +43,13 @@ object PersonalDataRegistry {
             "abstimmung_option" to
                 "Der Korb (Option) selbst hat keinen Member-FK -- nur die in ihn gestakten " +
                 "abstimmung_stimme-Zeilen tragen Personenbezug (siehe GovernancePersonalData).",
+            "wahl_option" to
+                "Die Option selbst hat keinen Member-FK -- nur die zugehoerige wahl_kandidatur-Zeile " +
+                "(ein Hop weiter, siehe WahlPersonalData) traegt Personenbezug.",
+            "wahl_stimmzettel_auswahl" to
+                "Die Auswahl-Zeile hat keinen eigenen Member-FK -- sie loest erst ueber " +
+                "wahl_stimmzettel (zwei Hops weiter, siehe WahlPersonalData) zu einem Mitglied auf, " +
+                "und dort nur auf dem nicht-geheimen Pfad.",
             "erasure_request" to
                 "Verwaltet den Loeschprozess selbst und referenziert Mitglieder nur per UUID. Bleibt " +
                 "nach der Loeschung als Verfahrensnachweis bestehen (siehe dsgvo.adoc).",

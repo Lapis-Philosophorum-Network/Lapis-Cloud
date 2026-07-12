@@ -132,6 +132,10 @@ object BeschlussTable : Table("beschluss") {
     // Vickrey settlement produced this Beschluss. Nullable: a GREMIUM_QUORUM Beschluss has none.
     val abstimmungId = uuid("abstimmung_id").references(AbstimmungTable.id).nullable()
 
+    // Demokratische Wahlen (V0.2.4): set only when resolutionMode == DEMOKRATISCH, linking back
+    // to the Wahl whose tally produced this Beschluss -- mirrors abstimmungId's role exactly.
+    val wahlId = uuid("wahl_id").references(WahlTable.id).nullable()
+
     override val primaryKey = PrimaryKey(id)
 }
 

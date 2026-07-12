@@ -38,9 +38,13 @@ enum class BeschlussStatus { ANGENOMMEN, ABGELEHNT, VERTAGT }
  * Vickrey-basket-auction path (LTR-weighted, see [AbstimmungDto]). [GREMIUM_QUORUM] stays the DB
  * default so every pre-existing [BeschlussDto] row and `recordBeschluss`/`resolveAntrag` call site
  * is unaffected by this wave.
+ *
+ * Demokratische Wahlen (V0.2.4) add [DEMOKRATISCH]: a one-person-one-vote Wahl
+ * ([network.lapis.cloud.shared.domain.WahlDto]) resolved by `WahlService.auszaehlen`, tagged
+ * alongside [MERITOKRATISCH] as a third resolution path into the same Beschlussbuch.
  */
 @Serializable
-enum class ResolutionMode { GREMIUM_QUORUM, MERITOKRATISCH }
+enum class ResolutionMode { GREMIUM_QUORUM, MERITOKRATISCH, DEMOKRATISCH }
 
 @Serializable
 data class GremiumDto(
@@ -182,6 +186,8 @@ data class BeschlussDto(
     // a BeschlussDto without naming these two params) source-compatible.
     val resolutionMode: ResolutionMode = ResolutionMode.GREMIUM_QUORUM,
     val abstimmungId: String? = null,
+    // Demokratische Wahlen (V0.2.4). Same source-compatible default as abstimmungId above.
+    val wahlId: String? = null,
 )
 
 @Serializable

@@ -18,7 +18,6 @@ import network.lapis.cloud.server.db.tables.SitzungTable
 import network.lapis.cloud.server.db.tables.TagesordnungspunktTable
 import network.lapis.cloud.server.economy.LtrBalanceProvider
 import network.lapis.cloud.server.economy.PlaceholderLtrBalanceProvider
-import network.lapis.cloud.server.security.CurrentMember
 import network.lapis.cloud.server.security.ForbiddenException
 import network.lapis.cloud.server.security.canRecordForSitzung
 import network.lapis.cloud.server.security.canSubmitAntrag
@@ -36,7 +35,6 @@ import network.lapis.cloud.shared.domain.AntragResolutionInput
 import network.lapis.cloud.shared.domain.AntragStatus
 import network.lapis.cloud.shared.domain.AnwesenheitDto
 import network.lapis.cloud.shared.domain.AnwesenheitInput
-import network.lapis.cloud.shared.domain.AnwesenheitStatus
 import network.lapis.cloud.shared.domain.BeschlussDto
 import network.lapis.cloud.shared.domain.BeschlussInput
 import network.lapis.cloud.shared.domain.BeschlussStatus
@@ -44,8 +42,6 @@ import network.lapis.cloud.shared.domain.GremiumDto
 import network.lapis.cloud.shared.domain.GremiumInput
 import network.lapis.cloud.shared.domain.GremiumMitgliedschaftDto
 import network.lapis.cloud.shared.domain.GremiumMitgliedschaftInput
-import network.lapis.cloud.shared.domain.GremiumType
-import network.lapis.cloud.shared.domain.MemberStatus
 import network.lapis.cloud.shared.domain.ProtocolDraftDto
 import network.lapis.cloud.shared.domain.QuorumResultDto
 import network.lapis.cloud.shared.domain.ResolutionMode
@@ -63,11 +59,8 @@ import org.jetbrains.exposed.v1.core.ResultRow
 import org.jetbrains.exposed.v1.core.SortOrder
 import org.jetbrains.exposed.v1.core.and
 import org.jetbrains.exposed.v1.core.eq
-import org.jetbrains.exposed.v1.core.greaterEq
 import org.jetbrains.exposed.v1.core.inList
 import org.jetbrains.exposed.v1.core.isNull
-import org.jetbrains.exposed.v1.core.lessEq
-import org.jetbrains.exposed.v1.core.or
 import org.jetbrains.exposed.v1.jdbc.deleteWhere
 import org.jetbrains.exposed.v1.jdbc.insert
 import org.jetbrains.exposed.v1.jdbc.selectAll
@@ -75,7 +68,6 @@ import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 import org.jetbrains.exposed.v1.jdbc.update
 import java.math.BigDecimal
 import java.math.RoundingMode
-import kotlin.math.ceil
 import kotlin.time.Clock
 import kotlin.uuid.Uuid
 
@@ -281,7 +273,7 @@ class GovernanceService(
                 tagesordnung = loadTagesordnung(sId),
                 anwesenheit = loadAnwesenheit(sId),
                 beschluesse = loadBeschluesse(sId),
-                quorum = computeQuorum(sId, sitzung),
+                quorum = computeQuorum(sId, sitzung.gremiumId.toGremiumUuid(), sitzung.scheduledAt.date),
             )
         }
     }
@@ -412,7 +404,7 @@ class GovernanceService(
         val sId = sitzungId.toSitzungUuid()
         return transaction {
             val sitzung = loadSitzung(sId)
-            computeQuorum(sId, sitzung)
+            computeQuorum(sId, sitzung.gremiumId.toGremiumUuid(), sitzung.scheduledAt.date)
         }
     }
 
@@ -426,7 +418,7 @@ class GovernanceService(
             val gremiumId = requireSitzungGremiumId(sId)
             if (!current.canRecordForSitzung(gremiumId)) throw ForbiddenException()
             val sitzung = loadSitzung(sId)
-            insertBeschlussRow(sId, gremiumId, sitzung, input, current)
+            insertBeschlussRow(sId, gremiumId, sitzung.scheduledAt.date, input, current)
         }
     }
 
@@ -463,7 +455,7 @@ class GovernanceService(
                 anwesenheit = loadAnwesenheit(sId),
                 tagesordnung = loadTagesordnung(sId),
                 beschluesse = loadBeschluesse(sId),
-                quorum = computeQuorum(sId, sitzung),
+                quorum = computeQuorum(sId, sitzung.gremiumId.toGremiumUuid(), sitzung.scheduledAt.date),
                 generatedAt = nowLocalDateTime(),
             )
         }
@@ -648,7 +640,7 @@ class GovernanceService(
                     votesAbstain = input.votesAbstain,
                     status = input.status,
                 )
-            val beschluss = insertBeschlussRow(sId, gremiumId, sitzung, beschlussInput, current)
+            val beschluss = insertBeschlussRow(sId, gremiumId, sitzung.scheduledAt.date, beschlussInput, current)
             val newAntragStatus =
                 when (input.status) {
                     BeschlussStatus.ANGENOMMEN -> AntragStatus.BESCHLOSSEN
@@ -895,7 +887,7 @@ class GovernanceService(
                 insertBeschlussRow(
                     sId,
                     gremiumId,
-                    sitzung,
+                    sitzung.scheduledAt.date,
                     beschlussInput,
                     current,
                     resolutionMode = ResolutionMode.MERITOKRATISCH,
@@ -1048,157 +1040,6 @@ class GovernanceService(
             .toTagesordnungspunktDto()
     }
 
-    /**
-     * Shared insert path for [recordBeschluss] and [resolveAntrag] (V0.2.2), extended in V0.2.3
-     * to also serve [closeAbstimmung] — what actually makes "resolution links into the existing
-     * Beschlussbuch mechanism rather than creating a parallel one" true in code, not just in the
-     * DTO shape. [resolutionMode]/[abstimmungId] default to the pre-V0.2.3 Gremium-Quorum shape
-     * so [recordBeschluss]/[resolveAntrag] call sites are source-compatible. Must run inside an
-     * already-open `transaction {}` (all three call sites do).
-     *
-     * `quorumMet` is still snapshotted for a [ResolutionMode.MERITOKRATISCH] Beschluss too (for
-     * the historical record), even though the meritocratic outcome itself is decided by LTR
-     * baskets, not by this headcount figure — documented decision point (see the V0.2.3
-     * implementation plan's "Quorum interaction" note); a minimum-participation guard on
-     * Abstimmungen is deferred.
-     */
-    private fun insertBeschlussRow(
-        sId: Uuid,
-        gremiumId: Uuid,
-        sitzung: SitzungDto,
-        input: BeschlussInput,
-        current: CurrentMember,
-        resolutionMode: ResolutionMode = ResolutionMode.GREMIUM_QUORUM,
-        abstimmungId: Uuid? = null,
-    ): BeschlussDto {
-        val quorum = computeQuorum(sId, sitzung)
-        val gremiumRow = GremiumTable.selectAll().where { GremiumTable.id eq gremiumId }.single()
-        val now = nowLocalDateTime()
-        val number = nextBeschlussNumber(gremiumId, gremiumRow[GremiumTable.type].name, now.year)
-        val id = Uuid.random()
-        BeschlussTable.insert {
-            it[BeschlussTable.id] = id
-            it[BeschlussTable.sitzungId] = sId
-            it[tagesordnungspunktId] = input.tagesordnungspunktId?.let(Uuid::parse)
-            it[BeschlussTable.number] = number
-            it[title] = input.title
-            it[text] = input.text
-            it[votesYes] = input.votesYes
-            it[votesNo] = input.votesNo
-            it[votesAbstain] = input.votesAbstain
-            it[quorumMet] = quorum.met
-            it[status] = input.status
-            it[decidedAt] = now
-            it[recordedBy] = current.memberId
-            it[BeschlussTable.resolutionMode] = resolutionMode
-            it[BeschlussTable.abstimmungId] = abstimmungId
-        }
-        return BeschlussTable
-            .selectAll()
-            .where { BeschlussTable.id eq id }
-            .single()
-            .toBeschlussDto()
-    }
-
-    /**
-     * Beschlussfaehigkeit "as of" [SitzungDto.scheduledAt]'s date, not "today" — a Beschluss
-     * recorded weeks after the meeting must still reflect the quorum situation on the meeting
-     * date, not whatever the Gremium's membership looks like when [recordBeschluss] happens to
-     * run. `eligibleMemberCount` only counts active [GremiumMitgliedschaftTable] rows for the
-     * Gremium (a non-Gremium guest present at the Sitzung does not count toward quorum, even if
-     * marked ANWESEND/VERTRETEN in [AnwesenheitTable]) — except for a
-     * [GremiumType.MITGLIEDERVERSAMMLUNG]-typed Gremium (V0.2.2), where eligibility is instead
-     * "all members with [MemberStatus.AKTIV]" queried directly from [MemberTable]: syncing every
-     * member into [GremiumMitgliedschaftTable] on join/leave would be a brittle parallel
-     * bookkeeping system. Known limitation of the Mitgliederversammlung path: unlike the Gremium
-     * path (date-scoped via `since`/`until`), it checks *current* [MemberStatus], not "status as
-     * of the Sitzung date" — acceptable simplification for this wave, flagged for revisit if it
-     * becomes a real pain point (e.g. once membership churn is high or historical MV quorum
-     * disputes arise).
-     */
-    private fun computeQuorum(
-        sitzungId: Uuid,
-        sitzung: SitzungDto,
-    ): QuorumResultDto {
-        val scheduledDate = sitzung.scheduledAt.date
-        val gremiumId = sitzung.gremiumId.toGremiumUuid()
-        val gremiumRow = GremiumTable.selectAll().where { GremiumTable.id eq gremiumId }.single()
-        val quorumPercent = gremiumRow[GremiumTable.quorumPercent]
-        val eligible = eligibleMemberIds(gremiumRow, scheduledDate)
-        val presentCount =
-            AnwesenheitTable
-                .selectAll()
-                .where {
-                    (AnwesenheitTable.sitzungId eq sitzungId) and
-                        (AnwesenheitTable.status inList listOf(AnwesenheitStatus.ANWESEND, AnwesenheitStatus.VERTRETEN))
-                }.map { it[AnwesenheitTable.memberId] }
-                .count { it in eligible }
-        val eligibleCount = eligible.size
-        val requiredCount = ceil(eligibleCount * quorumPercent / 100.0).toInt()
-        return QuorumResultDto(
-            sitzungId = sitzungId.toString(),
-            eligibleMemberCount = eligibleCount,
-            presentCount = presentCount,
-            requiredCount = requiredCount,
-            quorumPercent = quorumPercent,
-            met = presentCount >= requiredCount,
-        )
-    }
-
-    /**
-     * The "who counts" set behind both [computeQuorum]'s headcount and [castStimme]'s eligibility
-     * to stake LTR into a Meritokratische Abstimmung (V0.2.3) — factored out of [computeQuorum] so
-     * both call sites share exactly one definition of Gremium/Mitgliederversammlung eligibility
-     * rather than risking the two silently drifting apart. See [computeQuorum] KDoc for the
-     * MITGLIEDERVERSAMMLUNG-vs-Gremium distinction and its known "current status, not
-     * as-of-Sitzung-date status" limitation on the Mitgliederversammlung path.
-     */
-    private fun eligibleMemberIds(
-        gremiumRow: ResultRow,
-        scheduledDate: LocalDate,
-    ): Set<Uuid> {
-        val gremiumId = gremiumRow[GremiumTable.id]
-        return if (gremiumRow[GremiumTable.type] == GremiumType.MITGLIEDERVERSAMMLUNG) {
-            MemberTable
-                .selectAll()
-                .where { MemberTable.status eq MemberStatus.AKTIV }
-                .map { it[MemberTable.id] }
-                .toSet()
-        } else {
-            GremiumMitgliedschaftTable
-                .selectAll()
-                .where {
-                    (GremiumMitgliedschaftTable.gremiumId eq gremiumId) and
-                        (GremiumMitgliedschaftTable.since lessEq scheduledDate) and
-                        (
-                            GremiumMitgliedschaftTable.until.isNull() or
-                                (GremiumMitgliedschaftTable.until greaterEq scheduledDate)
-                        )
-                }.map { it[GremiumMitgliedschaftTable.memberId] }
-                .toSet()
-        }
-    }
-
-    /**
-     * `"<GremiumType>-<Jahr>-<laufendeNummer>"` (e.g. `"VORSTAND-2026-03"`). The running number
-     * is `count(beschluss where gremium = X and year(decidedAt) = Y) + 1`, computed by loading
-     * this Gremium's Beschluss rows for the year and filtering in Kotlin rather than a DB-side
-     * `EXTRACT(YEAR FROM ...)` — no DB sequence needed at this scale, and avoids a
-     * date-function that behaves slightly differently between H2 and Postgres.
-     */
-    private fun nextBeschlussNumber(
-        gremiumId: Uuid,
-        gremiumTypeName: String,
-        year: Int,
-    ): String {
-        val countThisYear =
-            (BeschlussTable innerJoin SitzungTable)
-                .selectAll()
-                .where { SitzungTable.gremiumId eq gremiumId }
-                .count { it[BeschlussTable.decidedAt].year == year }
-        return "$gremiumTypeName-$year-${(countThisYear + 1).toString().padStart(2, '0')}"
-    }
-
     private fun memberDisplayName(memberId: Uuid?): String? =
         memberId?.let { id ->
             MemberTable
@@ -1275,26 +1116,6 @@ class GovernanceService(
             representedByDisplayName = memberDisplayName(this[AnwesenheitTable.representedByMemberId]),
             note = this[AnwesenheitTable.note],
             recordedAt = this[AnwesenheitTable.recordedAt],
-        )
-
-    private fun ResultRow.toBeschlussDto(): BeschlussDto =
-        BeschlussDto(
-            id = this[BeschlussTable.id].toString(),
-            sitzungId = this[BeschlussTable.sitzungId].toString(),
-            tagesordnungspunktId = this[BeschlussTable.tagesordnungspunktId]?.toString(),
-            number = this[BeschlussTable.number],
-            title = this[BeschlussTable.title],
-            text = this[BeschlussTable.text],
-            votesYes = this[BeschlussTable.votesYes],
-            votesNo = this[BeschlussTable.votesNo],
-            votesAbstain = this[BeschlussTable.votesAbstain],
-            quorumMet = this[BeschlussTable.quorumMet],
-            status = this[BeschlussTable.status],
-            decidedAt = this[BeschlussTable.decidedAt],
-            recordedById = this[BeschlussTable.recordedBy].toString(),
-            recordedByDisplayName = memberDisplayName(this[BeschlussTable.recordedBy]).orEmpty(),
-            resolutionMode = this[BeschlussTable.resolutionMode],
-            abstimmungId = this[BeschlussTable.abstimmungId]?.toString(),
         )
 
     /**

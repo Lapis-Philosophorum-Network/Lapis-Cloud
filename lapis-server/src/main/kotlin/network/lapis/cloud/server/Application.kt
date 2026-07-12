@@ -27,6 +27,7 @@ import network.lapis.cloud.server.rpc.GovernanceService
 import network.lapis.cloud.server.rpc.MailingService
 import network.lapis.cloud.server.rpc.MemberService
 import network.lapis.cloud.server.rpc.PingService
+import network.lapis.cloud.server.rpc.WahlService
 import network.lapis.cloud.server.security.ForbiddenException
 import network.lapis.cloud.server.security.UnauthenticatedException
 import network.lapis.cloud.shared.Greeting
@@ -38,6 +39,7 @@ import network.lapis.cloud.shared.rpc.IGovernanceService
 import network.lapis.cloud.shared.rpc.IMailingService
 import network.lapis.cloud.shared.rpc.IMemberService
 import network.lapis.cloud.shared.rpc.IPingService
+import network.lapis.cloud.shared.rpc.IWahlService
 import java.io.File
 
 fun main() {
@@ -80,6 +82,7 @@ fun Application.module() {
         registerService(IDirectMessageService::class) { call -> DirectMessageService(call) }
         registerService(IDsgvoService::class) { call -> DsgvoService(call) }
         registerService(IGovernanceService::class) { call -> GovernanceService(call) }
+        registerService(IWahlService::class) { call -> WahlService(call) }
     }
 
     routing {
