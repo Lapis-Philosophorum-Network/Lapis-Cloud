@@ -24,6 +24,7 @@ object PersonalDataRegistry {
             ContributionPersonalData,
             DocumentPersonalData,
             CommunicationPersonalData,
+            GovernancePersonalData,
         )
 
     /**
@@ -36,6 +37,7 @@ object PersonalDataRegistry {
         mapOf(
             "membership_tier" to "Reine Produktdefinition (Beitragshoehe/-intervall), kein Personenbezug.",
             "document_folder" to "Reine Organisationsstruktur, kein Personenbezug.",
+            "gremium" to "Reine Organisationsstruktur, kein Personenbezug.",
             "erasure_request" to
                 "Verwaltet den Loeschprozess selbst und referenziert Mitglieder nur per UUID. Bleibt " +
                 "nach der Loeschung als Verfahrensnachweis bestehen (siehe dsgvo.adoc).",
