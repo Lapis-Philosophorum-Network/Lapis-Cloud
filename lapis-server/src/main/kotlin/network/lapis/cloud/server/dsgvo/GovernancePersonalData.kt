@@ -3,6 +3,7 @@ package network.lapis.cloud.server.dsgvo
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
+import network.lapis.cloud.server.db.tables.AntragTable
 import network.lapis.cloud.server.db.tables.AnwesenheitTable
 import network.lapis.cloud.server.db.tables.BeschlussTable
 import network.lapis.cloud.server.db.tables.GremiumMitgliedschaftTable
@@ -20,15 +21,19 @@ import kotlin.uuid.Uuid
 /**
  * Owns [GremiumMitgliedschaftTable]/[SitzungTable]/[TagesordnungspunktTable]/[AnwesenheitTable]/
  * [BeschlussTable] — the five member-FK-bearing tables of the Gremien-/Sitzungsverwaltung wave
- * (V0.2.1). [GremiumTable] itself has no member FK and is instead listed in
- * [PersonalDataRegistry.noPersonalDataAllowlist].
+ * (V0.2.1) — plus [AntragTable] (Antragsverwaltung, V0.2.2), the same domain area. [GremiumTable]
+ * itself has no member FK and is instead listed in [PersonalDataRegistry.noPersonalDataAllowlist].
+ * [AntragTable.targetGremiumId] references `gremium`, not `member`, so only
+ * `submitter_member_id`/`reviewed_by` are subject to `PersonalDataCoverageTest`'s
+ * `information_schema` FK walk — both covered simply by adding [AntragTable] here.
  *
  * Retain-with-reason across the board, consistent with [ContributionPersonalData]/
  * [DocumentPersonalData] precedent — governance records (who chaired a meeting, attendance
- * history behind a Beschlussfaehigkeit determination, the resolution text itself) are
- * organizational/legal-defensibility records, not purely personal data, and all FK pointers
- * resolve to the now-anonymized [network.lapis.cloud.server.db.tables.MemberTable] row post-
- * erasure (see [FoundationPersonalData]).
+ * history behind a Beschlussfaehigkeit determination, the resolution text itself, an Antrag's
+ * motion text and review rationale) are organizational/legal-defensibility records, not purely
+ * personal data, and all FK pointers resolve to the now-anonymized
+ * [network.lapis.cloud.server.db.tables.MemberTable] row post-erasure (see
+ * [FoundationPersonalData]).
  */
 object GovernancePersonalData : PersonalDataContributor {
     override val sectionKey = "governance"
@@ -40,6 +45,7 @@ object GovernancePersonalData : PersonalDataContributor {
             TagesordnungspunktTable,
             AnwesenheitTable,
             BeschlussTable,
+            AntragTable,
         )
 
     override fun export(memberId: Uuid) =
@@ -120,6 +126,18 @@ object GovernancePersonalData : PersonalDataContributor {
                         )
                     }
             }
+            putJsonArray("antraegeSubmitted") {
+                AntragTable
+                    .selectAll()
+                    .where { AntragTable.submitterMemberId eq memberId }
+                    .forEach { row -> add(antragSummaryJson(row)) }
+            }
+            putJsonArray("antraegeReviewed") {
+                AntragTable
+                    .selectAll()
+                    .where { AntragTable.reviewedBy eq memberId }
+                    .forEach { row -> add(antragSummaryJson(row)) }
+            }
         }
 
     override fun erase(
@@ -149,6 +167,9 @@ object GovernancePersonalData : PersonalDataContributor {
         }
 
         val beschlussCount = BeschlussTable.selectAll().where { BeschlussTable.recordedBy eq memberId }.count()
+
+        val antragCondition = (AntragTable.submitterMemberId eq memberId) or (AntragTable.reviewedBy eq memberId)
+        val antragCount = AntragTable.selectAll().where { antragCondition }.count()
 
         return listOf(
             TableErasureOutcome(
@@ -181,6 +202,15 @@ object GovernancePersonalData : PersonalDataContributor {
                         "beweisen koennen, was beschlossen wurde) -- anders als ContributionTable's " +
                         "beilaeufige Notiz waere ein Loeschen hier selbst ein Compliance-Problem.",
             ),
+            TableErasureOutcome(
+                table = "antrag",
+                rowsRetained = antragCount.toInt(),
+                retentionReason =
+                    "Der Antragstext und die Pruefungsbegruendung sind rechenschaftspflichtige " +
+                        "Verwaltungsvorgaenge (wer hat was beantragt, wer hat es wie geprueft) -- " +
+                        "analog zum beschluss-Praezedenzfall bleibt auch review_note vollstaendig " +
+                        "erhalten, kein Feld wird geloescht.",
+            ),
         )
     }
 }
@@ -199,4 +229,13 @@ private fun anwesenheitJson(row: ResultRow) =
         put("sitzungId", row[AnwesenheitTable.sitzungId].toString())
         put("status", row[AnwesenheitTable.status].name)
         put("recordedAt", row[AnwesenheitTable.recordedAt].toString())
+    }
+
+private fun antragSummaryJson(row: ResultRow) =
+    buildJsonObject {
+        put("id", row[AntragTable.id].toString())
+        put("targetGremiumId", row[AntragTable.targetGremiumId].toString())
+        put("title", row[AntragTable.title])
+        put("status", row[AntragTable.status].name)
+        put("submittedAt", row[AntragTable.submittedAt].toString())
     }

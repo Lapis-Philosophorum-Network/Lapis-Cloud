@@ -1,5 +1,6 @@
 package network.lapis.cloud.server.db.tables
 
+import network.lapis.cloud.shared.domain.AntragStatus
 import network.lapis.cloud.shared.domain.AnwesenheitStatus
 import network.lapis.cloud.shared.domain.BeschlussStatus
 import network.lapis.cloud.shared.domain.GremiumRolle
@@ -19,7 +20,10 @@ import org.jetbrains.exposed.v1.datetime.datetime
 object GremiumTable : Table("gremium") {
     val id = uuid("id")
     val name = varchar("name", 200)
-    val type = enumerationByName<GremiumType>("type", 20)
+
+    // Widened from VARCHAR(20) to VARCHAR(30) by V7__antragsverwaltung.sql (V0.2.2): the new
+    // GremiumType.MITGLIEDERVERSAMMLUNG value is 21 characters, one over the original limit.
+    val type = enumerationByName<GremiumType>("type", 30)
     val description = varchar("description", 1000)
     val active = bool("active")
     val quorumPercent = integer("quorum_percent")
@@ -71,7 +75,10 @@ object TagesordnungspunktTable : Table("tagesordnungspunkt") {
     val sitzungId = uuid("sitzung_id").references(SitzungTable.id)
     val position = integer("position")
     val title = varchar("title", 300)
-    val description = varchar("description", 1000).nullable()
+
+    // Widened from VARCHAR(1000) to VARCHAR(4000) by V7__antragsverwaltung.sql (V0.2.2):
+    // scheduleAntrag populates this from Antrag.begruendung, which is VARCHAR(4000).
+    val description = varchar("description", 4000).nullable()
     val presenterMemberId = uuid("presenter_member_id").references(MemberTable.id).nullable()
 
     override val primaryKey = PrimaryKey(id)
@@ -112,6 +119,35 @@ object BeschlussTable : Table("beschluss") {
     val status = enumerationByName<BeschlussStatus>("status", 20)
     val decidedAt = datetime("decided_at")
     val recordedBy = uuid("recorded_by").references(MemberTable.id)
+
+    override val primaryKey = PrimaryKey(id)
+}
+
+/**
+ * Antragsverwaltung (V0.2.2). `beschlussId` is the authoritative "latest resolution" pointer --
+ * set (and overwritten) every time `GovernanceService.resolveAntrag` records a new [BeschlussTable]
+ * row for this Antrag, so a [AntragStatus.VERTAGT] -> rescheduled -> re-resolved Antrag always
+ * points at its current Beschluss without an indirect join through `tagesordnungspunktId` (which
+ * changes across reschedules). Schema owned by `V7__antragsverwaltung.sql`.
+ */
+object AntragTable : Table("antrag") {
+    val id = uuid("id")
+    val targetGremiumId = uuid("target_gremium_id").references(GremiumTable.id)
+    val title = varchar("title", 300)
+    val begruendung = varchar("begruendung", 4000)
+    val text = varchar("text", 4000)
+    val submitterMemberId = uuid("submitter_member_id").references(MemberTable.id)
+
+    // VARCHAR(30), not the usual 20: AntragStatus.ABGELEHNT_VORPRUEFUNG is 21 characters.
+    val status = enumerationByName<AntragStatus>("status", 30)
+    val submittedAt = datetime("submitted_at")
+    val reviewedBy = uuid("reviewed_by").references(MemberTable.id).nullable()
+    val reviewedAt = datetime("reviewed_at").nullable()
+    val reviewNote = varchar("review_note", 1000).nullable()
+    val sitzungId = uuid("sitzung_id").references(SitzungTable.id).nullable()
+    val tagesordnungspunktId = uuid("tagesordnungspunkt_id").references(TagesordnungspunktTable.id).nullable()
+    val beschlussId = uuid("beschluss_id").references(BeschlussTable.id).nullable()
+    val withdrawnAt = datetime("withdrawn_at").nullable()
 
     override val primaryKey = PrimaryKey(id)
 }

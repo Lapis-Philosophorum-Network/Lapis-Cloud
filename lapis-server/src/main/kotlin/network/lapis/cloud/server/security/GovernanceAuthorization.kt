@@ -3,7 +3,11 @@ package network.lapis.cloud.server.security
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import network.lapis.cloud.server.db.tables.GremiumMitgliedschaftTable
+import network.lapis.cloud.server.db.tables.GremiumTable
+import network.lapis.cloud.server.db.tables.MemberTable
 import network.lapis.cloud.shared.domain.GremiumRolle
+import network.lapis.cloud.shared.domain.GremiumType
+import network.lapis.cloud.shared.domain.MemberStatus
 import org.jetbrains.exposed.v1.core.and
 import org.jetbrains.exposed.v1.core.eq
 import org.jetbrains.exposed.v1.core.greaterEq
@@ -35,6 +39,36 @@ fun CurrentMember.canManageGremium(gremiumId: Uuid): Boolean =
 fun CurrentMember.canRecordForSitzung(gremiumId: Uuid): Boolean =
     isPrivileged ||
         hasGremiumRolle(gremiumId, GremiumRolle.VORSITZ, GremiumRolle.STELLV_VORSITZ, GremiumRolle.SCHRIFTFUEHRUNG)
+
+/**
+ * Antragsverwaltung (V0.2.2) submission rule. Asymmetric on purpose: submitting *to* the
+ * Mitgliederversammlung is a broad participation right (any [MemberStatus.AKTIV] member, mirroring
+ * every member's stake in a general assembly), while submitting *to* a specific Gremium requires
+ * an active membership of that Gremium — any [GremiumRolle], not just leadership, so a
+ * rank-and-file committee member can propose something to their own committee, but a non-member
+ * cannot.
+ */
+fun CurrentMember.canSubmitAntrag(targetGremiumId: Uuid): Boolean {
+    if (isPrivileged) return true
+    val gremiumType =
+        transaction {
+            GremiumTable
+                .selectAll()
+                .where { GremiumTable.id eq targetGremiumId }
+                .singleOrNull()
+                ?.get(GremiumTable.type)
+        } ?: return false
+    return if (gremiumType == GremiumType.MITGLIEDERVERSAMMLUNG) {
+        transaction {
+            MemberTable
+                .selectAll()
+                .where { (MemberTable.id eq memberId) and (MemberTable.status eq MemberStatus.AKTIV) }
+                .count() > 0
+        }
+    } else {
+        hasGremiumRolle(targetGremiumId, *GremiumRolle.entries.toTypedArray())
+    }
+}
 
 private fun CurrentMember.hasGremiumRolle(
     gremiumId: Uuid,

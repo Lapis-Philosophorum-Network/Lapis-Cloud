@@ -5,6 +5,7 @@ import kotlinx.datetime.LocalDate
 import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
+import network.lapis.cloud.server.db.tables.AntragTable
 import network.lapis.cloud.server.db.tables.AnwesenheitTable
 import network.lapis.cloud.server.db.tables.BeschlussTable
 import network.lapis.cloud.server.db.tables.GremiumMitgliedschaftTable
@@ -12,20 +13,30 @@ import network.lapis.cloud.server.db.tables.GremiumTable
 import network.lapis.cloud.server.db.tables.MemberTable
 import network.lapis.cloud.server.db.tables.SitzungTable
 import network.lapis.cloud.server.db.tables.TagesordnungspunktTable
+import network.lapis.cloud.server.security.CurrentMember
 import network.lapis.cloud.server.security.ForbiddenException
 import network.lapis.cloud.server.security.canRecordForSitzung
+import network.lapis.cloud.server.security.canSubmitAntrag
 import network.lapis.cloud.server.security.requireRole
 import network.lapis.cloud.server.security.resolveCurrentMember
 import network.lapis.cloud.shared.domain.AccountRole
+import network.lapis.cloud.shared.domain.AntragDto
+import network.lapis.cloud.shared.domain.AntragInput
+import network.lapis.cloud.shared.domain.AntragPruefungsEntscheidung
+import network.lapis.cloud.shared.domain.AntragResolutionInput
+import network.lapis.cloud.shared.domain.AntragStatus
 import network.lapis.cloud.shared.domain.AnwesenheitDto
 import network.lapis.cloud.shared.domain.AnwesenheitInput
 import network.lapis.cloud.shared.domain.AnwesenheitStatus
 import network.lapis.cloud.shared.domain.BeschlussDto
 import network.lapis.cloud.shared.domain.BeschlussInput
+import network.lapis.cloud.shared.domain.BeschlussStatus
 import network.lapis.cloud.shared.domain.GremiumDto
 import network.lapis.cloud.shared.domain.GremiumInput
 import network.lapis.cloud.shared.domain.GremiumMitgliedschaftDto
 import network.lapis.cloud.shared.domain.GremiumMitgliedschaftInput
+import network.lapis.cloud.shared.domain.GremiumType
+import network.lapis.cloud.shared.domain.MemberStatus
 import network.lapis.cloud.shared.domain.ProtocolDraftDto
 import network.lapis.cloud.shared.domain.QuorumResultDto
 import network.lapis.cloud.shared.domain.SitzungDetailDto
@@ -291,27 +302,7 @@ class GovernanceService(
         return transaction {
             val gremiumId = requireSitzungGremiumId(sId)
             if (!current.canRecordForSitzung(gremiumId)) throw ForbiddenException()
-            val positionTaken =
-                TagesordnungspunktTable
-                    .selectAll()
-                    .where {
-                        (TagesordnungspunktTable.sitzungId eq sId) and (TagesordnungspunktTable.position eq input.position)
-                    }.count() > 0
-            if (positionTaken) throw ConflictException("Position ${input.position} already used for Sitzung $sitzungId")
-            val id = Uuid.random()
-            TagesordnungspunktTable.insert {
-                it[TagesordnungspunktTable.id] = id
-                it[TagesordnungspunktTable.sitzungId] = sId
-                it[position] = input.position
-                it[title] = input.title
-                it[description] = input.description
-                it[presenterMemberId] = input.presenterMemberId?.let(Uuid::parse)
-            }
-            TagesordnungspunktTable
-                .selectAll()
-                .where { TagesordnungspunktTable.id eq id }
-                .single()
-                .toTagesordnungspunktDto()
+            insertTagesordnungspunkt(sId, input)
         }
     }
 
@@ -400,31 +391,7 @@ class GovernanceService(
             val gremiumId = requireSitzungGremiumId(sId)
             if (!current.canRecordForSitzung(gremiumId)) throw ForbiddenException()
             val sitzung = loadSitzung(sId)
-            val quorum = computeQuorum(sId, sitzung)
-            val gremiumRow = GremiumTable.selectAll().where { GremiumTable.id eq gremiumId }.single()
-            val now = nowLocalDateTime()
-            val number = nextBeschlussNumber(gremiumId, gremiumRow[GremiumTable.type].name, now.year)
-            val id = Uuid.random()
-            BeschlussTable.insert {
-                it[BeschlussTable.id] = id
-                it[BeschlussTable.sitzungId] = sId
-                it[tagesordnungspunktId] = input.tagesordnungspunktId?.let(Uuid::parse)
-                it[BeschlussTable.number] = number
-                it[title] = input.title
-                it[text] = input.text
-                it[votesYes] = input.votesYes
-                it[votesNo] = input.votesNo
-                it[votesAbstain] = input.votesAbstain
-                it[quorumMet] = quorum.met
-                it[status] = input.status
-                it[decidedAt] = now
-                it[recordedBy] = current.memberId
-            }
-            BeschlussTable
-                .selectAll()
-                .where { BeschlussTable.id eq id }
-                .single()
-                .toBeschlussDto()
+            insertBeschlussRow(sId, gremiumId, sitzung, input, current)
         }
     }
 
@@ -467,6 +434,200 @@ class GovernanceService(
         }
     }
 
+    override suspend fun submitAntrag(input: AntragInput): AntragDto {
+        val current = resolveCurrentMember(call)
+        val gId = input.targetGremiumId.toGremiumUuid()
+        return transaction {
+            GremiumTable.selectAll().where { GremiumTable.id eq gId }.singleOrNull()
+                ?: throw NotFoundException("Gremium ${input.targetGremiumId} not found")
+            if (!current.canSubmitAntrag(gId)) throw ForbiddenException()
+            val id = Uuid.random()
+            val now = nowLocalDateTime()
+            AntragTable.insert {
+                it[AntragTable.id] = id
+                it[targetGremiumId] = gId
+                it[title] = input.title
+                it[begruendung] = input.begruendung
+                it[text] = input.text
+                it[submitterMemberId] = current.memberId
+                it[status] = AntragStatus.EINGEREICHT
+                it[submittedAt] = now
+                it[reviewedBy] = null
+                it[reviewedAt] = null
+                it[reviewNote] = null
+                it[sitzungId] = null
+                it[tagesordnungspunktId] = null
+                it[beschlussId] = null
+                it[withdrawnAt] = null
+            }
+            loadAntrag(id)
+        }
+    }
+
+    override suspend fun listAntraege(
+        targetGremiumId: String?,
+        status: AntragStatus?,
+    ): List<AntragDto> {
+        resolveCurrentMember(call)
+        return transaction {
+            val conditions = mutableListOf<Op<Boolean>>()
+            if (targetGremiumId != null) conditions += (AntragTable.targetGremiumId eq targetGremiumId.toGremiumUuid())
+            if (status != null) conditions += (AntragTable.status eq status)
+            val baseQuery = (AntragTable innerJoin GremiumTable).selectAll()
+            val query = if (conditions.isEmpty()) baseQuery else baseQuery.where { conditions.reduce { a, b -> a and b } }
+            query.map { it.toAntragDto() }
+        }
+    }
+
+    override suspend fun getAntrag(id: String): AntragDto {
+        resolveCurrentMember(call)
+        val aId = id.toAntragUuid()
+        return transaction { loadAntrag(aId) }
+    }
+
+    override suspend fun withdrawAntrag(id: String): AntragDto {
+        val current = resolveCurrentMember(call)
+        val aId = id.toAntragUuid()
+        return transaction {
+            val row =
+                AntragTable.selectAll().where { AntragTable.id eq aId }.singleOrNull()
+                    ?: throw NotFoundException("Antrag $id not found")
+            val gremiumId = row[AntragTable.targetGremiumId]
+            val submitterId = row[AntragTable.submitterMemberId]
+            val status = row[AntragTable.status]
+            val submitterWithdrawingOwnPending = current.memberId == submitterId && status == AntragStatus.EINGEREICHT
+            if (!submitterWithdrawingOwnPending && !current.canRecordForSitzung(gremiumId)) throw ForbiddenException()
+            if (status == AntragStatus.ZURUECKGEZOGEN) throw ConflictException("Antrag $id already withdrawn")
+            AntragTable.update({ AntragTable.id eq aId }) {
+                it[AntragTable.status] = AntragStatus.ZURUECKGEZOGEN
+                it[withdrawnAt] = nowLocalDateTime()
+            }
+            loadAntrag(aId)
+        }
+    }
+
+    override suspend fun reviewAntrag(
+        id: String,
+        decision: AntragPruefungsEntscheidung,
+        note: String?,
+    ): AntragDto {
+        val current = resolveCurrentMember(call)
+        val aId = id.toAntragUuid()
+        return transaction {
+            val row =
+                AntragTable.selectAll().where { AntragTable.id eq aId }.singleOrNull()
+                    ?: throw NotFoundException("Antrag $id not found")
+            val gremiumId = row[AntragTable.targetGremiumId]
+            if (!current.canRecordForSitzung(gremiumId)) throw ForbiddenException()
+            val status = row[AntragTable.status]
+            if (status != AntragStatus.EINGEREICHT) {
+                throw ConflictException("Antrag $id is $status, expected EINGEREICHT")
+            }
+            val newStatus =
+                when (decision) {
+                    AntragPruefungsEntscheidung.ANNEHMEN -> AntragStatus.GEPRUEFT
+                    AntragPruefungsEntscheidung.ABLEHNEN -> AntragStatus.ABGELEHNT_VORPRUEFUNG
+                }
+            val now = nowLocalDateTime()
+            AntragTable.update({ AntragTable.id eq aId }) {
+                it[AntragTable.status] = newStatus
+                it[reviewedBy] = current.memberId
+                it[reviewedAt] = now
+                it[reviewNote] = note
+            }
+            loadAntrag(aId)
+        }
+    }
+
+    override suspend fun scheduleAntrag(
+        id: String,
+        sitzungId: String,
+        position: Int,
+    ): AntragDto {
+        val current = resolveCurrentMember(call)
+        val aId = id.toAntragUuid()
+        val sId = sitzungId.toSitzungUuid()
+        return transaction {
+            val row =
+                AntragTable.selectAll().where { AntragTable.id eq aId }.singleOrNull()
+                    ?: throw NotFoundException("Antrag $id not found")
+            val gremiumId = row[AntragTable.targetGremiumId]
+            if (!current.canRecordForSitzung(gremiumId)) throw ForbiddenException()
+            val status = row[AntragTable.status]
+            if (status != AntragStatus.GEPRUEFT && status != AntragStatus.VERTAGT) {
+                throw ConflictException("Antrag $id is $status, expected GEPRUEFT or VERTAGT")
+            }
+            val sitzungRow =
+                SitzungTable.selectAll().where { SitzungTable.id eq sId }.singleOrNull()
+                    ?: throw NotFoundException("Sitzung $sitzungId not found")
+            if (sitzungRow[SitzungTable.gremiumId] != gremiumId) {
+                throw ConflictException("Sitzung $sitzungId does not belong to Antrag $id's target Gremium")
+            }
+            if (sitzungRow[SitzungTable.status] != SitzungsStatus.GEPLANT) {
+                throw ConflictException("Sitzung $sitzungId is not GEPLANT")
+            }
+            val top =
+                insertTagesordnungspunkt(
+                    sId,
+                    TagesordnungspunktInput(
+                        position = position,
+                        title = row[AntragTable.title],
+                        description = row[AntragTable.begruendung],
+                        presenterMemberId = row[AntragTable.submitterMemberId].toString(),
+                    ),
+                )
+            AntragTable.update({ AntragTable.id eq aId }) {
+                it[AntragTable.status] = AntragStatus.TERMINIERT
+                it[AntragTable.sitzungId] = sId
+                it[AntragTable.tagesordnungspunktId] = Uuid.parse(top.id)
+            }
+            loadAntrag(aId)
+        }
+    }
+
+    override suspend fun resolveAntrag(
+        id: String,
+        input: AntragResolutionInput,
+    ): AntragDto {
+        val current = resolveCurrentMember(call)
+        val aId = id.toAntragUuid()
+        return transaction {
+            val row =
+                AntragTable.selectAll().where { AntragTable.id eq aId }.singleOrNull()
+                    ?: throw NotFoundException("Antrag $id not found")
+            val gremiumId = row[AntragTable.targetGremiumId]
+            if (!current.canRecordForSitzung(gremiumId)) throw ForbiddenException()
+            if (row[AntragTable.status] != AntragStatus.TERMINIERT) {
+                throw ConflictException("Antrag $id is ${row[AntragTable.status]}, expected TERMINIERT")
+            }
+            val sId = row[AntragTable.sitzungId] ?: throw ConflictException("Antrag $id has no scheduled Sitzung")
+            val topId = row[AntragTable.tagesordnungspunktId]
+            val sitzung = loadSitzung(sId)
+            val beschlussInput =
+                BeschlussInput(
+                    tagesordnungspunktId = topId?.toString(),
+                    title = row[AntragTable.title],
+                    text = row[AntragTable.text],
+                    votesYes = input.votesYes,
+                    votesNo = input.votesNo,
+                    votesAbstain = input.votesAbstain,
+                    status = input.status,
+                )
+            val beschluss = insertBeschlussRow(sId, gremiumId, sitzung, beschlussInput, current)
+            val newAntragStatus =
+                when (input.status) {
+                    BeschlussStatus.ANGENOMMEN -> AntragStatus.BESCHLOSSEN
+                    BeschlussStatus.ABGELEHNT -> AntragStatus.ABGELEHNT
+                    BeschlussStatus.VERTAGT -> AntragStatus.VERTAGT
+                }
+            AntragTable.update({ AntragTable.id eq aId }) {
+                it[AntragTable.status] = newAntragStatus
+                it[AntragTable.beschlussId] = Uuid.parse(beschluss.id)
+            }
+            loadAntrag(aId)
+        }
+    }
+
     private fun loadSitzung(id: Uuid): SitzungDto =
         (SitzungTable innerJoin GremiumTable)
             .selectAll()
@@ -502,13 +663,102 @@ class GovernanceService(
             .where { BeschlussTable.sitzungId eq sitzungId }
             .map { it.toBeschlussDto() }
 
+    private fun loadAntrag(id: Uuid): AntragDto =
+        (AntragTable innerJoin GremiumTable)
+            .selectAll()
+            .where { AntragTable.id eq id }
+            .singleOrNull()
+            ?.toAntragDto()
+            ?: throw NotFoundException("Antrag $id not found")
+
+    /**
+     * Shared insert path for [addTagesordnungspunkt] and [scheduleAntrag] (V0.2.2) — the latter
+     * populates [TagesordnungspunktInput] from the Antrag (`title`/`begruendung`/submitter) rather
+     * than duplicating the position-collision check and insert logic. Must run inside an
+     * already-open `transaction {}` (both call sites do).
+     */
+    private fun insertTagesordnungspunkt(
+        sId: Uuid,
+        input: TagesordnungspunktInput,
+    ): TagesordnungspunktDto {
+        val positionTaken =
+            TagesordnungspunktTable
+                .selectAll()
+                .where {
+                    (TagesordnungspunktTable.sitzungId eq sId) and (TagesordnungspunktTable.position eq input.position)
+                }.count() > 0
+        if (positionTaken) throw ConflictException("Position ${input.position} already used for Sitzung $sId")
+        val id = Uuid.random()
+        TagesordnungspunktTable.insert {
+            it[TagesordnungspunktTable.id] = id
+            it[TagesordnungspunktTable.sitzungId] = sId
+            it[position] = input.position
+            it[title] = input.title
+            it[description] = input.description
+            it[presenterMemberId] = input.presenterMemberId?.let(Uuid::parse)
+        }
+        return TagesordnungspunktTable
+            .selectAll()
+            .where { TagesordnungspunktTable.id eq id }
+            .single()
+            .toTagesordnungspunktDto()
+    }
+
+    /**
+     * Shared insert path for [recordBeschluss] and [resolveAntrag] (V0.2.2) — what actually makes
+     * "Antrag resolution links into the existing Beschlussbuch mechanism rather than creating a
+     * parallel one" true in code, not just in the DTO shape. Must run inside an already-open
+     * `transaction {}` (both call sites do).
+     */
+    private fun insertBeschlussRow(
+        sId: Uuid,
+        gremiumId: Uuid,
+        sitzung: SitzungDto,
+        input: BeschlussInput,
+        current: CurrentMember,
+    ): BeschlussDto {
+        val quorum = computeQuorum(sId, sitzung)
+        val gremiumRow = GremiumTable.selectAll().where { GremiumTable.id eq gremiumId }.single()
+        val now = nowLocalDateTime()
+        val number = nextBeschlussNumber(gremiumId, gremiumRow[GremiumTable.type].name, now.year)
+        val id = Uuid.random()
+        BeschlussTable.insert {
+            it[BeschlussTable.id] = id
+            it[BeschlussTable.sitzungId] = sId
+            it[tagesordnungspunktId] = input.tagesordnungspunktId?.let(Uuid::parse)
+            it[BeschlussTable.number] = number
+            it[title] = input.title
+            it[text] = input.text
+            it[votesYes] = input.votesYes
+            it[votesNo] = input.votesNo
+            it[votesAbstain] = input.votesAbstain
+            it[quorumMet] = quorum.met
+            it[status] = input.status
+            it[decidedAt] = now
+            it[recordedBy] = current.memberId
+        }
+        return BeschlussTable
+            .selectAll()
+            .where { BeschlussTable.id eq id }
+            .single()
+            .toBeschlussDto()
+    }
+
     /**
      * Beschlussfaehigkeit "as of" [SitzungDto.scheduledAt]'s date, not "today" — a Beschluss
      * recorded weeks after the meeting must still reflect the quorum situation on the meeting
      * date, not whatever the Gremium's membership looks like when [recordBeschluss] happens to
      * run. `eligibleMemberCount` only counts active [GremiumMitgliedschaftTable] rows for the
      * Gremium (a non-Gremium guest present at the Sitzung does not count toward quorum, even if
-     * marked ANWESEND/VERTRETEN in [AnwesenheitTable]).
+     * marked ANWESEND/VERTRETEN in [AnwesenheitTable]) — except for a
+     * [GremiumType.MITGLIEDERVERSAMMLUNG]-typed Gremium (V0.2.2), where eligibility is instead
+     * "all members with [MemberStatus.AKTIV]" queried directly from [MemberTable]: syncing every
+     * member into [GremiumMitgliedschaftTable] on join/leave would be a brittle parallel
+     * bookkeeping system. Known limitation of the Mitgliederversammlung path: unlike the Gremium
+     * path (date-scoped via `since`/`until`), it checks *current* [MemberStatus], not "status as
+     * of the Sitzung date" — acceptable simplification for this wave, flagged for revisit if it
+     * becomes a real pain point (e.g. once membership churn is high or historical MV quorum
+     * disputes arise).
      */
     private fun computeQuorum(
         sitzungId: Uuid,
@@ -516,19 +766,28 @@ class GovernanceService(
     ): QuorumResultDto {
         val scheduledDate = sitzung.scheduledAt.date
         val gremiumId = sitzung.gremiumId.toGremiumUuid()
-        val quorumPercent = GremiumTable.selectAll().where { GremiumTable.id eq gremiumId }.single()[GremiumTable.quorumPercent]
+        val gremiumRow = GremiumTable.selectAll().where { GremiumTable.id eq gremiumId }.single()
+        val quorumPercent = gremiumRow[GremiumTable.quorumPercent]
         val eligibleMemberIds =
-            GremiumMitgliedschaftTable
-                .selectAll()
-                .where {
-                    (GremiumMitgliedschaftTable.gremiumId eq gremiumId) and
-                        (GremiumMitgliedschaftTable.since lessEq scheduledDate) and
-                        (
-                            GremiumMitgliedschaftTable.until.isNull() or
-                                (GremiumMitgliedschaftTable.until greaterEq scheduledDate)
-                        )
-                }.map { it[GremiumMitgliedschaftTable.memberId] }
-                .toSet()
+            if (gremiumRow[GremiumTable.type] == GremiumType.MITGLIEDERVERSAMMLUNG) {
+                MemberTable
+                    .selectAll()
+                    .where { MemberTable.status eq MemberStatus.AKTIV }
+                    .map { it[MemberTable.id] }
+                    .toSet()
+            } else {
+                GremiumMitgliedschaftTable
+                    .selectAll()
+                    .where {
+                        (GremiumMitgliedschaftTable.gremiumId eq gremiumId) and
+                            (GremiumMitgliedschaftTable.since lessEq scheduledDate) and
+                            (
+                                GremiumMitgliedschaftTable.until.isNull() or
+                                    (GremiumMitgliedschaftTable.until greaterEq scheduledDate)
+                            )
+                    }.map { it[GremiumMitgliedschaftTable.memberId] }
+                    .toSet()
+            }
         val presentCount =
             AnwesenheitTable
                 .selectAll()
@@ -665,6 +924,28 @@ class GovernanceService(
             recordedByDisplayName = memberDisplayName(this[BeschlussTable.recordedBy]).orEmpty(),
         )
 
+    private fun ResultRow.toAntragDto(): AntragDto =
+        AntragDto(
+            id = this[AntragTable.id].toString(),
+            targetGremiumId = this[AntragTable.targetGremiumId].toString(),
+            targetGremiumName = this[GremiumTable.name],
+            targetGremiumType = this[GremiumTable.type],
+            title = this[AntragTable.title],
+            begruendung = this[AntragTable.begruendung],
+            text = this[AntragTable.text],
+            submitterMemberId = this[AntragTable.submitterMemberId].toString(),
+            submitterDisplayName = memberDisplayName(this[AntragTable.submitterMemberId]).orEmpty(),
+            status = this[AntragTable.status],
+            submittedAt = this[AntragTable.submittedAt],
+            reviewedById = this[AntragTable.reviewedBy]?.toString(),
+            reviewedByDisplayName = memberDisplayName(this[AntragTable.reviewedBy]),
+            reviewedAt = this[AntragTable.reviewedAt],
+            reviewNote = this[AntragTable.reviewNote],
+            sitzungId = this[AntragTable.sitzungId]?.toString(),
+            tagesordnungspunktId = this[AntragTable.tagesordnungspunktId]?.toString(),
+            beschlussId = this[AntragTable.beschlussId]?.toString(),
+        )
+
     private fun String.toGremiumUuid(): Uuid = runCatching { Uuid.parse(this) }.getOrElse { throw NotFoundException("Invalid id: $this") }
 
     private fun String.toMemberUuid(): Uuid = runCatching { Uuid.parse(this) }.getOrElse { throw NotFoundException("Invalid id: $this") }
@@ -676,4 +957,6 @@ class GovernanceService(
 
     private fun String.toTagesordnungspunktUuid(): Uuid =
         runCatching { Uuid.parse(this) }.getOrElse { throw NotFoundException("Invalid id: $this") }
+
+    private fun String.toAntragUuid(): Uuid = runCatching { Uuid.parse(this) }.getOrElse { throw NotFoundException("Invalid id: $this") }
 }

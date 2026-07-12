@@ -4,8 +4,13 @@ import kotlinx.datetime.LocalDate
 import kotlinx.datetime.LocalDateTime
 import kotlinx.serialization.Serializable
 
+/**
+ * [MITGLIEDERVERSAMMLUNG] added in V0.2.2 (Antragsverwaltung) to model the general assembly as a
+ * singleton [GremiumDto] rather than inventing a second, parallel "target kind" axis alongside
+ * Gremium -- see [AntragDto] KDoc and `GovernanceService.computeQuorum`'s branch on this type.
+ */
 @Serializable
-enum class GremiumType { VORSTAND, ARBEITSKREIS, AUSSCHUSS, SONSTIGES }
+enum class GremiumType { VORSTAND, ARBEITSKREIS, AUSSCHUSS, SONSTIGES, MITGLIEDERVERSAMMLUNG }
 
 /**
  * Role *within* a [GremiumDto] — distinct from [AccountRole], the system-wide login role. A
@@ -197,4 +202,72 @@ data class ProtocolDraftDto(
     val beschluesse: List<BeschlussDto>,
     val quorum: QuorumResultDto,
     val generatedAt: LocalDateTime,
+)
+
+/**
+ * Antragsverwaltung (V0.2.2): pre-meeting motion submission targeting either a specific
+ * [GremiumDto] or the [GremiumType.MITGLIEDERVERSAMMLUNG] singleton Gremium. Lifecycle:
+ * [AntragStatus.EINGEREICHT] -> [AntragStatus.GEPRUEFT] | [AntragStatus.ABGELEHNT_VORPRUEFUNG]
+ * (`reviewAntrag`) -> [AntragStatus.TERMINIERT] (`scheduleAntrag`, also reachable again from
+ * [AntragStatus.VERTAGT] to support rescheduling) -> [AntragStatus.BESCHLOSSEN] |
+ * [AntragStatus.ABGELEHNT] | [AntragStatus.VERTAGT] (`resolveAntrag`, mapped 1:1 from the
+ * resulting [BeschlussStatus]) | [AntragStatus.ZURUECKGEZOGEN] (`withdrawAntrag`, only while
+ * [AntragStatus.EINGEREICHT] unless performed by Gremium leadership/BOARD/ADMIN).
+ */
+@Serializable
+enum class AntragStatus {
+    EINGEREICHT,
+    GEPRUEFT,
+    ABGELEHNT_VORPRUEFUNG,
+    TERMINIERT,
+    BESCHLOSSEN,
+    ABGELEHNT,
+    VERTAGT,
+    ZURUECKGEZOGEN,
+}
+
+@Serializable
+enum class AntragPruefungsEntscheidung { ANNEHMEN, ABLEHNEN }
+
+/**
+ * `text` is the motion text itself and becomes [BeschlussDto.text] verbatim at resolution --
+ * deliberately no amendment/"Aenderungsantrag" support in this wave (floor amendments are a
+ * distinct Robert's-Rules-style feature with real complexity, out of scope here; see roadmap).
+ */
+@Serializable
+data class AntragDto(
+    val id: String,
+    val targetGremiumId: String,
+    val targetGremiumName: String,
+    val targetGremiumType: GremiumType,
+    val title: String,
+    val begruendung: String,
+    val text: String,
+    val submitterMemberId: String,
+    val submitterDisplayName: String,
+    val status: AntragStatus,
+    val submittedAt: LocalDateTime,
+    val reviewedById: String?,
+    val reviewedByDisplayName: String?,
+    val reviewedAt: LocalDateTime?,
+    val reviewNote: String?,
+    val sitzungId: String?,
+    val tagesordnungspunktId: String?,
+    val beschlussId: String?,
+)
+
+@Serializable
+data class AntragInput(
+    val targetGremiumId: String,
+    val title: String,
+    val begruendung: String,
+    val text: String,
+)
+
+@Serializable
+data class AntragResolutionInput(
+    val votesYes: Int,
+    val votesNo: Int,
+    val votesAbstain: Int,
+    val status: BeschlussStatus,
 )
