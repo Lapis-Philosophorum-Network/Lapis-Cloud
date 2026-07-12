@@ -3,6 +3,8 @@ package network.lapis.cloud.server.dsgvo
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
+import network.lapis.cloud.server.db.tables.AbstimmungStimmeTable
+import network.lapis.cloud.server.db.tables.AbstimmungTable
 import network.lapis.cloud.server.db.tables.AntragTable
 import network.lapis.cloud.server.db.tables.AnwesenheitTable
 import network.lapis.cloud.server.db.tables.BeschlussTable
@@ -21,17 +23,23 @@ import kotlin.uuid.Uuid
 /**
  * Owns [GremiumMitgliedschaftTable]/[SitzungTable]/[TagesordnungspunktTable]/[AnwesenheitTable]/
  * [BeschlussTable] — the five member-FK-bearing tables of the Gremien-/Sitzungsverwaltung wave
- * (V0.2.1) — plus [AntragTable] (Antragsverwaltung, V0.2.2), the same domain area. [GremiumTable]
- * itself has no member FK and is instead listed in [PersonalDataRegistry.noPersonalDataAllowlist].
+ * (V0.2.1) — plus [AntragTable] (Antragsverwaltung, V0.2.2) and [AbstimmungTable]/
+ * [AbstimmungStimmeTable] (Meritokratische Abstimmungen, V0.2.3), the same domain area.
+ * [GremiumTable] itself has no member FK and is instead listed in
+ * [PersonalDataRegistry.noPersonalDataAllowlist]; so does `abstimmung_option` (no member FK at
+ * all -- only the ballots staked into an option carry personal data, not the basket itself).
  * [AntragTable.targetGremiumId] references `gremium`, not `member`, so only
  * `submitter_member_id`/`reviewed_by` are subject to `PersonalDataCoverageTest`'s
- * `information_schema` FK walk — both covered simply by adding [AntragTable] here.
+ * `information_schema` FK walk — both covered simply by adding [AntragTable] here. Likewise
+ * [AbstimmungTable.antragId]/`.sitzungId`/`.beschlussId` reference `antrag`/`sitzung`/`beschluss`,
+ * not `member` -- only `opened_by` is a member FK.
  *
  * Retain-with-reason across the board, consistent with [ContributionPersonalData]/
  * [DocumentPersonalData] precedent — governance records (who chaired a meeting, attendance
  * history behind a Beschlussfaehigkeit determination, the resolution text itself, an Antrag's
- * motion text and review rationale) are organizational/legal-defensibility records, not purely
- * personal data, and all FK pointers resolve to the now-anonymized
+ * motion text and review rationale, a Vickrey ballot's staked/settled LTR amounts) are
+ * organizational/legal-defensibility records (and, for ballots, also the member's property
+ * record), not purely personal data, and all FK pointers resolve to the now-anonymized
  * [network.lapis.cloud.server.db.tables.MemberTable] row post-erasure (see
  * [FoundationPersonalData]).
  */
@@ -46,6 +54,8 @@ object GovernancePersonalData : PersonalDataContributor {
             AnwesenheitTable,
             BeschlussTable,
             AntragTable,
+            AbstimmungTable,
+            AbstimmungStimmeTable,
         )
 
     override fun export(memberId: Uuid) =
@@ -138,6 +148,38 @@ object GovernancePersonalData : PersonalDataContributor {
                     .where { AntragTable.reviewedBy eq memberId }
                     .forEach { row -> add(antragSummaryJson(row)) }
             }
+            putJsonArray("abstimmungenOpened") {
+                AbstimmungTable
+                    .selectAll()
+                    .where { AbstimmungTable.openedBy eq memberId }
+                    .forEach { row ->
+                        add(
+                            buildJsonObject {
+                                put("id", row[AbstimmungTable.id].toString())
+                                put("antragId", row[AbstimmungTable.antragId].toString())
+                                put("title", row[AbstimmungTable.title])
+                                put("status", row[AbstimmungTable.status].name)
+                            },
+                        )
+                    }
+            }
+            putJsonArray("stimmenCast") {
+                AbstimmungStimmeTable
+                    .selectAll()
+                    .where { AbstimmungStimmeTable.memberId eq memberId }
+                    .forEach { row ->
+                        add(
+                            buildJsonObject {
+                                put("id", row[AbstimmungStimmeTable.id].toString())
+                                put("abstimmungId", row[AbstimmungStimmeTable.abstimmungId].toString())
+                                put("optionId", row[AbstimmungStimmeTable.optionId].toString())
+                                put("stakeLtr", row[AbstimmungStimmeTable.stakeLtr].toPlainString())
+                                put("settledLtr", row[AbstimmungStimmeTable.settledLtr]?.toPlainString())
+                                put("castAt", row[AbstimmungStimmeTable.castAt].toString())
+                            },
+                        )
+                    }
+            }
         }
 
     override fun erase(
@@ -170,6 +212,10 @@ object GovernancePersonalData : PersonalDataContributor {
 
         val antragCondition = (AntragTable.submitterMemberId eq memberId) or (AntragTable.reviewedBy eq memberId)
         val antragCount = AntragTable.selectAll().where { antragCondition }.count()
+
+        val abstimmungCount = AbstimmungTable.selectAll().where { AbstimmungTable.openedBy eq memberId }.count()
+
+        val stimmeCount = AbstimmungStimmeTable.selectAll().where { AbstimmungStimmeTable.memberId eq memberId }.count()
 
         return listOf(
             TableErasureOutcome(
@@ -210,6 +256,21 @@ object GovernancePersonalData : PersonalDataContributor {
                         "Verwaltungsvorgaenge (wer hat was beantragt, wer hat es wie geprueft) -- " +
                         "analog zum beschluss-Praezedenzfall bleibt auch review_note vollstaendig " +
                         "erhalten, kein Feld wird geloescht.",
+            ),
+            TableErasureOutcome(
+                table = "abstimmung",
+                rowsRetained = abstimmungCount.toInt(),
+                retentionReason =
+                    "Wer eine Abstimmung eroeffnet hat, ist Teil des rechenschaftspflichtigen " +
+                        "Beschlussvorgangs -- analog zum beschluss-Praezedenzfall.",
+            ),
+            TableErasureOutcome(
+                table = "abstimmung_stimme",
+                rowsRetained = stimmeCount.toInt(),
+                retentionReason =
+                    "Die gestakte und abgerechnete LTR-Summe ist zugleich Eigentumsnachweis des " +
+                        "Mitglieds und Bestandteil der Vickrey-Abrechnung anderer Mitglieder -- " +
+                        "Loeschen wuerde beides beschaedigen. Kein Feld wird geloescht.",
             ),
         )
     }

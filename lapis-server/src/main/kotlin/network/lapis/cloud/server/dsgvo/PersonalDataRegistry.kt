@@ -25,6 +25,7 @@ object PersonalDataRegistry {
             DocumentPersonalData,
             CommunicationPersonalData,
             GovernancePersonalData,
+            LtrPersonalData,
         )
 
     /**
@@ -38,6 +39,9 @@ object PersonalDataRegistry {
             "membership_tier" to "Reine Produktdefinition (Beitragshoehe/-intervall), kein Personenbezug.",
             "document_folder" to "Reine Organisationsstruktur, kein Personenbezug.",
             "gremium" to "Reine Organisationsstruktur, kein Personenbezug.",
+            "abstimmung_option" to
+                "Der Korb (Option) selbst hat keinen Member-FK -- nur die in ihn gestakten " +
+                "abstimmung_stimme-Zeilen tragen Personenbezug (siehe GovernancePersonalData).",
             "erasure_request" to
                 "Verwaltet den Loeschprozess selbst und referenziert Mitglieder nur per UUID. Bleibt " +
                 "nach der Loeschung als Verfahrensnachweis bestehen (siehe dsgvo.adoc).",

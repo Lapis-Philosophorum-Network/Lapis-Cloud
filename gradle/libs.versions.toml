@@ -41,6 +41,7 @@ ktor-server-test-host           = { module = "io.ktor:ktor-server-test-host", ve
 logback-classic                 = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
 kotest-runner-junit5            = { module = "io.kotest:kotest-runner-junit5", version.ref = "kotest" }
 kotest-assertions-core          = { module = "io.kotest:kotest-assertions-core", version.ref = "kotest" }
+kotest-property                 = { module = "io.kotest:kotest-property", version.ref = "kotest" }
 kilua-rpc-ktor                  = { module = "dev.kilua:kilua-rpc-ktor", version.ref = "kilua-rpc" }
 kilua-rpc-ksp-processor          = { module = "dev.kilua:kilua-rpc-ksp-processor", version.ref = "kilua-rpc" }
 kotlinx-serialization-json       = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }

@@ -5,6 +5,9 @@ import kotlinx.datetime.LocalDate
 import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
+import network.lapis.cloud.server.db.tables.AbstimmungOptionTable
+import network.lapis.cloud.server.db.tables.AbstimmungStimmeTable
+import network.lapis.cloud.server.db.tables.AbstimmungTable
 import network.lapis.cloud.server.db.tables.AntragTable
 import network.lapis.cloud.server.db.tables.AnwesenheitTable
 import network.lapis.cloud.server.db.tables.BeschlussTable
@@ -13,12 +16,18 @@ import network.lapis.cloud.server.db.tables.GremiumTable
 import network.lapis.cloud.server.db.tables.MemberTable
 import network.lapis.cloud.server.db.tables.SitzungTable
 import network.lapis.cloud.server.db.tables.TagesordnungspunktTable
+import network.lapis.cloud.server.economy.LtrBalanceProvider
+import network.lapis.cloud.server.economy.PlaceholderLtrBalanceProvider
 import network.lapis.cloud.server.security.CurrentMember
 import network.lapis.cloud.server.security.ForbiddenException
 import network.lapis.cloud.server.security.canRecordForSitzung
 import network.lapis.cloud.server.security.canSubmitAntrag
 import network.lapis.cloud.server.security.requireRole
 import network.lapis.cloud.server.security.resolveCurrentMember
+import network.lapis.cloud.shared.domain.AbstimmungDto
+import network.lapis.cloud.shared.domain.AbstimmungOpenInput
+import network.lapis.cloud.shared.domain.AbstimmungOptionDto
+import network.lapis.cloud.shared.domain.AbstimmungStatus
 import network.lapis.cloud.shared.domain.AccountRole
 import network.lapis.cloud.shared.domain.AntragDto
 import network.lapis.cloud.shared.domain.AntragInput
@@ -39,10 +48,13 @@ import network.lapis.cloud.shared.domain.GremiumType
 import network.lapis.cloud.shared.domain.MemberStatus
 import network.lapis.cloud.shared.domain.ProtocolDraftDto
 import network.lapis.cloud.shared.domain.QuorumResultDto
+import network.lapis.cloud.shared.domain.ResolutionMode
 import network.lapis.cloud.shared.domain.SitzungDetailDto
 import network.lapis.cloud.shared.domain.SitzungDto
 import network.lapis.cloud.shared.domain.SitzungInput
 import network.lapis.cloud.shared.domain.SitzungsStatus
+import network.lapis.cloud.shared.domain.StimmeDto
+import network.lapis.cloud.shared.domain.StimmeInput
 import network.lapis.cloud.shared.domain.TagesordnungspunktDto
 import network.lapis.cloud.shared.domain.TagesordnungspunktInput
 import network.lapis.cloud.shared.rpc.IGovernanceService
@@ -61,11 +73,27 @@ import org.jetbrains.exposed.v1.jdbc.insert
 import org.jetbrains.exposed.v1.jdbc.selectAll
 import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 import org.jetbrains.exposed.v1.jdbc.update
+import java.math.BigDecimal
+import java.math.RoundingMode
 import kotlin.math.ceil
 import kotlin.time.Clock
 import kotlin.uuid.Uuid
 
 private val BOARD_ROLES = arrayOf(AccountRole.BOARD, AccountRole.ADMIN)
+
+/** Meritokratische Abstimmungen (V0.2.3): server-side floor, never trusted from a client. */
+private val MIN_STAKE_LTR: BigDecimal = BigDecimal("0.01")
+private val ZERO_LTR: BigDecimal = BigDecimal.ZERO.setScale(2)
+
+/**
+ * DoS caps on [network.lapis.cloud.shared.domain.AbstimmungOpenInput.optionLabels] — well above
+ * any realistic Sachentscheidung's option count/label length, but bounded so a careless or
+ * malicious caller cannot make `openAbstimmung` insert an unbounded number of
+ * [network.lapis.cloud.server.db.tables.AbstimmungOptionTable] rows or exceed that table's
+ * `label VARCHAR(200)` column with a confusing DB-level error instead of a clean 409.
+ */
+private const val MAX_ABSTIMMUNG_OPTIONS = 50
+private const val MAX_OPTION_LABEL_LENGTH = 200
 
 /**
  * Gremien- und Sitzungsverwaltung (V0.2.1). Reads (`listGremien`/`getSitzungDetail`/
@@ -82,9 +110,16 @@ private val BOARD_ROLES = arrayOf(AccountRole.BOARD, AccountRole.ADMIN)
  * simple and correct rather than optimized, consistent with this codebase's "simple-transaction"
  * style (see [ContributionService]/[MailingService]). Single-member-FK joins ([GremiumTable] via
  * [SitzungTable]/[GremiumMitgliedschaftTable] via `member`) still use a plain `innerJoin`.
+ *
+ * Meritokratische Abstimmungen (V0.2.3): [ltrBalanceProvider] defaults to
+ * [PlaceholderLtrBalanceProvider] so `Application.module`'s single-arg
+ * `GovernanceService(call)` construction is unaffected; V0.6's ledger-backed implementation only
+ * has to change that one default, not every call site. See [LtrBalanceProvider] KDoc for the
+ * read-only-in-this-wave boundary.
  */
 class GovernanceService(
     private val call: ApplicationCall,
+    private val ltrBalanceProvider: LtrBalanceProvider = PlaceholderLtrBalanceProvider(),
 ) : IGovernanceService {
     override suspend fun listGremien(activeOnly: Boolean): List<GremiumDto> {
         resolveCurrentMember(call)
@@ -628,6 +663,307 @@ class GovernanceService(
         }
     }
 
+    override suspend fun openAbstimmung(input: AbstimmungOpenInput): AbstimmungDto {
+        val current = resolveCurrentMember(call)
+        val aId = input.antragId.toAntragUuid()
+        return transaction {
+            val antragRow =
+                AntragTable.selectAll().where { AntragTable.id eq aId }.singleOrNull()
+                    ?: throw NotFoundException("Antrag ${input.antragId} not found")
+            val gremiumId = antragRow[AntragTable.targetGremiumId]
+            if (!current.canRecordForSitzung(gremiumId)) throw ForbiddenException()
+            if (antragRow[AntragTable.status] != AntragStatus.TERMINIERT) {
+                throw ConflictException("Antrag ${input.antragId} is ${antragRow[AntragTable.status]}, expected TERMINIERT")
+            }
+            val sId =
+                antragRow[AntragTable.sitzungId]
+                    ?: throw ConflictException("Antrag ${input.antragId} has no scheduled Sitzung")
+            val hasActiveAbstimmung =
+                AbstimmungTable
+                    .selectAll()
+                    .where {
+                        (AbstimmungTable.antragId eq aId) and
+                            (AbstimmungTable.status inList listOf(AbstimmungStatus.OFFEN, AbstimmungStatus.GESCHLOSSEN))
+                    }.count() > 0
+            if (hasActiveAbstimmung) {
+                throw ConflictException("Antrag ${input.antragId} already has an open or resolved Abstimmung")
+            }
+            val distinctLabels =
+                input.optionLabels
+                    .map { it.trim() }
+                    .filter { it.isNotBlank() }
+                    .distinct()
+            if (distinctLabels.size < 2) {
+                throw ConflictException("openAbstimmung requires at least 2 distinct non-blank option labels")
+            }
+            if (distinctLabels.size > MAX_ABSTIMMUNG_OPTIONS) {
+                throw ConflictException("openAbstimmung accepts at most $MAX_ABSTIMMUNG_OPTIONS distinct option labels")
+            }
+            if (distinctLabels.any { it.length > MAX_OPTION_LABEL_LENGTH }) {
+                throw ConflictException("Option labels must be at most $MAX_OPTION_LABEL_LENGTH characters")
+            }
+            val id = Uuid.random()
+            val now = nowLocalDateTime()
+            AbstimmungTable.insert {
+                it[AbstimmungTable.id] = id
+                it[AbstimmungTable.antragId] = aId
+                it[AbstimmungTable.sitzungId] = sId
+                it[title] = antragRow[AntragTable.title]
+                it[status] = AbstimmungStatus.OFFEN
+                it[openedBy] = current.memberId
+                it[openedAt] = now
+                it[closedAt] = null
+                it[winnerOptionId] = null
+                it[secondPriceLtr] = null
+                it[beschlussId] = null
+            }
+            distinctLabels.forEachIndexed { index, label ->
+                AbstimmungOptionTable.insert {
+                    it[AbstimmungOptionTable.id] = Uuid.random()
+                    it[AbstimmungOptionTable.abstimmungId] = id
+                    it[AbstimmungOptionTable.label] = label
+                    it[position] = index
+                }
+            }
+            loadAbstimmung(id)
+        }
+    }
+
+    /**
+     * Eligibility mirrors [computeQuorum]'s [eligibleMemberIds] set for the Abstimmung's
+     * underlying Sitzung -- staking LTR into a basket is, per the concept document, a right
+     * exercised by the same constituency that would otherwise cast a headcount vote on this
+     * Antrag, not an org-wide free-for-all (see the implementation plan's open decision point
+     * (c) for the alternative considered and deferred).
+     */
+    override suspend fun castStimme(input: StimmeInput): StimmeDto {
+        val current = resolveCurrentMember(call)
+        val abId = input.abstimmungId.toAbstimmungUuid()
+        val optId = input.optionId.toAbstimmungOptionUuid()
+        return transaction {
+            val abstimmungRow =
+                AbstimmungTable.selectAll().where { AbstimmungTable.id eq abId }.singleOrNull()
+                    ?: throw NotFoundException("Abstimmung ${input.abstimmungId} not found")
+            if (abstimmungRow[AbstimmungTable.status] != AbstimmungStatus.OFFEN) {
+                throw ConflictException(
+                    "Abstimmung ${input.abstimmungId} is ${abstimmungRow[AbstimmungTable.status]}, expected OFFEN",
+                )
+            }
+            AbstimmungOptionTable
+                .selectAll()
+                .where { (AbstimmungOptionTable.id eq optId) and (AbstimmungOptionTable.abstimmungId eq abId) }
+                .singleOrNull()
+                ?: throw NotFoundException("Option ${input.optionId} does not belong to Abstimmung ${input.abstimmungId}")
+
+            val sitzung = loadSitzung(abstimmungRow[AbstimmungTable.sitzungId])
+            val gremiumRow =
+                GremiumTable.selectAll().where { GremiumTable.id eq sitzung.gremiumId.toGremiumUuid() }.single()
+            val eligible = eligibleMemberIds(gremiumRow, sitzung.scheduledAt.date)
+            if (current.memberId !in eligible) throw ForbiddenException()
+
+            val stake = input.stakeLtr
+            if (stake.scale() > 2) throw ConflictException("stakeLtr must have at most 2 decimal places")
+            val normalizedStake = stake.setScale(2, RoundingMode.UNNECESSARY)
+            if (normalizedStake < MIN_STAKE_LTR) throw ConflictException("stakeLtr must be at least $MIN_STAKE_LTR")
+            val freeBalance = ltrBalanceProvider.freeBalance(current.memberId)
+            if (normalizedStake > freeBalance) {
+                throw ConflictException("stakeLtr $normalizedStake exceeds free LTR balance $freeBalance")
+            }
+
+            val now = nowLocalDateTime()
+            val existing =
+                AbstimmungStimmeTable
+                    .selectAll()
+                    .where {
+                        (AbstimmungStimmeTable.abstimmungId eq abId) and (AbstimmungStimmeTable.memberId eq current.memberId)
+                    }.singleOrNull()
+            val id =
+                if (existing == null) {
+                    val newId = Uuid.random()
+                    AbstimmungStimmeTable.insert {
+                        it[AbstimmungStimmeTable.id] = newId
+                        it[AbstimmungStimmeTable.abstimmungId] = abId
+                        it[AbstimmungStimmeTable.optionId] = optId
+                        it[AbstimmungStimmeTable.memberId] = current.memberId
+                        it[stakeLtr] = normalizedStake
+                        it[settledLtr] = null
+                        it[castAt] = now
+                    }
+                    newId
+                } else {
+                    val existingId = existing[AbstimmungStimmeTable.id]
+                    AbstimmungStimmeTable.update({ AbstimmungStimmeTable.id eq existingId }) {
+                        it[AbstimmungStimmeTable.optionId] = optId
+                        it[stakeLtr] = normalizedStake
+                        it[settledLtr] = null
+                        it[castAt] = now
+                    }
+                    existingId
+                }
+            AbstimmungStimmeTable
+                .selectAll()
+                .where { AbstimmungStimmeTable.id eq id }
+                .single()
+                .toStimmeDto()
+        }
+    }
+
+    /**
+     * Runs the Vickrey settlement ([computeVickreySettlement]) and writes it into the same
+     * Beschlussbuch [recordBeschluss]/[resolveAntrag] use, tagged
+     * [ResolutionMode.MERITOKRATISCH] -- see [insertBeschlussRow]. `votesYes`/`votesNo` are
+     * populated informationally only for the default 2-option JA/NEIN shape (headcount of ballots
+     * per label, not LTR-weighted); any other option count leaves them at `0/0/0` since the
+     * weighted result lives in the Abstimmung itself, not in headcount fields designed for the
+     * Gremium-Quorum path. The winning *basket's* label decides [BeschlussStatus]: a basket
+     * labelled `"NEIN"` (case-insensitive) resolves [BeschlussStatus.ABGELEHNT], any other winning
+     * basket (including a >2-option Sachentscheidung's winning project) resolves
+     * [BeschlussStatus.ANGENOMMEN], and a tie (no winner) resolves [BeschlussStatus.VERTAGT] --
+     * documented decision point (a) from the implementation plan.
+     */
+    override suspend fun closeAbstimmung(abstimmungId: String): AbstimmungDto {
+        val current = resolveCurrentMember(call)
+        val abId = abstimmungId.toAbstimmungUuid()
+        return transaction {
+            val abstimmungRow =
+                AbstimmungTable.selectAll().where { AbstimmungTable.id eq abId }.singleOrNull()
+                    ?: throw NotFoundException("Abstimmung $abstimmungId not found")
+            val antragRow =
+                AntragTable.selectAll().where { AntragTable.id eq abstimmungRow[AbstimmungTable.antragId] }.single()
+            val gremiumId = antragRow[AntragTable.targetGremiumId]
+            if (!current.canRecordForSitzung(gremiumId)) throw ForbiddenException()
+            // Re-checked inside the transaction: guards against a concurrent second close (or a
+            // cast-vs-close race) between the read above and this point.
+            if (abstimmungRow[AbstimmungTable.status] != AbstimmungStatus.OFFEN) {
+                throw ConflictException("Abstimmung $abstimmungId is ${abstimmungRow[AbstimmungTable.status]}, expected OFFEN")
+            }
+
+            val optionRows = AbstimmungOptionTable.selectAll().where { AbstimmungOptionTable.abstimmungId eq abId }.toList()
+            val optionIds = optionRows.map { it[AbstimmungOptionTable.id] }
+            val labelByOptionId = optionRows.associate { it[AbstimmungOptionTable.id] to it[AbstimmungOptionTable.label] }
+            val stimmeRows = AbstimmungStimmeTable.selectAll().where { AbstimmungStimmeTable.abstimmungId eq abId }.toList()
+            val ballots =
+                stimmeRows.map {
+                    Ballot(
+                        memberId = it[AbstimmungStimmeTable.memberId],
+                        optionId = it[AbstimmungStimmeTable.optionId],
+                        stake = it[AbstimmungStimmeTable.stakeLtr],
+                    )
+                }
+            val settlement = computeVickreySettlement(ballots, optionIds)
+            val now = nowLocalDateTime()
+
+            stimmeRows.forEach { row ->
+                val stimmeId = row[AbstimmungStimmeTable.id]
+                val memberId = row[AbstimmungStimmeTable.memberId]
+                val settled = settlement.charges[memberId] ?: ZERO_LTR
+                AbstimmungStimmeTable.update({ AbstimmungStimmeTable.id eq stimmeId }) {
+                    it[settledLtr] = settled
+                }
+            }
+
+            val beschlussStatus =
+                when (val winnerId = settlement.winnerOptionId) {
+                    null -> BeschlussStatus.VERTAGT
+                    else -> {
+                        val winnerLabel = labelByOptionId.getValue(winnerId)
+                        if (winnerLabel.equals("NEIN", ignoreCase = true)) BeschlussStatus.ABGELEHNT else BeschlussStatus.ANGENOMMEN
+                    }
+                }
+            val (votesYes, votesNo) =
+                if (optionRows.size == 2) {
+                    val yes = stimmeRows.count { labelByOptionId[it[AbstimmungStimmeTable.optionId]].equals("JA", ignoreCase = true) }
+                    val no = stimmeRows.count { labelByOptionId[it[AbstimmungStimmeTable.optionId]].equals("NEIN", ignoreCase = true) }
+                    yes to no
+                } else {
+                    0 to 0
+                }
+
+            val sId = abstimmungRow[AbstimmungTable.sitzungId]
+            val sitzung = loadSitzung(sId)
+            val beschlussInput =
+                BeschlussInput(
+                    tagesordnungspunktId = antragRow[AntragTable.tagesordnungspunktId]?.toString(),
+                    title = antragRow[AntragTable.title],
+                    text = antragRow[AntragTable.text],
+                    votesYes = votesYes,
+                    votesNo = votesNo,
+                    votesAbstain = 0,
+                    status = beschlussStatus,
+                )
+            val beschluss =
+                insertBeschlussRow(
+                    sId,
+                    gremiumId,
+                    sitzung,
+                    beschlussInput,
+                    current,
+                    resolutionMode = ResolutionMode.MERITOKRATISCH,
+                    abstimmungId = abId,
+                )
+
+            val newAntragStatus =
+                when (beschlussStatus) {
+                    BeschlussStatus.ANGENOMMEN -> AntragStatus.BESCHLOSSEN
+                    BeschlussStatus.ABGELEHNT -> AntragStatus.ABGELEHNT
+                    BeschlussStatus.VERTAGT -> AntragStatus.VERTAGT
+                }
+            AntragTable.update({ AntragTable.id eq antragRow[AntragTable.id] }) {
+                it[AntragTable.status] = newAntragStatus
+                it[AntragTable.beschlussId] = Uuid.parse(beschluss.id)
+            }
+
+            AbstimmungTable.update({ AbstimmungTable.id eq abId }) {
+                it[status] = AbstimmungStatus.GESCHLOSSEN
+                it[closedAt] = now
+                it[winnerOptionId] = settlement.winnerOptionId
+                it[secondPriceLtr] = settlement.secondPrice
+                it[beschlussId] = Uuid.parse(beschluss.id)
+            }
+            loadAbstimmung(abId)
+        }
+    }
+
+    override suspend fun abortAbstimmung(abstimmungId: String): AbstimmungDto {
+        val current = resolveCurrentMember(call)
+        val abId = abstimmungId.toAbstimmungUuid()
+        return transaction {
+            val abstimmungRow =
+                AbstimmungTable.selectAll().where { AbstimmungTable.id eq abId }.singleOrNull()
+                    ?: throw NotFoundException("Abstimmung $abstimmungId not found")
+            val antragRow =
+                AntragTable.selectAll().where { AntragTable.id eq abstimmungRow[AbstimmungTable.antragId] }.single()
+            if (!current.canRecordForSitzung(antragRow[AntragTable.targetGremiumId])) throw ForbiddenException()
+            if (abstimmungRow[AbstimmungTable.status] != AbstimmungStatus.OFFEN) {
+                throw ConflictException("Abstimmung $abstimmungId is ${abstimmungRow[AbstimmungTable.status]}, expected OFFEN")
+            }
+            AbstimmungTable.update({ AbstimmungTable.id eq abId }) {
+                it[status] = AbstimmungStatus.ABGEBROCHEN
+                it[closedAt] = nowLocalDateTime()
+            }
+            loadAbstimmung(abId)
+        }
+    }
+
+    override suspend fun getAbstimmung(abstimmungId: String): AbstimmungDto {
+        resolveCurrentMember(call)
+        val abId = abstimmungId.toAbstimmungUuid()
+        return transaction { loadAbstimmung(abId) }
+    }
+
+    override suspend fun listStimmen(abstimmungId: String): List<StimmeDto> {
+        resolveCurrentMember(call)
+        val abId = abstimmungId.toAbstimmungUuid()
+        return transaction {
+            AbstimmungTable.selectAll().where { AbstimmungTable.id eq abId }.singleOrNull()
+                ?: throw NotFoundException("Abstimmung $abstimmungId not found")
+            AbstimmungStimmeTable
+                .selectAll()
+                .where { AbstimmungStimmeTable.abstimmungId eq abId }
+                .map { it.toStimmeDto() }
+        }
+    }
+
     private fun loadSitzung(id: Uuid): SitzungDto =
         (SitzungTable innerJoin GremiumTable)
             .selectAll()
@@ -671,6 +1007,14 @@ class GovernanceService(
             ?.toAntragDto()
             ?: throw NotFoundException("Antrag $id not found")
 
+    private fun loadAbstimmung(id: Uuid): AbstimmungDto =
+        AbstimmungTable
+            .selectAll()
+            .where { AbstimmungTable.id eq id }
+            .singleOrNull()
+            ?.toAbstimmungDto()
+            ?: throw NotFoundException("Abstimmung $id not found")
+
     /**
      * Shared insert path for [addTagesordnungspunkt] and [scheduleAntrag] (V0.2.2) — the latter
      * populates [TagesordnungspunktInput] from the Antrag (`title`/`begruendung`/submitter) rather
@@ -705,10 +1049,18 @@ class GovernanceService(
     }
 
     /**
-     * Shared insert path for [recordBeschluss] and [resolveAntrag] (V0.2.2) — what actually makes
-     * "Antrag resolution links into the existing Beschlussbuch mechanism rather than creating a
-     * parallel one" true in code, not just in the DTO shape. Must run inside an already-open
-     * `transaction {}` (both call sites do).
+     * Shared insert path for [recordBeschluss] and [resolveAntrag] (V0.2.2), extended in V0.2.3
+     * to also serve [closeAbstimmung] — what actually makes "resolution links into the existing
+     * Beschlussbuch mechanism rather than creating a parallel one" true in code, not just in the
+     * DTO shape. [resolutionMode]/[abstimmungId] default to the pre-V0.2.3 Gremium-Quorum shape
+     * so [recordBeschluss]/[resolveAntrag] call sites are source-compatible. Must run inside an
+     * already-open `transaction {}` (all three call sites do).
+     *
+     * `quorumMet` is still snapshotted for a [ResolutionMode.MERITOKRATISCH] Beschluss too (for
+     * the historical record), even though the meritocratic outcome itself is decided by LTR
+     * baskets, not by this headcount figure — documented decision point (see the V0.2.3
+     * implementation plan's "Quorum interaction" note); a minimum-participation guard on
+     * Abstimmungen is deferred.
      */
     private fun insertBeschlussRow(
         sId: Uuid,
@@ -716,6 +1068,8 @@ class GovernanceService(
         sitzung: SitzungDto,
         input: BeschlussInput,
         current: CurrentMember,
+        resolutionMode: ResolutionMode = ResolutionMode.GREMIUM_QUORUM,
+        abstimmungId: Uuid? = null,
     ): BeschlussDto {
         val quorum = computeQuorum(sId, sitzung)
         val gremiumRow = GremiumTable.selectAll().where { GremiumTable.id eq gremiumId }.single()
@@ -736,6 +1090,8 @@ class GovernanceService(
             it[status] = input.status
             it[decidedAt] = now
             it[recordedBy] = current.memberId
+            it[BeschlussTable.resolutionMode] = resolutionMode
+            it[BeschlussTable.abstimmungId] = abstimmungId
         }
         return BeschlussTable
             .selectAll()
@@ -768,26 +1124,7 @@ class GovernanceService(
         val gremiumId = sitzung.gremiumId.toGremiumUuid()
         val gremiumRow = GremiumTable.selectAll().where { GremiumTable.id eq gremiumId }.single()
         val quorumPercent = gremiumRow[GremiumTable.quorumPercent]
-        val eligibleMemberIds =
-            if (gremiumRow[GremiumTable.type] == GremiumType.MITGLIEDERVERSAMMLUNG) {
-                MemberTable
-                    .selectAll()
-                    .where { MemberTable.status eq MemberStatus.AKTIV }
-                    .map { it[MemberTable.id] }
-                    .toSet()
-            } else {
-                GremiumMitgliedschaftTable
-                    .selectAll()
-                    .where {
-                        (GremiumMitgliedschaftTable.gremiumId eq gremiumId) and
-                            (GremiumMitgliedschaftTable.since lessEq scheduledDate) and
-                            (
-                                GremiumMitgliedschaftTable.until.isNull() or
-                                    (GremiumMitgliedschaftTable.until greaterEq scheduledDate)
-                            )
-                    }.map { it[GremiumMitgliedschaftTable.memberId] }
-                    .toSet()
-            }
+        val eligible = eligibleMemberIds(gremiumRow, scheduledDate)
         val presentCount =
             AnwesenheitTable
                 .selectAll()
@@ -795,8 +1132,8 @@ class GovernanceService(
                     (AnwesenheitTable.sitzungId eq sitzungId) and
                         (AnwesenheitTable.status inList listOf(AnwesenheitStatus.ANWESEND, AnwesenheitStatus.VERTRETEN))
                 }.map { it[AnwesenheitTable.memberId] }
-                .count { it in eligibleMemberIds }
-        val eligibleCount = eligibleMemberIds.size
+                .count { it in eligible }
+        val eligibleCount = eligible.size
         val requiredCount = ceil(eligibleCount * quorumPercent / 100.0).toInt()
         return QuorumResultDto(
             sitzungId = sitzungId.toString(),
@@ -806,6 +1143,40 @@ class GovernanceService(
             quorumPercent = quorumPercent,
             met = presentCount >= requiredCount,
         )
+    }
+
+    /**
+     * The "who counts" set behind both [computeQuorum]'s headcount and [castStimme]'s eligibility
+     * to stake LTR into a Meritokratische Abstimmung (V0.2.3) — factored out of [computeQuorum] so
+     * both call sites share exactly one definition of Gremium/Mitgliederversammlung eligibility
+     * rather than risking the two silently drifting apart. See [computeQuorum] KDoc for the
+     * MITGLIEDERVERSAMMLUNG-vs-Gremium distinction and its known "current status, not
+     * as-of-Sitzung-date status" limitation on the Mitgliederversammlung path.
+     */
+    private fun eligibleMemberIds(
+        gremiumRow: ResultRow,
+        scheduledDate: LocalDate,
+    ): Set<Uuid> {
+        val gremiumId = gremiumRow[GremiumTable.id]
+        return if (gremiumRow[GremiumTable.type] == GremiumType.MITGLIEDERVERSAMMLUNG) {
+            MemberTable
+                .selectAll()
+                .where { MemberTable.status eq MemberStatus.AKTIV }
+                .map { it[MemberTable.id] }
+                .toSet()
+        } else {
+            GremiumMitgliedschaftTable
+                .selectAll()
+                .where {
+                    (GremiumMitgliedschaftTable.gremiumId eq gremiumId) and
+                        (GremiumMitgliedschaftTable.since lessEq scheduledDate) and
+                        (
+                            GremiumMitgliedschaftTable.until.isNull() or
+                                (GremiumMitgliedschaftTable.until greaterEq scheduledDate)
+                        )
+                }.map { it[GremiumMitgliedschaftTable.memberId] }
+                .toSet()
+        }
     }
 
     /**
@@ -922,6 +1293,65 @@ class GovernanceService(
             decidedAt = this[BeschlussTable.decidedAt],
             recordedById = this[BeschlussTable.recordedBy].toString(),
             recordedByDisplayName = memberDisplayName(this[BeschlussTable.recordedBy]).orEmpty(),
+            resolutionMode = this[BeschlussTable.resolutionMode],
+            abstimmungId = this[BeschlussTable.abstimmungId]?.toString(),
+        )
+
+    /**
+     * Follow-up-queries the options ([AbstimmungOptionTable]) and their computed basket totals
+     * (summed from [AbstimmungStimmeTable], never stored) for this Abstimmung — same
+     * "simple-transaction" style as [memberDisplayName], not an optimized single join.
+     */
+    private fun ResultRow.toAbstimmungDto(): AbstimmungDto {
+        val abstimmungId = this[AbstimmungTable.id]
+        val stakesByOption =
+            AbstimmungStimmeTable
+                .selectAll()
+                .where { AbstimmungStimmeTable.abstimmungId eq abstimmungId }
+                .groupBy({ it[AbstimmungStimmeTable.optionId] }, { it[AbstimmungStimmeTable.stakeLtr] })
+                .mapValues { (_, stakes) -> stakes.fold(ZERO_LTR) { acc, stake -> acc + stake } }
+        val options =
+            AbstimmungOptionTable
+                .selectAll()
+                .where { AbstimmungOptionTable.abstimmungId eq abstimmungId }
+                .orderBy(AbstimmungOptionTable.position, SortOrder.ASC)
+                .map { optRow ->
+                    val optionId = optRow[AbstimmungOptionTable.id]
+                    AbstimmungOptionDto(
+                        id = optionId.toString(),
+                        abstimmungId = abstimmungId.toString(),
+                        label = optRow[AbstimmungOptionTable.label],
+                        position = optRow[AbstimmungOptionTable.position],
+                        basketTotalLtr = stakesByOption[optionId] ?: ZERO_LTR,
+                    )
+                }
+        return AbstimmungDto(
+            id = abstimmungId.toString(),
+            antragId = this[AbstimmungTable.antragId].toString(),
+            sitzungId = this[AbstimmungTable.sitzungId].toString(),
+            title = this[AbstimmungTable.title],
+            status = this[AbstimmungTable.status],
+            options = options,
+            winnerOptionId = this[AbstimmungTable.winnerOptionId]?.toString(),
+            secondPriceLtr = this[AbstimmungTable.secondPriceLtr],
+            openedById = this[AbstimmungTable.openedBy].toString(),
+            openedByDisplayName = memberDisplayName(this[AbstimmungTable.openedBy]).orEmpty(),
+            openedAt = this[AbstimmungTable.openedAt],
+            closedAt = this[AbstimmungTable.closedAt],
+            beschlussId = this[AbstimmungTable.beschlussId]?.toString(),
+        )
+    }
+
+    private fun ResultRow.toStimmeDto(): StimmeDto =
+        StimmeDto(
+            id = this[AbstimmungStimmeTable.id].toString(),
+            abstimmungId = this[AbstimmungStimmeTable.abstimmungId].toString(),
+            optionId = this[AbstimmungStimmeTable.optionId].toString(),
+            memberId = this[AbstimmungStimmeTable.memberId].toString(),
+            memberDisplayName = memberDisplayName(this[AbstimmungStimmeTable.memberId]).orEmpty(),
+            stakeLtr = this[AbstimmungStimmeTable.stakeLtr],
+            settledLtr = this[AbstimmungStimmeTable.settledLtr],
+            castAt = this[AbstimmungStimmeTable.castAt],
         )
 
     private fun ResultRow.toAntragDto(): AntragDto =
@@ -959,4 +1389,10 @@ class GovernanceService(
         runCatching { Uuid.parse(this) }.getOrElse { throw NotFoundException("Invalid id: $this") }
 
     private fun String.toAntragUuid(): Uuid = runCatching { Uuid.parse(this) }.getOrElse { throw NotFoundException("Invalid id: $this") }
+
+    private fun String.toAbstimmungUuid(): Uuid =
+        runCatching { Uuid.parse(this) }.getOrElse { throw NotFoundException("Invalid id: $this") }
+
+    private fun String.toAbstimmungOptionUuid(): Uuid =
+        runCatching { Uuid.parse(this) }.getOrElse { throw NotFoundException("Invalid id: $this") }
 }

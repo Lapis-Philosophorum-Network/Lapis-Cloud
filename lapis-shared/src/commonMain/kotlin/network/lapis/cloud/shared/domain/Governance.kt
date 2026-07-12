@@ -1,5 +1,6 @@
 package network.lapis.cloud.shared.domain
 
+import dev.kilua.rpc.types.Decimal
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.LocalDateTime
 import kotlinx.serialization.Serializable
@@ -30,6 +31,16 @@ enum class AnwesenheitStatus { ANWESEND, ENTSCHULDIGT, UNENTSCHULDIGT, VERTRETEN
 
 @Serializable
 enum class BeschlussStatus { ANGENOMMEN, ABGELEHNT, VERTAGT }
+
+/**
+ * Meritokratische Abstimmungen (V0.2.3): distinguishes the pre-existing Gremium-Quorum
+ * Beschlussbuch (V0.2.1/V0.2.2, headcount-driven Ja/Nein/Enthaltung tally) from the new
+ * Vickrey-basket-auction path (LTR-weighted, see [AbstimmungDto]). [GREMIUM_QUORUM] stays the DB
+ * default so every pre-existing [BeschlussDto] row and `recordBeschluss`/`resolveAntrag` call site
+ * is unaffected by this wave.
+ */
+@Serializable
+enum class ResolutionMode { GREMIUM_QUORUM, MERITOKRATISCH }
 
 @Serializable
 data class GremiumDto(
@@ -167,6 +178,10 @@ data class BeschlussDto(
     val decidedAt: LocalDateTime,
     val recordedById: String,
     val recordedByDisplayName: String,
+    // Meritokratische Abstimmungen (V0.2.3). Defaults keep every existing call site (that builds
+    // a BeschlussDto without naming these two params) source-compatible.
+    val resolutionMode: ResolutionMode = ResolutionMode.GREMIUM_QUORUM,
+    val abstimmungId: String? = null,
 )
 
 @Serializable
@@ -270,4 +285,83 @@ data class AntragResolutionInput(
     val votesNo: Int,
     val votesAbstain: Int,
     val status: BeschlussStatus,
+)
+
+/**
+ * Meritokratische Abstimmungen (V0.2.3): lifecycle of an eBay/Vickrey basket auction opened on a
+ * [AntragStatus.TERMINIERT] Antrag. [OFFEN] -> [GESCHLOSSEN] (`GovernanceService.closeAbstimmung`,
+ * runs the Vickrey settlement and creates a [BeschlussDto] with
+ * [ResolutionMode.MERITOKRATISCH]) | [ABGEBROCHEN] (`abortAbstimmung`, no settlement, no
+ * Beschluss). Exactly one non-[ABGEBROCHEN] Abstimmung may exist per Antrag at a time — see
+ * `GovernanceService.openAbstimmung`.
+ */
+@Serializable
+enum class AbstimmungStatus { OFFEN, GESCHLOSSEN, ABGEBROCHEN }
+
+/**
+ * A basket (`abstimmung_option`). [basketTotalLtr] is computed server-side from this option's
+ * ballots (never stored, never trusted from a client), see
+ * `network.lapis.cloud.server.rpc.GovernanceService`.
+ */
+@Serializable
+data class AbstimmungOptionDto(
+    val id: String,
+    val abstimmungId: String,
+    val label: String,
+    val position: Int,
+    val basketTotalLtr: Decimal,
+)
+
+/**
+ * The vote itself. `winnerOptionId`/`secondPriceLtr` are null while [status] is [AbstimmungStatus
+ * .OFFEN], and both stay null even after close if the top two baskets tied (see
+ * `network.lapis.cloud.server.rpc.AbstimmungSettlement` KDoc for the tie rule) — a tied vote
+ * produces no winner, no charges, and resolves its Antrag to [AntragStatus.VERTAGT].
+ */
+@Serializable
+data class AbstimmungDto(
+    val id: String,
+    val antragId: String,
+    val sitzungId: String,
+    val title: String,
+    val status: AbstimmungStatus,
+    val options: List<AbstimmungOptionDto>,
+    val winnerOptionId: String?,
+    val secondPriceLtr: Decimal?,
+    val openedById: String,
+    val openedByDisplayName: String,
+    val openedAt: LocalDateTime,
+    val closedAt: LocalDateTime?,
+    val beschlussId: String?,
+)
+
+/**
+ * The per-member ballot (`abstimmung_stimme`). [settledLtr] is null while the Abstimmung is
+ * [AbstimmungStatus.OFFEN] and computed once at close — 0 for a losing ballot, never null once
+ * settled.
+ */
+@Serializable
+data class StimmeDto(
+    val id: String,
+    val abstimmungId: String,
+    val optionId: String,
+    val memberId: String,
+    val memberDisplayName: String,
+    val stakeLtr: Decimal,
+    val settledLtr: Decimal?,
+    val castAt: LocalDateTime,
+)
+
+/** Two options ("JA"/"NEIN") by default; ordering follows list order, `position` 0-based. */
+@Serializable
+data class AbstimmungOpenInput(
+    val antragId: String,
+    val optionLabels: List<String> = listOf("JA", "NEIN"),
+)
+
+@Serializable
+data class StimmeInput(
+    val abstimmungId: String,
+    val optionId: String,
+    val stakeLtr: Decimal,
 )

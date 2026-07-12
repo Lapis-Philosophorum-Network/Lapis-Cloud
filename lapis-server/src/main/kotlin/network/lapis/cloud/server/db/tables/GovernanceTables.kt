@@ -1,10 +1,12 @@
 package network.lapis.cloud.server.db.tables
 
+import network.lapis.cloud.shared.domain.AbstimmungStatus
 import network.lapis.cloud.shared.domain.AntragStatus
 import network.lapis.cloud.shared.domain.AnwesenheitStatus
 import network.lapis.cloud.shared.domain.BeschlussStatus
 import network.lapis.cloud.shared.domain.GremiumRolle
 import network.lapis.cloud.shared.domain.GremiumType
+import network.lapis.cloud.shared.domain.ResolutionMode
 import network.lapis.cloud.shared.domain.SitzungsFormat
 import network.lapis.cloud.shared.domain.SitzungsStatus
 import org.jetbrains.exposed.v1.core.Table
@@ -119,6 +121,78 @@ object BeschlussTable : Table("beschluss") {
     val status = enumerationByName<BeschlussStatus>("status", 20)
     val decidedAt = datetime("decided_at")
     val recordedBy = uuid("recorded_by").references(MemberTable.id)
+
+    // Meritokratische Abstimmungen (V0.2.3): distinguishes this Gremium-Quorum Beschlussbuch
+    // (V0.2.1/V0.2.2, the default) from the new Vickrey-basket-auction path. DB DEFAULT
+    // 'GREMIUM_QUORUM' (see V8__meritokratische_abstimmungen.sql) keeps recordBeschluss/
+    // resolveAntrag call sites — and every pre-existing row — unchanged.
+    val resolutionMode = enumerationByName<ResolutionMode>("resolution_mode", 20)
+
+    // Set only when resolutionMode == MERITOKRATISCH, linking back to the Abstimmung whose
+    // Vickrey settlement produced this Beschluss. Nullable: a GREMIUM_QUORUM Beschluss has none.
+    val abstimmungId = uuid("abstimmung_id").references(AbstimmungTable.id).nullable()
+
+    override val primaryKey = PrimaryKey(id)
+}
+
+/**
+ * Meritokratische Abstimmungen (V0.2.3): an eBay/Vickrey basket auction opened on a
+ * [AntragStatus.TERMINIERT] Antrag — see `network.lapis.cloud.server.rpc.GovernanceService`
+ * (openAbstimmung/castStimme/closeAbstimmung/abortAbstimmung) and
+ * `network.lapis.cloud.server.rpc.AbstimmungSettlement` (the pure Vickrey settlement function).
+ * `winnerOptionId`/`secondPriceLtr` are settlement-audit fields written once at close (null while
+ * [AbstimmungStatus.OFFEN], and both stay null on a tie — see `AbstimmungSettlement` KDoc).
+ * `beschlussId` is set at close, mirroring [AntragTable.beschlussId]'s "authoritative resolution
+ * pointer" role.
+ */
+object AbstimmungTable : Table("abstimmung") {
+    val id = uuid("id")
+    val antragId = uuid("antrag_id").references(AntragTable.id)
+    val sitzungId = uuid("sitzung_id").references(SitzungTable.id)
+    val title = varchar("title", 300)
+    val status = enumerationByName<AbstimmungStatus>("status", 30)
+    val openedBy = uuid("opened_by").references(MemberTable.id)
+    val openedAt = datetime("opened_at")
+    val closedAt = datetime("closed_at").nullable()
+    val winnerOptionId = uuid("winner_option_id").nullable()
+    val secondPriceLtr = decimal("second_price_ltr", 18, 2).nullable()
+    val beschlussId = uuid("beschluss_id").references(BeschlussTable.id).nullable()
+
+    override val primaryKey = PrimaryKey(id)
+}
+
+/**
+ * A basket. No member FK — baskets themselves carry no personal data, only the
+ * [AbstimmungStimmeTable] rows staked into them do. The basket total is deliberately *not*
+ * stored here (would drift from the ballots); it is always computed by summing
+ * [AbstimmungStimmeTable.stakeLtr] for this option.
+ */
+object AbstimmungOptionTable : Table("abstimmung_option") {
+    val id = uuid("id")
+    val abstimmungId = uuid("abstimmung_id").references(AbstimmungTable.id)
+    val label = varchar("label", 200)
+    val position = integer("position")
+
+    override val primaryKey = PrimaryKey(id)
+}
+
+/**
+ * The per-member ballot — personal-data-bearing (staked/settled LTR amounts are the member's
+ * property record). DB `UNIQUE(abstimmung_id, member_id)` (see the V8 migration) is the
+ * anti-ballot-stuffing backstop behind `GovernanceService.castStimme`'s upsert-per-member logic,
+ * mirroring [AnwesenheitTable]'s `uq_anwesenheit_member` precedent. `settledLtr` is null while the
+ * Abstimmung is [AbstimmungStatus.OFFEN] and computed once at close by
+ * `network.lapis.cloud.server.rpc.AbstimmungSettlement.computeVickreySettlement` — losers get 0,
+ * never null, once settled.
+ */
+object AbstimmungStimmeTable : Table("abstimmung_stimme") {
+    val id = uuid("id")
+    val abstimmungId = uuid("abstimmung_id").references(AbstimmungTable.id)
+    val optionId = uuid("option_id").references(AbstimmungOptionTable.id)
+    val memberId = uuid("member_id").references(MemberTable.id)
+    val stakeLtr = decimal("stake_ltr", 18, 2)
+    val settledLtr = decimal("settled_ltr", 18, 2).nullable()
+    val castAt = datetime("cast_at")
 
     override val primaryKey = PrimaryKey(id)
 }

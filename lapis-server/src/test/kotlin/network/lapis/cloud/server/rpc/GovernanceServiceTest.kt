@@ -3,6 +3,7 @@ package network.lapis.cloud.server.rpc
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.string.shouldContain
+import io.ktor.client.HttpClient
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.post
@@ -22,18 +23,24 @@ import kotlinx.datetime.LocalDate
 import kotlinx.datetime.LocalDateTime
 import network.lapis.cloud.server.db.DatabaseConfig
 import network.lapis.cloud.server.db.DevSeedData
+import network.lapis.cloud.server.db.tables.AbstimmungOptionTable
+import network.lapis.cloud.server.db.tables.AbstimmungStimmeTable
+import network.lapis.cloud.server.db.tables.AbstimmungTable
 import network.lapis.cloud.server.db.tables.AccountTable
 import network.lapis.cloud.server.db.tables.AntragTable
 import network.lapis.cloud.server.db.tables.AnwesenheitTable
 import network.lapis.cloud.server.db.tables.BeschlussTable
 import network.lapis.cloud.server.db.tables.GremiumMitgliedschaftTable
 import network.lapis.cloud.server.db.tables.GremiumTable
+import network.lapis.cloud.server.db.tables.LtrBalanceTable
 import network.lapis.cloud.server.db.tables.MemberTable
 import network.lapis.cloud.server.db.tables.SitzungTable
 import network.lapis.cloud.server.db.tables.TagesordnungspunktTable
 import network.lapis.cloud.server.dsgvo.GovernancePersonalData
 import network.lapis.cloud.server.security.ForbiddenException
 import network.lapis.cloud.server.security.UnauthenticatedException
+import network.lapis.cloud.shared.domain.AbstimmungOpenInput
+import network.lapis.cloud.shared.domain.AbstimmungStatus
 import network.lapis.cloud.shared.domain.AccountRole
 import network.lapis.cloud.shared.domain.AntragInput
 import network.lapis.cloud.shared.domain.AntragPruefungsEntscheidung
@@ -49,9 +56,11 @@ import network.lapis.cloud.shared.domain.GremiumMitgliedschaftInput
 import network.lapis.cloud.shared.domain.GremiumRolle
 import network.lapis.cloud.shared.domain.GremiumType
 import network.lapis.cloud.shared.domain.MemberStatus
+import network.lapis.cloud.shared.domain.ResolutionMode
 import network.lapis.cloud.shared.domain.SitzungInput
 import network.lapis.cloud.shared.domain.SitzungsFormat
 import network.lapis.cloud.shared.domain.SitzungsStatus
+import network.lapis.cloud.shared.domain.StimmeInput
 import network.lapis.cloud.shared.domain.TagesordnungspunktInput
 import org.jetbrains.exposed.v1.core.and
 import org.jetbrains.exposed.v1.core.eq
@@ -62,6 +71,7 @@ import org.jetbrains.exposed.v1.jdbc.insert
 import org.jetbrains.exposed.v1.jdbc.selectAll
 import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 import org.jetbrains.exposed.v1.jdbc.update
+import java.math.BigDecimal
 import kotlin.uuid.Uuid
 
 private const val ADMIN_ID = "00000000-0000-0000-0000-000000000001"
@@ -117,6 +127,24 @@ class GovernanceServiceTest :
             }
             createdMemberIds += id
             return id
+        }
+
+        /**
+         * Meritokratische Abstimmungen (V0.2.3) tests seed [LtrBalanceTable] directly rather than
+         * going through a real ledger (V0.6 doesn't exist yet) — mirrors how these tests already
+         * seed Gremium/Sitzung/Member rows directly instead of using a UI flow.
+         */
+        fun seedLtrBalance(
+            memberId: Uuid,
+            balance: BigDecimal,
+        ) {
+            transaction {
+                LtrBalanceTable.insert {
+                    it[LtrBalanceTable.memberId] = memberId
+                    it[balanceLtr] = balance
+                    it[updatedAt] = LocalDateTime(2026, 1, 1, 0, 0)
+                }
+            }
         }
 
         test("createGremium requires BOARD/ADMIN; reads require authentication but no elevated role") {
@@ -857,6 +885,455 @@ class GovernanceServiceTest :
                 note shouldBe "Vertrauliche Pruefungsnotiz"
             }
         }
+
+        test(
+            "Meritokratische Abstimmung happy path: open -> cast contested JA/NEIN baskets -> close computes " +
+                "the Vickrey settlement exactly, creates a MERITOKRATISCH Beschluss linked to the Abstimmung, " +
+                "and transitions the Antrag to BESCHLOSSEN",
+        ) {
+            testApplication {
+                application {
+                    install(StatusPages) { installGovernanceExceptionHandlers() }
+                    routing {
+                        registerGovernanceTestRoutes()
+                        registerAntragTestRoutes()
+                        registerAbstimmungTestRoutes()
+                    }
+                }
+
+                val gremiumId =
+                    client
+                        .post("/test/create-gremium/Vorstand%20Abstimmung/VORSTAND/50") { header("X-Member-Id", BOARD_ID) }
+                        .bodyAsText()
+                createdGremiumIds += Uuid.parse(gremiumId)
+
+                val chair = createTestMember("abst-happy-chair@example.org")
+                val m2 = createTestMember("abst-happy-m2@example.org")
+                val m3 = createTestMember("abst-happy-m3@example.org")
+                val m4 = createTestMember("abst-happy-m4@example.org")
+                client.post("/test/add-mitglied/$gremiumId/$chair/VORSITZ") { header("X-Member-Id", BOARD_ID) }
+                client.post("/test/add-mitglied/$gremiumId/$m2/MITGLIED") { header("X-Member-Id", BOARD_ID) }
+                client.post("/test/add-mitglied/$gremiumId/$m3/MITGLIED") { header("X-Member-Id", BOARD_ID) }
+                client.post("/test/add-mitglied/$gremiumId/$m4/MITGLIED") { header("X-Member-Id", BOARD_ID) }
+
+                seedLtrBalance(m2, BigDecimal("100.00"))
+                seedLtrBalance(m3, BigDecimal("100.00"))
+                seedLtrBalance(m4, BigDecimal("100.00"))
+
+                val (antragId, sitzungId) = client.createTerminierterAntrag(gremiumId, chair, m2, 2026, 11, 1)
+
+                val opened =
+                    client.post("/test/open-abstimmung/$antragId") { header("X-Member-Id", chair.toString()) }.bodyAsText()
+                val openedParts = opened.split(":", limit = 3)
+                val abstimmungId = openedParts[0]
+                openedParts[1] shouldBe AbstimmungStatus.OFFEN.name
+                val optionIdByLabel =
+                    openedParts[2].split(";").associate { entry ->
+                        val (optId, label) = entry.split("=")
+                        label to optId
+                    }
+                val jaOptionId = optionIdByLabel.getValue("JA")
+                val neinOptionId = optionIdByLabel.getValue("NEIN")
+
+                // Contested: JA basket = 60 (m2) + 30 (m3) = 90, NEIN basket = 50 (m4).
+                client.post("/test/cast-stimme/$abstimmungId/$jaOptionId/60.00") { header("X-Member-Id", m2.toString()) }
+                client.post("/test/cast-stimme/$abstimmungId/$jaOptionId/30.00") { header("X-Member-Id", m3.toString()) }
+                client.post("/test/cast-stimme/$abstimmungId/$neinOptionId/50.00") { header("X-Member-Id", m4.toString()) }
+
+                val closed =
+                    client
+                        .post("/test/close-abstimmung/$abstimmungId") { header("X-Member-Id", chair.toString()) }
+                        .bodyAsText()
+                val closedParts = closed.split(":")
+                closedParts[0] shouldBe AbstimmungStatus.GESCHLOSSEN.name
+                closedParts[1] shouldBe jaOptionId
+                // secondPrice = the losing NEIN basket's total = 50.00 (winners collectively pay this much).
+                closedParts[2] shouldBe "50.00"
+                val beschlussId = closedParts[3]
+                beschlussId.isBlank() shouldBe false
+
+                // Vickrey proportional split of 50.00 between m2 (60/90 share) and m3 (30/90 share), largest-
+                // remainder rounded to the cent: m2 = 33.33, m3 = 16.67, sum = 50.00 exactly. m4 (loser) = 0.00.
+                val stimmenStr =
+                    client.get("/test/list-stimmen/$abstimmungId") { header("X-Member-Id", chair.toString()) }.bodyAsText()
+                val settledByMember =
+                    stimmenStr.split(";").associate { entry ->
+                        val parts = entry.split(":")
+                        parts[0] to parts[2]
+                    }
+                settledByMember.getValue(m2.toString()) shouldBe "33.33"
+                settledByMember.getValue(m3.toString()) shouldBe "16.67"
+                settledByMember.getValue(m4.toString()) shouldBe "0.00"
+
+                val beschlussInfo =
+                    client
+                        .get("/test/beschluss-for-sitzung/$sitzungId") { header("X-Member-Id", chair.toString()) }
+                        .bodyAsText()
+                val beschlussParts = beschlussInfo.split(":")
+                beschlussParts[0] shouldBe ResolutionMode.MERITOKRATISCH.name
+                beschlussParts[1] shouldBe abstimmungId
+                beschlussParts[2] shouldBe BeschlussStatus.ANGENOMMEN.name
+
+                val antragInfo =
+                    client.get("/test/get-antrag/$antragId") { header("X-Member-Id", chair.toString()) }.bodyAsText()
+                antragInfo shouldBe "${AntragStatus.BESCHLOSSEN.name}:$beschlussId"
+            }
+        }
+
+        test(
+            "Meritokratische Abstimmung authz: non-leadership cannot open/close; only eligible (Gremium-member) " +
+                "callers can castStimme",
+        ) {
+            testApplication {
+                application {
+                    install(StatusPages) { installGovernanceExceptionHandlers() }
+                    routing {
+                        registerGovernanceTestRoutes()
+                        registerAntragTestRoutes()
+                        registerAbstimmungTestRoutes()
+                    }
+                }
+
+                val gremiumId =
+                    client
+                        .post("/test/create-gremium/Vorstand%20Abst%20Authz/VORSTAND/50") { header("X-Member-Id", BOARD_ID) }
+                        .bodyAsText()
+                createdGremiumIds += Uuid.parse(gremiumId)
+
+                val chair = createTestMember("abst-authz-chair@example.org")
+                val member = createTestMember("abst-authz-member@example.org")
+                val outsider = createTestMember("abst-authz-outsider@example.org")
+                client.post("/test/add-mitglied/$gremiumId/$chair/VORSITZ") { header("X-Member-Id", BOARD_ID) }
+                client.post("/test/add-mitglied/$gremiumId/$member/MITGLIED") { header("X-Member-Id", BOARD_ID) }
+                // outsider is deliberately never added to the Gremium.
+
+                seedLtrBalance(member, BigDecimal("50.00"))
+                seedLtrBalance(outsider, BigDecimal("50.00"))
+
+                val (antragId, _) = client.createTerminierterAntrag(gremiumId, chair, member, 2026, 11, 2)
+
+                val nonLeadershipOpen =
+                    client.post("/test/open-abstimmung/$antragId") { header("X-Member-Id", member.toString()) }
+                nonLeadershipOpen.status shouldBe HttpStatusCode.Forbidden
+
+                val opened =
+                    client.post("/test/open-abstimmung/$antragId") { header("X-Member-Id", chair.toString()) }.bodyAsText()
+                val abstimmungId = opened.substringBefore(":")
+                val jaOptionId =
+                    opened
+                        .split(":", limit = 3)[2]
+                        .split(";")
+                        .first { it.endsWith("=JA") }
+                        .substringBefore("=")
+
+                val outsiderCast =
+                    client.post("/test/cast-stimme/$abstimmungId/$jaOptionId/10.00") { header("X-Member-Id", outsider.toString()) }
+                outsiderCast.status shouldBe HttpStatusCode.Forbidden
+
+                val memberCast =
+                    client.post("/test/cast-stimme/$abstimmungId/$jaOptionId/10.00") { header("X-Member-Id", member.toString()) }
+                memberCast.status shouldBe HttpStatusCode.OK
+
+                val nonLeadershipClose =
+                    client.post("/test/close-abstimmung/$abstimmungId") { header("X-Member-Id", member.toString()) }
+                nonLeadershipClose.status shouldBe HttpStatusCode.Forbidden
+            }
+        }
+
+        test(
+            "Meritokratische Abstimmung state guards: openAbstimmung requires TERMINIERT and rejects a second " +
+                "Abstimmung on the same Antrag; castStimme/closeAbstimmung reject once GESCHLOSSEN",
+        ) {
+            testApplication {
+                application {
+                    install(StatusPages) { installGovernanceExceptionHandlers() }
+                    routing {
+                        registerGovernanceTestRoutes()
+                        registerAntragTestRoutes()
+                        registerAbstimmungTestRoutes()
+                    }
+                }
+
+                val gremiumId =
+                    client
+                        .post("/test/create-gremium/Vorstand%20Abst%20Guards/VORSTAND/50") { header("X-Member-Id", BOARD_ID) }
+                        .bodyAsText()
+                createdGremiumIds += Uuid.parse(gremiumId)
+
+                val chair = createTestMember("abst-guards-chair@example.org")
+                val member = createTestMember("abst-guards-member@example.org")
+                client.post("/test/add-mitglied/$gremiumId/$chair/VORSITZ") { header("X-Member-Id", BOARD_ID) }
+                client.post("/test/add-mitglied/$gremiumId/$member/MITGLIED") { header("X-Member-Id", BOARD_ID) }
+                seedLtrBalance(member, BigDecimal("50.00"))
+
+                val antragId =
+                    client
+                        .post("/test/submit-antrag/$gremiumId") { header("X-Member-Id", member.toString()) }
+                        .bodyAsText()
+                        .substringBefore(":")
+                client.post("/test/review-antrag/$antragId/ANNEHMEN") { header("X-Member-Id", chair.toString()) }
+
+                // Still GEPRUEFT, not TERMINIERT yet: openAbstimmung must reject.
+                val wrongStatus = client.post("/test/open-abstimmung/$antragId") { header("X-Member-Id", chair.toString()) }
+                wrongStatus.status shouldBe HttpStatusCode.Conflict
+
+                val sitzungId =
+                    client
+                        .post("/test/create-sitzung/$gremiumId/2026/11/3/18") { header("X-Member-Id", chair.toString()) }
+                        .bodyAsText()
+                        .substringBefore(":")
+                client.post("/test/schedule-antrag/$antragId/$sitzungId/1") { header("X-Member-Id", chair.toString()) }
+
+                val opened =
+                    client.post("/test/open-abstimmung/$antragId") { header("X-Member-Id", chair.toString()) }.bodyAsText()
+                val abstimmungId = opened.substringBefore(":")
+                val jaOptionId =
+                    opened
+                        .split(":", limit = 3)[2]
+                        .split(";")
+                        .first { it.endsWith("=JA") }
+                        .substringBefore("=")
+
+                val duplicateOpen = client.post("/test/open-abstimmung/$antragId") { header("X-Member-Id", chair.toString()) }
+                duplicateOpen.status shouldBe HttpStatusCode.Conflict
+
+                client.post("/test/cast-stimme/$abstimmungId/$jaOptionId/5.00") { header("X-Member-Id", member.toString()) }
+                client.post("/test/close-abstimmung/$abstimmungId") { header("X-Member-Id", chair.toString()) }
+
+                val castAfterClose =
+                    client.post("/test/cast-stimme/$abstimmungId/$jaOptionId/5.00") { header("X-Member-Id", member.toString()) }
+                castAfterClose.status shouldBe HttpStatusCode.Conflict
+
+                val doubleClose = client.post("/test/close-abstimmung/$abstimmungId") { header("X-Member-Id", chair.toString()) }
+                doubleClose.status shouldBe HttpStatusCode.Conflict
+            }
+        }
+
+        test(
+            "Meritokratische Abstimmung validation: stake below the 0.01 LTR floor and stake exceeding the " +
+                "member's free LTR balance are both rejected server-side, never trusting the client amount",
+        ) {
+            testApplication {
+                application {
+                    install(StatusPages) { installGovernanceExceptionHandlers() }
+                    routing {
+                        registerGovernanceTestRoutes()
+                        registerAntragTestRoutes()
+                        registerAbstimmungTestRoutes()
+                    }
+                }
+
+                val gremiumId =
+                    client
+                        .post("/test/create-gremium/Vorstand%20Abst%20Val/VORSTAND/50") { header("X-Member-Id", BOARD_ID) }
+                        .bodyAsText()
+                createdGremiumIds += Uuid.parse(gremiumId)
+
+                val chair = createTestMember("abst-val-chair@example.org")
+                val member = createTestMember("abst-val-member@example.org")
+                client.post("/test/add-mitglied/$gremiumId/$chair/VORSITZ") { header("X-Member-Id", BOARD_ID) }
+                client.post("/test/add-mitglied/$gremiumId/$member/MITGLIED") { header("X-Member-Id", BOARD_ID) }
+                seedLtrBalance(member, BigDecimal("10.00"))
+
+                val (antragId, _) = client.createTerminierterAntrag(gremiumId, chair, member, 2026, 11, 4)
+                val opened =
+                    client.post("/test/open-abstimmung/$antragId") { header("X-Member-Id", chair.toString()) }.bodyAsText()
+                val abstimmungId = opened.substringBefore(":")
+                val jaOptionId =
+                    opened
+                        .split(":", limit = 3)[2]
+                        .split(";")
+                        .first { it.endsWith("=JA") }
+                        .substringBefore("=")
+
+                val belowFloor =
+                    client.post("/test/cast-stimme/$abstimmungId/$jaOptionId/0.00") { header("X-Member-Id", member.toString()) }
+                belowFloor.status shouldBe HttpStatusCode.Conflict
+
+                val exceedsBalance =
+                    client.post("/test/cast-stimme/$abstimmungId/$jaOptionId/15.00") { header("X-Member-Id", member.toString()) }
+                exceedsBalance.status shouldBe HttpStatusCode.Conflict
+
+                val valid =
+                    client.post("/test/cast-stimme/$abstimmungId/$jaOptionId/5.00") { header("X-Member-Id", member.toString()) }
+                valid.status shouldBe HttpStatusCode.OK
+            }
+        }
+
+        test(
+            "Meritokratische Abstimmung: exact tie between the top two baskets closes with no winner, zero " +
+                "settlement for everyone, and resolves the Antrag to VERTAGT",
+        ) {
+            testApplication {
+                application {
+                    install(StatusPages) { installGovernanceExceptionHandlers() }
+                    routing {
+                        registerGovernanceTestRoutes()
+                        registerAntragTestRoutes()
+                        registerAbstimmungTestRoutes()
+                    }
+                }
+
+                val gremiumId =
+                    client
+                        .post("/test/create-gremium/Vorstand%20Abst%20Tie/VORSTAND/50") { header("X-Member-Id", BOARD_ID) }
+                        .bodyAsText()
+                createdGremiumIds += Uuid.parse(gremiumId)
+
+                val chair = createTestMember("abst-tie-chair@example.org")
+                val m2 = createTestMember("abst-tie-m2@example.org")
+                val m3 = createTestMember("abst-tie-m3@example.org")
+                client.post("/test/add-mitglied/$gremiumId/$chair/VORSITZ") { header("X-Member-Id", BOARD_ID) }
+                client.post("/test/add-mitglied/$gremiumId/$m2/MITGLIED") { header("X-Member-Id", BOARD_ID) }
+                client.post("/test/add-mitglied/$gremiumId/$m3/MITGLIED") { header("X-Member-Id", BOARD_ID) }
+                seedLtrBalance(m2, BigDecimal("50.00"))
+                seedLtrBalance(m3, BigDecimal("50.00"))
+
+                val (antragId, sitzungId) = client.createTerminierterAntrag(gremiumId, chair, m2, 2026, 11, 5)
+                val opened =
+                    client.post("/test/open-abstimmung/$antragId") { header("X-Member-Id", chair.toString()) }.bodyAsText()
+                val abstimmungId = opened.substringBefore(":")
+                val optionIdByLabel =
+                    opened.split(":", limit = 3)[2].split(";").associate { entry ->
+                        val (optId, label) = entry.split("=")
+                        label to optId
+                    }
+                val jaOptionId = optionIdByLabel.getValue("JA")
+                val neinOptionId = optionIdByLabel.getValue("NEIN")
+
+                client.post("/test/cast-stimme/$abstimmungId/$jaOptionId/25.00") { header("X-Member-Id", m2.toString()) }
+                client.post("/test/cast-stimme/$abstimmungId/$neinOptionId/25.00") { header("X-Member-Id", m3.toString()) }
+
+                val closed =
+                    client
+                        .post("/test/close-abstimmung/$abstimmungId") { header("X-Member-Id", chair.toString()) }
+                        .bodyAsText()
+                val closedParts = closed.split(":")
+                closedParts[0] shouldBe AbstimmungStatus.GESCHLOSSEN.name
+                closedParts[1] shouldBe "" // no winner
+                closedParts[2] shouldBe "0.00" // no settlement
+
+                val stimmenStr =
+                    client.get("/test/list-stimmen/$abstimmungId") { header("X-Member-Id", chair.toString()) }.bodyAsText()
+                stimmenStr.split(";").forEach { entry ->
+                    entry.split(":")[2] shouldBe "0.00"
+                }
+
+                val beschlussInfo =
+                    client
+                        .get("/test/beschluss-for-sitzung/$sitzungId") { header("X-Member-Id", chair.toString()) }
+                        .bodyAsText()
+                beschlussInfo.split(":")[2] shouldBe BeschlussStatus.VERTAGT.name
+
+                val antragInfo =
+                    client.get("/test/get-antrag/$antragId") { header("X-Member-Id", chair.toString()) }.bodyAsText()
+                antragInfo.substringBefore(":") shouldBe AntragStatus.VERTAGT.name
+            }
+        }
+
+        test(
+            "DSGVO: GovernancePersonalData export/erase covers abstimmung (opened_by) and abstimmung_stimme " +
+                "(member_id) rows; staked LTR retained verbatim (retain-with-reason, property record)",
+        ) {
+            val gremiumId = Uuid.random()
+            val sitzungId = Uuid.random()
+            val antragId = Uuid.random()
+            val abstimmungId = Uuid.random()
+            val optionId = Uuid.random()
+            val opener = createTestMember("dsgvo-abst-opener@example.org")
+            val voter = createTestMember("dsgvo-abst-voter@example.org")
+            transaction {
+                GremiumTable.insert {
+                    it[id] = gremiumId
+                    it[name] = "DSGVO-Abstimmung-Testgremium"
+                    it[type] = GremiumType.SONSTIGES
+                    it[description] = "Nur fuer DSGVO-Abstimmung-Test"
+                    it[active] = true
+                    it[quorumPercent] = 50
+                    it[createdAt] = LocalDateTime(2026, 1, 1, 0, 0)
+                }
+                SitzungTable.insert {
+                    it[id] = sitzungId
+                    it[SitzungTable.gremiumId] = gremiumId
+                    it[title] = "DSGVO-Abstimmung-Testsitzung"
+                    it[scheduledAt] = LocalDateTime(2026, 1, 4, 18, 0)
+                    it[location] = null
+                    it[format] = SitzungsFormat.ONLINE
+                    it[status] = SitzungsStatus.GEPLANT
+                    it[calledBy] = null
+                    it[calledAt] = null
+                    it[chairMemberId] = null
+                    it[minuteTakerMemberId] = null
+                    it[protocolDocumentId] = null
+                    it[createdAt] = LocalDateTime(2026, 1, 1, 0, 0)
+                }
+                AntragTable.insert {
+                    it[id] = antragId
+                    it[targetGremiumId] = gremiumId
+                    it[title] = "DSGVO-Testabstimmung"
+                    it[begruendung] = "Testbegruendung"
+                    it[text] = "Antragstext"
+                    it[submitterMemberId] = opener
+                    it[status] = AntragStatus.TERMINIERT
+                    it[submittedAt] = LocalDateTime(2026, 1, 2, 0, 0)
+                    it[reviewedBy] = null
+                    it[reviewedAt] = null
+                    it[reviewNote] = null
+                    it[AntragTable.sitzungId] = sitzungId
+                    it[tagesordnungspunktId] = null
+                    it[beschlussId] = null
+                    it[withdrawnAt] = null
+                }
+                AbstimmungTable.insert {
+                    it[id] = abstimmungId
+                    it[AbstimmungTable.antragId] = antragId
+                    it[AbstimmungTable.sitzungId] = sitzungId
+                    it[title] = "DSGVO-Testabstimmung"
+                    it[status] = AbstimmungStatus.OFFEN
+                    it[openedBy] = opener
+                    it[openedAt] = LocalDateTime(2026, 1, 4, 0, 0)
+                    it[closedAt] = null
+                    it[winnerOptionId] = null
+                    it[secondPriceLtr] = null
+                    it[beschlussId] = null
+                }
+                AbstimmungOptionTable.insert {
+                    it[id] = optionId
+                    it[AbstimmungOptionTable.abstimmungId] = abstimmungId
+                    it[label] = "JA"
+                    it[position] = 0
+                }
+                AbstimmungStimmeTable.insert {
+                    it[id] = Uuid.random()
+                    it[AbstimmungStimmeTable.abstimmungId] = abstimmungId
+                    it[AbstimmungStimmeTable.optionId] = optionId
+                    it[AbstimmungStimmeTable.memberId] = voter
+                    it[stakeLtr] = BigDecimal("12.34")
+                    it[settledLtr] = null
+                    it[castAt] = LocalDateTime(2026, 1, 5, 0, 0)
+                }
+            }
+            createdGremiumIds += gremiumId
+
+            val exportOpener = transaction { GovernancePersonalData.export(opener) }.toString()
+            exportOpener shouldContain "DSGVO-Testabstimmung"
+
+            val exportVoter = transaction { GovernancePersonalData.export(voter) }.toString()
+            exportVoter shouldContain "12.34"
+
+            val outcomes = transaction { GovernancePersonalData.erase(voter, ErasureMode.ANONYMIZE) }
+            val stimmeOutcome = outcomes.single { it.table == "abstimmung_stimme" }
+            stimmeOutcome.rowsRetained shouldBe 1
+
+            transaction {
+                val stake =
+                    AbstimmungStimmeTable
+                        .selectAll()
+                        .where { AbstimmungStimmeTable.memberId eq voter }
+                        .single()[AbstimmungStimmeTable.stakeLtr]
+                stake shouldBe BigDecimal("12.34")
+            }
+        }
     })
 
 /**
@@ -1066,10 +1543,104 @@ private fun Route.registerAntragTestRoutes() {
 }
 
 /**
+ * Drives an Antrag from EINGEREICHT to TERMINIERT the same way the "Antrag lifecycle" test above
+ * does by hand — pulled into a shared helper for the Meritokratische Abstimmung (V0.2.3) tests,
+ * which all need exactly this precondition before `openAbstimmung` becomes reachable. [chairId]
+ * both reviews and creates/schedules the Sitzung (leadership actions); [submitterId] only needs
+ * to be entitled to submit (any Gremium role, or the chair themself). Requires
+ * [registerGovernanceTestRoutes] and [registerAntragTestRoutes] to be installed on the same
+ * [Route]. Returns `(antragId, sitzungId)`.
+ */
+private suspend fun HttpClient.createTerminierterAntrag(
+    gremiumId: String,
+    chairId: Uuid,
+    submitterId: Uuid,
+    year: Int,
+    month: Int,
+    day: Int,
+): Pair<String, String> {
+    val antragId =
+        post("/test/submit-antrag/$gremiumId") { header("X-Member-Id", submitterId.toString()) }
+            .bodyAsText()
+            .substringBefore(":")
+    post("/test/review-antrag/$antragId/ANNEHMEN") { header("X-Member-Id", chairId.toString()) }
+    val sitzungId =
+        post("/test/create-sitzung/$gremiumId/$year/$month/$day/18") { header("X-Member-Id", chairId.toString()) }
+            .bodyAsText()
+            .substringBefore(":")
+    post("/test/schedule-antrag/$antragId/$sitzungId/1") { header("X-Member-Id", chairId.toString()) }
+    return antragId to sitzungId
+}
+
+/**
+ * Shared throwaway routes for the Meritokratische Abstimmung (V0.2.3) tests. String encodings are
+ * kept deliberately simple/parseable (`;`-separated entries, `=`/`:`-separated fields) — this is
+ * the same "throwaway route calling the service class directly, no wire format to reverse-
+ * engineer" house style [registerGovernanceTestRoutes]/[registerAntragTestRoutes] already use.
+ */
+private fun Route.registerAbstimmungTestRoutes() {
+    post("/test/open-abstimmung/{antragId}") {
+        val service = GovernanceService(call)
+        val labels = call.request.queryParameters["labels"]?.split(",") ?: listOf("JA", "NEIN")
+        val a =
+            service.openAbstimmung(
+                AbstimmungOpenInput(antragId = call.parameters["antragId"]!!, optionLabels = labels),
+            )
+        val optionsStr = a.options.joinToString(";") { "${it.id}=${it.label}" }
+        call.respondText("${a.id}:${a.status}:$optionsStr")
+    }
+    get("/test/get-abstimmung/{id}") {
+        val service = GovernanceService(call)
+        val a = service.getAbstimmung(call.parameters["id"]!!)
+        val optionsStr = a.options.joinToString(";") { "${it.id}=${it.label}:${it.basketTotalLtr}" }
+        call.respondText("${a.status}:${a.winnerOptionId ?: ""}:${a.secondPriceLtr ?: ""}:${a.beschlussId ?: ""}:$optionsStr")
+    }
+    post("/test/cast-stimme/{abstimmungId}/{optionId}/{stake}") {
+        val service = GovernanceService(call)
+        val s =
+            service.castStimme(
+                StimmeInput(
+                    abstimmungId = call.parameters["abstimmungId"]!!,
+                    optionId = call.parameters["optionId"]!!,
+                    stakeLtr = BigDecimal(call.parameters["stake"]!!),
+                ),
+            )
+        call.respondText("${s.id}:${s.stakeLtr}")
+    }
+    post("/test/close-abstimmung/{id}") {
+        val service = GovernanceService(call)
+        val a = service.closeAbstimmung(call.parameters["id"]!!)
+        call.respondText("${a.status}:${a.winnerOptionId ?: ""}:${a.secondPriceLtr ?: ""}:${a.beschlussId ?: ""}")
+    }
+    post("/test/abort-abstimmung/{id}") {
+        val service = GovernanceService(call)
+        val a = service.abortAbstimmung(call.parameters["id"]!!)
+        call.respondText(a.status.name)
+    }
+    get("/test/list-stimmen/{abstimmungId}") {
+        val service = GovernanceService(call)
+        val stimmen = service.listStimmen(call.parameters["abstimmungId"]!!)
+        call.respondText(stimmen.joinToString(";") { "${it.memberId}:${it.stakeLtr}:${it.settledLtr ?: ""}" })
+    }
+    get("/test/beschluss-for-sitzung/{sitzungId}") {
+        val service = GovernanceService(call)
+        val b = service.listBeschluesse(sitzungId = call.parameters["sitzungId"]!!).single()
+        call.respondText("${b.resolutionMode}:${b.abstimmungId ?: ""}:${b.status}")
+    }
+}
+
+/**
  * Hard-deletes every row this Spec created, child-before-parent, so no state leaks into other
  * Spec classes sharing the same H2 in-memory database — same discipline as
  * `DsgvoServiceTest.cleanUpDsgvoTestData`. [AntragTable] is deleted first since it references
  * gremium/member/sitzung/tagesordnungspunkt/beschluss, all of which are deleted further down.
+ *
+ * Meritokratische Abstimmungen (V0.2.3): [AbstimmungTable]/[BeschlussTable] form a cycle
+ * (`beschluss.abstimmung_id` -> `abstimmung.id`, `abstimmung.beschluss_id` -> `beschluss.id`) --
+ * both FKs are nulled out before either table's rows are deleted, same reasoning as the compile-
+ * time circular column reference in `GovernanceTables.kt` (breaking the cycle explicitly rather
+ * than relying on delete order alone). [LtrBalanceTable] rows are matched by `memberIds` only
+ * (never scoped by Gremium) since a balance is a property of the member, not of any Gremium.
  */
 private fun cleanUpGovernanceTestData(
     gremiumIds: List<Uuid>,
@@ -1077,6 +1648,35 @@ private fun cleanUpGovernanceTestData(
 ) {
     if (gremiumIds.isEmpty() && memberIds.isEmpty()) return
     transaction {
+        val sitzungIds =
+            if (gremiumIds.isEmpty()) {
+                emptyList()
+            } else {
+                SitzungTable.selectAll().where { SitzungTable.gremiumId inList gremiumIds }.map { it[SitzungTable.id] }
+            }
+
+        val abstimmungCondition =
+            when {
+                sitzungIds.isNotEmpty() && memberIds.isNotEmpty() ->
+                    (AbstimmungTable.sitzungId inList sitzungIds) or (AbstimmungTable.openedBy inList memberIds)
+                sitzungIds.isNotEmpty() -> AbstimmungTable.sitzungId inList sitzungIds
+                memberIds.isNotEmpty() -> AbstimmungTable.openedBy inList memberIds
+                else -> null
+            }
+        val abstimmungIds =
+            if (abstimmungCondition != null) {
+                AbstimmungTable.selectAll().where { abstimmungCondition }.map { it[AbstimmungTable.id] }
+            } else {
+                emptyList()
+            }
+        if (abstimmungIds.isNotEmpty()) {
+            AbstimmungTable.update({ AbstimmungTable.id inList abstimmungIds }) { it[beschlussId] = null }
+            BeschlussTable.update({ BeschlussTable.abstimmungId inList abstimmungIds }) { it[BeschlussTable.abstimmungId] = null }
+            AbstimmungStimmeTable.deleteWhere { AbstimmungStimmeTable.abstimmungId inList abstimmungIds }
+            AbstimmungOptionTable.deleteWhere { AbstimmungOptionTable.abstimmungId inList abstimmungIds }
+            AbstimmungTable.deleteWhere { AbstimmungTable.id inList abstimmungIds }
+        }
+
         if (gremiumIds.isNotEmpty() || memberIds.isNotEmpty()) {
             val antragCondition =
                 when {
@@ -1089,12 +1689,6 @@ private fun cleanUpGovernanceTestData(
                 }
             AntragTable.deleteWhere { antragCondition }
         }
-        val sitzungIds =
-            if (gremiumIds.isEmpty()) {
-                emptyList()
-            } else {
-                SitzungTable.selectAll().where { SitzungTable.gremiumId inList gremiumIds }.map { it[SitzungTable.id] }
-            }
         if (sitzungIds.isNotEmpty()) {
             BeschlussTable.deleteWhere { BeschlussTable.sitzungId inList sitzungIds }
             AnwesenheitTable.deleteWhere { AnwesenheitTable.sitzungId inList sitzungIds }
@@ -1106,6 +1700,7 @@ private fun cleanUpGovernanceTestData(
             GremiumTable.deleteWhere { GremiumTable.id inList gremiumIds }
         }
         if (memberIds.isNotEmpty()) {
+            LtrBalanceTable.deleteWhere { LtrBalanceTable.memberId inList memberIds }
             AccountTable.deleteWhere { AccountTable.memberId inList memberIds }
             MemberTable.deleteWhere { MemberTable.id inList memberIds }
         }
