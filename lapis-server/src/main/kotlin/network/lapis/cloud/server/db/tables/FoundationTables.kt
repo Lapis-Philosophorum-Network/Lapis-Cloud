@@ -4,6 +4,7 @@ import network.lapis.cloud.shared.domain.AccountRole
 import network.lapis.cloud.shared.domain.MemberStatus
 import org.jetbrains.exposed.v1.core.Table
 import org.jetbrains.exposed.v1.datetime.date
+import org.jetbrains.exposed.v1.datetime.datetime
 
 /**
  * Foundation stub — see [network.lapis.cloud.shared.domain.MemberStatus] KDoc and
@@ -23,6 +24,14 @@ object MemberTable : Table("member") {
     // V1). Nullable: a member without an assigned tier is skipped by
     // generateContributionsForPeriod. See MembershipTierTable in ContributionTables.kt.
     val membershipTierId = uuid("membership_tier_id").references(MembershipTierTable.id).nullable()
+
+    // Added by the V5 migration (DSGVO-Basis, Art. 17 Loeschung) — set when this member's
+    // displayName/email have been overwritten with anonymized placeholders by
+    // network.lapis.cloud.server.dsgvo.FoundationPersonalData.erase. The row itself is never
+    // hard-deleted (it stays the FK anchor for retentionspflichtige Datensaetze such as
+    // contribution), so MemberStatus is left untouched — this flag alone is enough to tell the
+    // two states apart. See docs/architecture/dsgvo.adoc.
+    val anonymizedAt = datetime("anonymized_at").nullable()
 
     override val primaryKey = PrimaryKey(id)
 }

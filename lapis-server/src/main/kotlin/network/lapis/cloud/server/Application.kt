@@ -18,9 +18,11 @@ import io.ktor.server.routing.routing
 import network.lapis.cloud.server.db.DatabaseConfig
 import network.lapis.cloud.server.db.DevSeedData
 import network.lapis.cloud.server.routes.registerDocumentRoutes
+import network.lapis.cloud.server.routes.registerDsgvoRoutes
 import network.lapis.cloud.server.rpc.ContributionService
 import network.lapis.cloud.server.rpc.DirectMessageService
 import network.lapis.cloud.server.rpc.DocumentService
+import network.lapis.cloud.server.rpc.DsgvoService
 import network.lapis.cloud.server.rpc.MailingService
 import network.lapis.cloud.server.rpc.MemberService
 import network.lapis.cloud.server.rpc.PingService
@@ -30,6 +32,7 @@ import network.lapis.cloud.shared.Greeting
 import network.lapis.cloud.shared.rpc.IContributionService
 import network.lapis.cloud.shared.rpc.IDirectMessageService
 import network.lapis.cloud.shared.rpc.IDocumentService
+import network.lapis.cloud.shared.rpc.IDsgvoService
 import network.lapis.cloud.shared.rpc.IMailingService
 import network.lapis.cloud.shared.rpc.IMemberService
 import network.lapis.cloud.shared.rpc.IPingService
@@ -73,6 +76,7 @@ fun Application.module() {
         registerService(IDocumentService::class) { call -> DocumentService(call) }
         registerService(IMailingService::class) { call -> MailingService(call) }
         registerService(IDirectMessageService::class) { call -> DirectMessageService(call) }
+        registerService(IDsgvoService::class) { call -> DsgvoService(call) }
     }
 
     routing {
@@ -80,6 +84,7 @@ fun Application.module() {
             call.respondText(Greeting.message())
         }
         registerDocumentRoutes(documentStorageRoot)
+        registerDsgvoRoutes()
         getAllServiceManagers().forEach { applyRoutes(it) }
     }
 }
