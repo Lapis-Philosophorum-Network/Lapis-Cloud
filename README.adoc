@@ -4,6 +4,8 @@
 :toc-placement: preamble
 :icons: font
 
+image::docs/images/lc-banner.png[Lapis Cloud — Föderierte Mitgliederverwaltung mit meritokratischer Governance,link=https://github.com/Lapis-Philosophorum-Network/Lapis-Cloud]
+
 [.lead]
 *Standard-Mitgliederverwaltung, libertär erweitert.* +
 Vollständige Vereins- und Parteiverwaltung als Basis, meritokratische Governance als Alleinstellung.
