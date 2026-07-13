@@ -369,15 +369,34 @@ class WahlSchemaDriftTest :
                 .map { it.name } shouldContainExactlyInAnyOrder WahlStimmzettelAuswahlTable.columns.map { it.name }
         }
 
-        test("wahl.wahl_typ/status/ziel_rolle use explicit sqlType, matching the real schema (enum-fidelity gap, documented)") {
-            // Same accepted gap as MemberStatus/AccountRole/.../ResolutionMode/AbstimmungStatus in
-            // the prior domains — explicit «Column».sqlType overrides take precedence over kUML's
-            // enum-to-VARCHAR+CHECK fallback path, matching the real
-            // V9__demokratische_wahlen.sql's plain VARCHAR columns with no CHECK constraints.
+        test("wahl.wahl_typ/status/ziel_rolle are modelled as real ErmDataType.Enum columns") {
+            // Same gap-closure as MemberStatus/AccountRole/.../ResolutionMode/AbstimmungStatus in
+            // the prior domains — with the «Column».sqlType overrides removed, kUML's
+            // enum-to-Enum+CHECK fallback path applies.
             val entity = model.entities.single { it.name == "wahl" }
-            entity.attributeByName("wahl_typ")?.type shouldBe ErmDataType.Custom("VARCHAR(20)")
-            entity.attributeByName("status")?.type shouldBe ErmDataType.Custom("VARCHAR(30)")
-            entity.attributeByName("ziel_rolle")?.type shouldBe ErmDataType.Custom("VARCHAR(20)")
+            entity.attributeByName("wahl_typ")?.type shouldBe
+                ErmDataType.Enum(
+                    name = "WahlTyp",
+                    values = listOf("JA_NEIN", "EINZELWAHL", "MEHRFACHWAHL", "LISTENWAHL", "RANGLISTENWAHL"),
+                )
+            entity.attributeByName("status")?.type shouldBe
+                ErmDataType.Enum(
+                    name = "WahlStatus",
+                    values =
+                        listOf(
+                            "VORBEREITUNG",
+                            "KANDIDATENLISTE_FREIGEGEBEN",
+                            "OFFEN",
+                            "GESCHLOSSEN",
+                            "AUSGEZAEHLT",
+                            "ABGEBROCHEN",
+                        ),
+                )
+            entity.attributeByName("ziel_rolle")?.type shouldBe
+                ErmDataType.Enum(
+                    name = "GremiumRolle",
+                    values = listOf("VORSITZ", "STELLV_VORSITZ", "SCHRIFTFUEHRUNG", "MITGLIED", "BEISITZ"),
+                )
         }
     })
 

@@ -158,14 +158,13 @@ class AbstimmungSchemaDriftTest :
                 .map { it.name } shouldContainExactlyInAnyOrder AbstimmungStimmeTable.columns.map { it.name }
         }
 
-        test("abstimmung.status is modelled with explicit sqlType, matching the real schema (enum-fidelity gap, documented)") {
-            // Same accepted gap as MemberStatus/AccountRole/.../ResolutionMode in the prior
-            // domains — explicit «Column».sqlType overrides take precedence over kUML's
-            // enum-to-VARCHAR+CHECK fallback path, matching the real
-            // V8__meritokratische_abstimmungen.sql's plain VARCHAR(30) column with no CHECK
-            // constraint.
+        test("abstimmung.status is modelled as a real ErmDataType.Enum column") {
+            // Same gap-closure as MemberStatus/AccountRole/.../ResolutionMode in the prior
+            // domains — with the «Column».sqlType override removed, kUML's enum-to-Enum+CHECK
+            // fallback path applies.
             val status = model.entities.single { it.name == "abstimmung" }.attributeByName("status")
-            status?.type shouldBe ErmDataType.Custom("VARCHAR(30)")
+            status?.type shouldBe
+                ErmDataType.Enum(name = "AbstimmungStatus", values = listOf("OFFEN", "GESCHLOSSEN", "ABGEBROCHEN"))
         }
     })
 

@@ -70,7 +70,7 @@ classDiagram(name = "Document") {
     }
 
     val documentFolder = classOf(name = "DocumentFolder") {
-        stereotype("Entity") { "tableName" to "document_folder" }
+        stereotype("Entity") { "tableName" to "document_folder"; "kotlinObjectName" to "DocumentFolderTable" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -89,7 +89,7 @@ classDiagram(name = "Document") {
     }
 
     val document = classOf(name = "Document") {
-        stereotype("Entity") { "tableName" to "document" }
+        stereotype("Entity") { "tableName" to "document"; "kotlinObjectName" to "DocumentTable" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -122,7 +122,7 @@ classDiagram(name = "Document") {
             stereotype("Column") { "columnName" to "created_at" }
         }
         attribute(name = "accessLevel", type = documentAccessLevel) {
-            stereotype("Column") { "columnName" to "access_level"; "sqlType" to "VARCHAR(20)" }
+            stereotype("Column") { "columnName" to "access_level" }
         }
         attribute(name = "isDeleted", type = "Boolean") {
             defaultValue = "FALSE"
@@ -131,7 +131,7 @@ classDiagram(name = "Document") {
     }
 
     val documentVersion = classOf(name = "DocumentVersion") {
-        stereotype("Entity") { "tableName" to "document_version" }
+        stereotype("Entity") { "tableName" to "document_version"; "kotlinObjectName" to "DocumentVersionTable" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")

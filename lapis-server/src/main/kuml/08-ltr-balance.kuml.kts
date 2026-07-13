@@ -55,7 +55,7 @@ classDiagram(name = "LtrBalance") {
     applyProfile(ermMappingProfile)
 
     val ltrBalance = classOf(name = "LtrBalance") {
-        stereotype("Entity") { "tableName" to "ltr_balance" }
+        stereotype("Entity") { "tableName" to "ltr_balance"; "kotlinObjectName" to "LtrBalanceTable" }
 
         // Real column is simultaneously PRIMARY KEY and FK -> member (id). Modelled as a plain
         // «Column» UUID attribute carrying «Id» (not a UML association — see file header comment

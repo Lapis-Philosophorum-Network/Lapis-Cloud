@@ -74,7 +74,7 @@ classDiagram(name = "Communication") {
     // contribution's/document's own Member stub. Only exists here so UmlToErmTransformer can
     // resolve this domain's Member-targeting associations within this single-file evaluation.
     val member = classOf(name = "Member") {
-        stereotype("Entity") { "tableName" to "member" }
+        stereotype("Entity") { "tableName" to "member"; "kotlinObjectName" to "MemberTable" }
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
             stereotype("Column") { "columnName" to "id" }
@@ -95,7 +95,7 @@ classDiagram(name = "Communication") {
     }
 
     val mailingList = classOf(name = "MailingList") {
-        stereotype("Entity") { "tableName" to "mailing_list" }
+        stereotype("Entity") { "tableName" to "mailing_list"; "kotlinObjectName" to "MailingListTable" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -117,7 +117,7 @@ classDiagram(name = "Communication") {
     }
 
     val mailingListSubscription = classOf(name = "MailingListSubscription") {
-        stereotype("Entity") { "tableName" to "mailing_list_subscription" }
+        stereotype("Entity") { "tableName" to "mailing_list_subscription"; "kotlinObjectName" to "MailingListSubscriptionTable" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -148,7 +148,7 @@ classDiagram(name = "Communication") {
     }
 
     val mailingMessage = classOf(name = "MailingMessage") {
-        stereotype("Entity") { "tableName" to "mailing_message" }
+        stereotype("Entity") { "tableName" to "mailing_message"; "kotlinObjectName" to "MailingMessageTable" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -171,7 +171,7 @@ classDiagram(name = "Communication") {
             stereotype("Column") { "columnName" to "sent_at" }
         }
         attribute(name = "status", type = mailingMessageStatus) {
-            stereotype("Column") { "columnName" to "status"; "sqlType" to "VARCHAR(20)" }
+            stereotype("Column") { "columnName" to "status" }
         }
     }
 
@@ -183,7 +183,7 @@ classDiagram(name = "Communication") {
     }
 
     val mailingDeliveryLog = classOf(name = "MailingDeliveryLog") {
-        stereotype("Entity") { "tableName" to "mailing_delivery_log" }
+        stereotype("Entity") { "tableName" to "mailing_delivery_log"; "kotlinObjectName" to "MailingDeliveryLogTable" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -193,7 +193,7 @@ classDiagram(name = "Communication") {
             stereotype("Column") { "columnName" to "delivered_at" }
         }
         attribute(name = "deliveryStatus", type = deliveryStatus) {
-            stereotype("Column") { "columnName" to "delivery_status"; "sqlType" to "VARCHAR(30)" }
+            stereotype("Column") { "columnName" to "delivery_status" }
         }
     }
 
@@ -212,7 +212,7 @@ classDiagram(name = "Communication") {
     }
 
     val directMessage = classOf(name = "DirectMessage") {
-        stereotype("Entity") { "tableName" to "direct_message" }
+        stereotype("Entity") { "tableName" to "direct_message"; "kotlinObjectName" to "DirectMessageTable" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")

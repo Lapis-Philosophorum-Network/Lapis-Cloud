@@ -170,14 +170,16 @@ class DocumentSchemaDriftTest :
                 .map { it.name } shouldContainExactlyInAnyOrder DocumentVersionTable.columns.map { it.name }
         }
 
-        test("document.access_level is modelled as VARCHAR(20), matching the real schema (enum-fidelity gap, documented)") {
-            // Same accepted gap as MemberStatus/AccountRole/BillingInterval/ContributionStatus in
-            // the prior domains (see SchemaDriftTest's matching test) — explicit
-            // «Column».sqlType="VARCHAR(20)" override takes precedence over kUML's
-            // enum-to-VARCHAR+CHECK fallback path, matching the real V3__documents.sql's plain
-            // `VARCHAR(20)` with no CHECK constraint.
+        test("document.access_level is modelled as a real ErmDataType.Enum column") {
+            // Same gap-closure as MemberStatus/AccountRole/BillingInterval/ContributionStatus in
+            // the prior domains (see SchemaDriftTest's matching test) — with the
+            // «Column».sqlType override removed, kUML's enum-to-Enum+CHECK fallback path applies.
             val accessLevel = model.entities.single { it.name == "document" }.attributeByName("access_level")
-            accessLevel?.type shouldBe ErmDataType.Custom("VARCHAR(20)")
+            accessLevel?.type shouldBe
+                ErmDataType.Enum(
+                    name = "DocumentAccessLevel",
+                    values = listOf("PUBLIC_MEMBERS", "BOARD_ONLY", "ADMIN_ONLY"),
+                )
         }
 
         test("document_version.document_id has NO_ACTION referential action, matching the real schema") {

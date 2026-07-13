@@ -212,21 +212,22 @@ class CommunicationSchemaDriftTest :
                 .map { it.name } shouldContainExactlyInAnyOrder DirectMessageTable.columns.map { it.name }
         }
 
-        test("mailing_message.status is modelled as VARCHAR(20), matching the real schema (enum-fidelity gap, documented)") {
-            // Same accepted gap as MemberStatus/AccountRole/BillingInterval/ContributionStatus/
-            // DocumentAccessLevel in the prior domains — explicit «Column».sqlType="VARCHAR(20)"
-            // override takes precedence over kUML's enum-to-VARCHAR+CHECK fallback path, matching
-            // the real V4__communication.sql's plain `VARCHAR(20)` with no CHECK constraint.
+        test("mailing_message.status is modelled as a real ErmDataType.Enum column") {
+            // Same gap-closure as MemberStatus/AccountRole/BillingInterval/ContributionStatus/
+            // DocumentAccessLevel in the prior domains — with the «Column».sqlType override
+            // removed, kUML's enum-to-Enum+CHECK fallback path applies.
             val status = model.entities.single { it.name == "mailing_message" }.attributeByName("status")
-            status?.type shouldBe ErmDataType.Custom("VARCHAR(20)")
+            status?.type shouldBe
+                ErmDataType.Enum(name = "MailingMessageStatus", values = listOf("DRAFT", "QUEUED", "SENT", "FAILED"))
         }
 
-        test("mailing_delivery_log.delivery_status is modelled as VARCHAR(30), matching the real schema (enum-fidelity gap, documented)") {
+        test("mailing_delivery_log.delivery_status is modelled as a real ErmDataType.Enum column") {
             val deliveryStatus =
                 model.entities
                     .single { it.name == "mailing_delivery_log" }
                     .attributeByName("delivery_status")
-            deliveryStatus?.type shouldBe ErmDataType.Custom("VARCHAR(30)")
+            deliveryStatus?.type shouldBe
+                ErmDataType.Enum(name = "DeliveryStatus", values = listOf("SENT", "BOUNCED", "SKIPPED_UNSUBSCRIBED"))
         }
     })
 

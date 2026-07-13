@@ -101,24 +101,40 @@ class DsgvoSchemaDriftTest :
                 .map { it.name } shouldContainExactlyInAnyOrder DsgvoAuditLogTable.columns.map { it.name }
         }
 
-        test("erasure_request.mode/status are modelled with explicit sqlType, matching the real schema (enum-fidelity gap, documented)") {
-            // Same accepted gap as MemberStatus/AccountRole/.../DeliveryStatus in the prior
-            // domains — explicit «Column».sqlType overrides take precedence over kUML's
-            // enum-to-VARCHAR+CHECK fallback path, matching the real V5__dsgvo.sql's plain VARCHAR
-            // columns with no CHECK constraint.
+        test("erasure_request.mode/status are modelled as real ErmDataType.Enum columns") {
+            // Same gap-closure as MemberStatus/AccountRole/.../DeliveryStatus in the prior
+            // domains — with the «Column».sqlType overrides removed, kUML's enum-to-Enum+CHECK
+            // fallback path applies.
             val mode = model.entities.single { it.name == "erasure_request" }.attributeByName("mode")
             val status = model.entities.single { it.name == "erasure_request" }.attributeByName("status")
-            mode?.type shouldBe ErmDataType.Custom("VARCHAR(40)")
-            status?.type shouldBe ErmDataType.Custom("VARCHAR(20)")
+            mode?.type shouldBe
+                ErmDataType.Enum(name = "ErasureMode", values = listOf("ANONYMIZE", "HARD_DELETE_WHERE_UNCONSTRAINED"))
+            status?.type shouldBe
+                ErmDataType.Enum(
+                    name = "ErasureStatus",
+                    values = listOf("REQUESTED", "APPROVED", "REJECTED", "COMPLETED"),
+                )
         }
 
         test(
-            "dsgvo_audit_log.actor_role/action are modelled with explicit sqlType, matching the real schema (enum gap, documented)",
+            "dsgvo_audit_log.actor_role/action are modelled as real ErmDataType.Enum columns",
         ) {
             val actorRole = model.entities.single { it.name == "dsgvo_audit_log" }.attributeByName("actor_role")
             val action = model.entities.single { it.name == "dsgvo_audit_log" }.attributeByName("action")
-            actorRole?.type shouldBe ErmDataType.Custom("VARCHAR(20)")
-            action?.type shouldBe ErmDataType.Custom("VARCHAR(30)")
+            actorRole?.type shouldBe
+                ErmDataType.Enum(name = "AccountRole", values = listOf("MEMBER", "BOARD", "TREASURER", "ADMIN"))
+            action?.type shouldBe
+                ErmDataType.Enum(
+                    name = "DsgvoAuditAction",
+                    values =
+                        listOf(
+                            "EXPORT",
+                            "ERASURE_REQUESTED",
+                            "ERASURE_APPROVED",
+                            "ERASURE_REJECTED",
+                            "ERASURE_EXECUTED",
+                        ),
+                )
         }
 
         test("outcome_summary on both tables is modelled as plain VARCHAR(4000), not ErmDataType.Json") {

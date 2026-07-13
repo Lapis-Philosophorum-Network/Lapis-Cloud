@@ -44,7 +44,7 @@ classDiagram(name = "Foundation") {
     }
 
     val membershipTier = classOf(name = "MembershipTier") {
-        stereotype("Entity") { "tableName" to "membership_tier" }
+        stereotype("Entity") { "tableName" to "membership_tier"; "kotlinObjectName" to "MembershipTierTable" }
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
             stereotype("Column") { "columnName" to "id" }
@@ -52,7 +52,7 @@ classDiagram(name = "Foundation") {
     }
 
     val member = classOf(name = "Member") {
-        stereotype("Entity") { "tableName" to "member" }
+        stereotype("Entity") { "tableName" to "member"; "kotlinObjectName" to "MemberTable" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -65,7 +65,7 @@ classDiagram(name = "Foundation") {
             stereotype("Column") { "columnName" to "email"; "sqlType" to "VARCHAR(320)"; "unique" to true }
         }
         attribute(name = "status", type = memberStatus) {
-            stereotype("Column") { "columnName" to "status"; "sqlType" to "VARCHAR(20)" }
+            stereotype("Column") { "columnName" to "status" }
         }
         attribute(name = "joinedAt", type = "LocalDate") {
             stereotype("Column") { "columnName" to "joined_at" }
@@ -82,7 +82,7 @@ classDiagram(name = "Foundation") {
     }
 
     val account = classOf(name = "Account") {
-        stereotype("Entity") { "tableName" to "account" }
+        stereotype("Entity") { "tableName" to "account"; "kotlinObjectName" to "AccountTable" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -97,7 +97,7 @@ classDiagram(name = "Foundation") {
             stereotype("Column") { "columnName" to "oidc_subject"; "sqlType" to "VARCHAR(200)" }
         }
         attribute(name = "role", type = accountRole) {
-            stereotype("Column") { "columnName" to "role"; "sqlType" to "VARCHAR(20)" }
+            stereotype("Column") { "columnName" to "role" }
         }
     }
 

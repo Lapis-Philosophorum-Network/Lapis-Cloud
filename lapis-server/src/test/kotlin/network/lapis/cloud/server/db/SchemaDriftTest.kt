@@ -106,23 +106,20 @@ class SchemaDriftTest :
                 .map { it.name } shouldContainExactlyInAnyOrder AccountTable.columns.map { it.name }
         }
 
-        test("member.status and account.role are modelled as VARCHAR(20), matching the real schema (enum-fidelity gap, documented)") {
-            // ADR-0016 gap #3 (see CLAUDE.md kUML-Repo-Konventionen, vault): UmlToErmTransformer
-            // never emits a typed enum ErmDataType — MemberTable/AccountTable use Exposed's
-            // `enumerationByName<T>` instead. Without a «Column».sqlType override, the
-            // transformer's own enum-fallback path auto-sizes VARCHAR to the longest literal
-            // (11 for "AUSGETRETEN") and adds a CHECK constraint — diverging from the real
-            // V1__foundation.sql's plain `VARCHAR(20)` with no CHECK. The .kuml.kts model pins
-            // an explicit «Column».sqlType="VARCHAR(20)" on both enum columns instead, which
-            // takes precedence over the enum-fallback path entirely (ErmDataType.Custom, not
-            // Varchar) and matches the real schema exactly — the more faithful of the two
-            // available options for an already-deployed schema. This test pins the current
-            // (accepted) gap rather than silently tolerating it, so a future kUML release adding
-            // real enum-emission is noticed here.
+        test("member.status and account.role are modelled as real ErmDataType.Enum columns") {
+            // ADR-0016 gap #3 closed (see CLAUDE.md kUML-Repo-Konventionen, vault): with the
+            // «Column».sqlType overrides removed, UmlToErmTransformer's enum-fallback path now
+            // applies — it emits a typed ErmDataType.Enum(name, values) plus a generated CHECK
+            // constraint restricting the column to the enum's literal set, instead of a plain
+            // ErmDataType.Custom("VARCHAR(20)"). This is a closer structural match to
+            // MemberTable/AccountTable's `enumerationByName<T>()` Exposed columns than the former
+            // untyped VARCHAR override was.
             val status = model.entities.single { it.name == "member" }.attributeByName("status")
             val role = model.entities.single { it.name == "account" }.attributeByName("role")
-            status?.type shouldBe ErmDataType.Custom("VARCHAR(20)")
-            role?.type shouldBe ErmDataType.Custom("VARCHAR(20)")
+            status?.type shouldBe
+                ErmDataType.Enum(name = "MemberStatus", values = listOf("ANTRAG", "AKTIV", "GAST", "AUSGETRETEN"))
+            role?.type shouldBe
+                ErmDataType.Enum(name = "AccountRole", values = listOf("MEMBER", "BOARD", "TREASURER", "ADMIN"))
         }
     })
 

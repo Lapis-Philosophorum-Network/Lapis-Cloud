@@ -86,7 +86,7 @@ classDiagram(name = "Governance") {
     // Foundation-owned stub — id-only, mirrors the cross-domain-stub pattern established by
     // contribution's/document's/communication's own Member stub.
     val member = classOf(name = "Member") {
-        stereotype("Entity") { "tableName" to "member" }
+        stereotype("Entity") { "tableName" to "member"; "kotlinObjectName" to "MemberTable" }
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
             stereotype("Column") { "columnName" to "id" }
@@ -152,7 +152,7 @@ classDiagram(name = "Governance") {
     }
 
     val gremium = classOf(name = "Gremium") {
-        stereotype("Entity") { "tableName" to "gremium" }
+        stereotype("Entity") { "tableName" to "gremium"; "kotlinObjectName" to "GremiumTable" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -162,7 +162,7 @@ classDiagram(name = "Governance") {
             stereotype("Column") { "columnName" to "name"; "sqlType" to "VARCHAR(200)" }
         }
         attribute(name = "type", type = gremiumType) {
-            stereotype("Column") { "columnName" to "type"; "sqlType" to "VARCHAR(30)" }
+            stereotype("Column") { "columnName" to "type" }
         }
         attribute(name = "description", type = "String") {
             stereotype("Column") { "columnName" to "description"; "sqlType" to "VARCHAR(1000)" }
@@ -181,14 +181,14 @@ classDiagram(name = "Governance") {
     }
 
     val gremiumMitgliedschaft = classOf(name = "GremiumMitgliedschaft") {
-        stereotype("Entity") { "tableName" to "gremium_mitgliedschaft" }
+        stereotype("Entity") { "tableName" to "gremium_mitgliedschaft"; "kotlinObjectName" to "GremiumMitgliedschaftTable" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
             stereotype("Column") { "columnName" to "id" }
         }
         attribute(name = "rolle", type = gremiumRolle) {
-            stereotype("Column") { "columnName" to "rolle"; "sqlType" to "VARCHAR(20)" }
+            stereotype("Column") { "columnName" to "rolle" }
         }
         attribute(name = "since", type = "LocalDate") {
             stereotype("Column") { "columnName" to "since" }
@@ -212,7 +212,7 @@ classDiagram(name = "Governance") {
     }
 
     val sitzung = classOf(name = "Sitzung") {
-        stereotype("Entity") { "tableName" to "sitzung" }
+        stereotype("Entity") { "tableName" to "sitzung"; "kotlinObjectName" to "SitzungTable" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -229,10 +229,10 @@ classDiagram(name = "Governance") {
             stereotype("Column") { "columnName" to "location"; "sqlType" to "VARCHAR(300)" }
         }
         attribute(name = "format", type = sitzungsFormat) {
-            stereotype("Column") { "columnName" to "format"; "sqlType" to "VARCHAR(20)" }
+            stereotype("Column") { "columnName" to "format" }
         }
         attribute(name = "status", type = sitzungsStatus) {
-            stereotype("Column") { "columnName" to "status"; "sqlType" to "VARCHAR(20)" }
+            stereotype("Column") { "columnName" to "status" }
         }
         // Real FK -> member (id), nullable. Plain «Column» UUID attribute — see the file header
         // comment (N=4 multi-role-FK-collision case; the FIRST association processed for a given
@@ -277,7 +277,7 @@ classDiagram(name = "Governance") {
     }
 
     val tagesordnungspunkt = classOf(name = "Tagesordnungspunkt") {
-        stereotype("Entity") { "tableName" to "tagesordnungspunkt" }
+        stereotype("Entity") { "tableName" to "tagesordnungspunkt"; "kotlinObjectName" to "TagesordnungspunktTable" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -310,14 +310,14 @@ classDiagram(name = "Governance") {
     }
 
     val anwesenheit = classOf(name = "Anwesenheit") {
-        stereotype("Entity") { "tableName" to "anwesenheit" }
+        stereotype("Entity") { "tableName" to "anwesenheit"; "kotlinObjectName" to "AnwesenheitTable" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
             stereotype("Column") { "columnName" to "id" }
         }
         attribute(name = "status", type = anwesenheitStatus) {
-            stereotype("Column") { "columnName" to "status"; "sqlType" to "VARCHAR(20)" }
+            stereotype("Column") { "columnName" to "status" }
         }
         // Real FK -> member (id), nullable. Plain «Column» UUID attribute — association-to-FK
         // naming would derive "member_id" (already claimed by the memberId association below),
@@ -351,7 +351,7 @@ classDiagram(name = "Governance") {
     }
 
     val beschluss = classOf(name = "Beschluss") {
-        stereotype("Entity") { "tableName" to "beschluss" }
+        stereotype("Entity") { "tableName" to "beschluss"; "kotlinObjectName" to "BeschlussTable" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -379,7 +379,7 @@ classDiagram(name = "Governance") {
             stereotype("Column") { "columnName" to "quorum_met" }
         }
         attribute(name = "status", type = beschlussStatus) {
-            stereotype("Column") { "columnName" to "status"; "sqlType" to "VARCHAR(20)" }
+            stereotype("Column") { "columnName" to "status" }
         }
         attribute(name = "decidedAt", type = "LocalDateTime") {
             stereotype("Column") { "columnName" to "decided_at" }
@@ -391,7 +391,7 @@ classDiagram(name = "Governance") {
         }
         attribute(name = "resolutionMode", type = resolutionMode) {
             defaultValue = "GREMIUM_QUORUM"
-            stereotype("Column") { "columnName" to "resolution_mode"; "sqlType" to "VARCHAR(20)" }
+            stereotype("Column") { "columnName" to "resolution_mode" }
         }
         // Forward reference into the (not-yet-modelled-in-this-file) abstimmung domain — plain
         // nullable UUID «Column» attribute, NOT a UML association, exactly like
@@ -425,7 +425,7 @@ classDiagram(name = "Governance") {
     }
 
     val antrag = classOf(name = "Antrag") {
-        stereotype("Entity") { "tableName" to "antrag" }
+        stereotype("Entity") { "tableName" to "antrag"; "kotlinObjectName" to "AntragTable" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -451,7 +451,7 @@ classDiagram(name = "Governance") {
             stereotype("Column") { "columnName" to "submitter_member_id" }
         }
         attribute(name = "status", type = antragStatus) {
-            stereotype("Column") { "columnName" to "status"; "sqlType" to "VARCHAR(30)" }
+            stereotype("Column") { "columnName" to "status" }
         }
         attribute(name = "submittedAt", type = "LocalDateTime") {
             stereotype("Column") { "columnName" to "submitted_at" }

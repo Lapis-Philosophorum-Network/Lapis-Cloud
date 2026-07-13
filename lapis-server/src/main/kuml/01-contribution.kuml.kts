@@ -37,7 +37,7 @@ classDiagram(name = "Contribution") {
     // Foundation's own MembershipTier stub. Only exists here so UmlToErmTransformer can resolve
     // contribution.member_id's association target within this single-file evaluation.
     val member = classOf(name = "Member") {
-        stereotype("Entity") { "tableName" to "member" }
+        stereotype("Entity") { "tableName" to "member"; "kotlinObjectName" to "MemberTable" }
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
             stereotype("Column") { "columnName" to "id" }
@@ -58,7 +58,7 @@ classDiagram(name = "Contribution") {
     }
 
     val membershipTier = classOf(name = "MembershipTier") {
-        stereotype("Entity") { "tableName" to "membership_tier" }
+        stereotype("Entity") { "tableName" to "membership_tier"; "kotlinObjectName" to "MembershipTierTable" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -74,7 +74,7 @@ classDiagram(name = "Contribution") {
             stereotype("Column") { "columnName" to "contribution_amount"; "sqlType" to "DECIMAL(12,2)" }
         }
         attribute(name = "billingInterval", type = billingInterval) {
-            stereotype("Column") { "columnName" to "billing_interval"; "sqlType" to "VARCHAR(20)" }
+            stereotype("Column") { "columnName" to "billing_interval" }
         }
         attribute(name = "active", type = "Boolean") {
             defaultValue = "TRUE"
@@ -83,7 +83,7 @@ classDiagram(name = "Contribution") {
     }
 
     val contribution = classOf(name = "Contribution") {
-        stereotype("Entity") { "tableName" to "contribution" }
+        stereotype("Entity") { "tableName" to "contribution"; "kotlinObjectName" to "ContributionTable" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -99,7 +99,7 @@ classDiagram(name = "Contribution") {
             stereotype("Column") { "columnName" to "amount_due"; "sqlType" to "DECIMAL(12,2)" }
         }
         attribute(name = "status", type = contributionStatus) {
-            stereotype("Column") { "columnName" to "status"; "sqlType" to "VARCHAR(20)" }
+            stereotype("Column") { "columnName" to "status" }
         }
         attribute(name = "paidAt", type = "LocalDateTime") {
             multiplicity = Multiplicity(0, 1)

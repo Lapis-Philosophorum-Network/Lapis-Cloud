@@ -307,44 +307,75 @@ class GovernanceSchemaDriftTest :
                 .map { it.name } shouldContainExactlyInAnyOrder AntragTable.columns.map { it.name }
         }
 
-        // ── (3) Enum-fidelity gap pins ───────────────────────────────────────────
+        // ── (3) Enum-fidelity gap closure ────────────────────────────────────────
 
-        test("gremium.type is modelled as VARCHAR(30), matching the real schema (enum-fidelity gap, documented)") {
-            // Same accepted gap as all prior domains' enum columns — explicit «Column».sqlType
-            // override takes precedence over kUML's enum-to-VARCHAR+CHECK fallback path, matching
-            // the real schema's plain VARCHAR(30) (widened from VARCHAR(20) by V7) with no CHECK.
+        test("gremium.type is modelled as a real ErmDataType.Enum column") {
+            // Same gap-closure as all prior domains' enum columns — with the «Column».sqlType
+            // override removed, kUML's enum-to-Enum+CHECK fallback path applies.
             val type = model.entities.single { it.name == "gremium" }.attributeByName("type")
-            type?.type shouldBe ErmDataType.Custom("VARCHAR(30)")
+            type?.type shouldBe
+                ErmDataType.Enum(
+                    name = "GremiumType",
+                    values = listOf("VORSTAND", "ARBEITSKREIS", "AUSSCHUSS", "SONSTIGES", "MITGLIEDERVERSAMMLUNG"),
+                )
         }
 
-        test("gremium_mitgliedschaft.rolle is modelled as VARCHAR(20), matching the real schema (enum-fidelity gap, documented)") {
+        test("gremium_mitgliedschaft.rolle is modelled as a real ErmDataType.Enum column") {
             val rolle = model.entities.single { it.name == "gremium_mitgliedschaft" }.attributeByName("rolle")
-            rolle?.type shouldBe ErmDataType.Custom("VARCHAR(20)")
+            rolle?.type shouldBe
+                ErmDataType.Enum(
+                    name = "GremiumRolle",
+                    values = listOf("VORSITZ", "STELLV_VORSITZ", "SCHRIFTFUEHRUNG", "MITGLIED", "BEISITZ"),
+                )
         }
 
-        test("sitzung.format/status are modelled as VARCHAR(20), matching the real schema (enum-fidelity gap, documented)") {
+        test("sitzung.format/status are modelled as real ErmDataType.Enum columns") {
             val format = model.entities.single { it.name == "sitzung" }.attributeByName("format")
             val status = model.entities.single { it.name == "sitzung" }.attributeByName("status")
-            format?.type shouldBe ErmDataType.Custom("VARCHAR(20)")
-            status?.type shouldBe ErmDataType.Custom("VARCHAR(20)")
+            format?.type shouldBe
+                ErmDataType.Enum(name = "SitzungsFormat", values = listOf("PRAESENZ", "ONLINE", "HYBRID"))
+            status?.type shouldBe
+                ErmDataType.Enum(name = "SitzungsStatus", values = listOf("GEPLANT", "DURCHGEFUEHRT", "ABGESAGT"))
         }
 
-        test("anwesenheit.status is modelled as VARCHAR(20), matching the real schema (enum-fidelity gap, documented)") {
+        test("anwesenheit.status is modelled as a real ErmDataType.Enum column") {
             val status = model.entities.single { it.name == "anwesenheit" }.attributeByName("status")
-            status?.type shouldBe ErmDataType.Custom("VARCHAR(20)")
+            status?.type shouldBe
+                ErmDataType.Enum(
+                    name = "AnwesenheitStatus",
+                    values = listOf("ANWESEND", "ENTSCHULDIGT", "UNENTSCHULDIGT", "VERTRETEN"),
+                )
         }
 
-        test("beschluss.status/resolution_mode are modelled as VARCHAR(20), matching the real schema (enum-fidelity gap, documented)") {
+        test("beschluss.status/resolution_mode are modelled as real ErmDataType.Enum columns") {
             val status = model.entities.single { it.name == "beschluss" }.attributeByName("status")
             val resolutionMode = model.entities.single { it.name == "beschluss" }.attributeByName("resolution_mode")
-            status?.type shouldBe ErmDataType.Custom("VARCHAR(20)")
-            resolutionMode?.type shouldBe ErmDataType.Custom("VARCHAR(20)")
+            status?.type shouldBe
+                ErmDataType.Enum(name = "BeschlussStatus", values = listOf("ANGENOMMEN", "ABGELEHNT", "VERTAGT"))
+            resolutionMode?.type shouldBe
+                ErmDataType.Enum(
+                    name = "ResolutionMode",
+                    values = listOf("GREMIUM_QUORUM", "MERITOKRATISCH", "DEMOKRATISCH"),
+                )
         }
 
-        test("antrag.status is modelled as VARCHAR(30), matching the real schema (enum-fidelity gap, documented)") {
-            // VARCHAR(30), not the usual 20 — ABGELEHNT_VORPRUEFUNG is 21 characters.
+        test("antrag.status is modelled as a real ErmDataType.Enum column") {
             val status = model.entities.single { it.name == "antrag" }.attributeByName("status")
-            status?.type shouldBe ErmDataType.Custom("VARCHAR(30)")
+            status?.type shouldBe
+                ErmDataType.Enum(
+                    name = "AntragStatus",
+                    values =
+                        listOf(
+                            "EINGEREICHT",
+                            "GEPRUEFT",
+                            "ABGELEHNT_VORPRUEFUNG",
+                            "TERMINIERT",
+                            "BESCHLOSSEN",
+                            "ABGELEHNT",
+                            "VERTAGT",
+                            "ZURUECKGEZOGEN",
+                        ),
+                )
         }
     })
 

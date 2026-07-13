@@ -105,7 +105,7 @@ classDiagram(name = "Dsgvo") {
     }
 
     val erasureRequest = classOf(name = "ErasureRequest") {
-        stereotype("Entity") { "tableName" to "erasure_request" }
+        stereotype("Entity") { "tableName" to "erasure_request"; "kotlinObjectName" to "ErasureRequestTable" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -129,10 +129,10 @@ classDiagram(name = "Dsgvo") {
             stereotype("Column") { "columnName" to "reason"; "sqlType" to "VARCHAR(1000)" }
         }
         attribute(name = "mode", type = erasureMode) {
-            stereotype("Column") { "columnName" to "mode"; "sqlType" to "VARCHAR(40)" }
+            stereotype("Column") { "columnName" to "mode" }
         }
         attribute(name = "status", type = erasureStatus) {
-            stereotype("Column") { "columnName" to "status"; "sqlType" to "VARCHAR(20)" }
+            stereotype("Column") { "columnName" to "status" }
         }
         // Real FK -> member (id), nullable. Plain «Column» UUID attribute — see the file header
         // comment.
@@ -164,7 +164,7 @@ classDiagram(name = "Dsgvo") {
     }
 
     val dsgvoAuditLog = classOf(name = "DsgvoAuditLog") {
-        stereotype("Entity") { "tableName" to "dsgvo_audit_log" }
+        stereotype("Entity") { "tableName" to "dsgvo_audit_log"; "kotlinObjectName" to "DsgvoAuditLogTable" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -181,10 +181,10 @@ classDiagram(name = "Dsgvo") {
         }
         attribute(name = "actorRole", type = accountRole) {
             multiplicity = Multiplicity(0, 1)
-            stereotype("Column") { "columnName" to "actor_role"; "sqlType" to "VARCHAR(20)" }
+            stereotype("Column") { "columnName" to "actor_role" }
         }
         attribute(name = "action", type = dsgvoAuditAction) {
-            stereotype("Column") { "columnName" to "action"; "sqlType" to "VARCHAR(30)" }
+            stereotype("Column") { "columnName" to "action" }
         }
         // Real FK -> member (id), NOT NULL. Plain «Column» UUID attribute — see the file header
         // comment.

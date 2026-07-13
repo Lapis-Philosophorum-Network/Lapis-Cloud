@@ -98,7 +98,7 @@ classDiagram(name = "Wahl") {
     // Foundation-owned stub — id-only, mirrors the cross-domain-stub pattern established by
     // every prior domain's own Member stub.
     val member = classOf(name = "Member") {
-        stereotype("Entity") { "tableName" to "member" }
+        stereotype("Entity") { "tableName" to "member"; "kotlinObjectName" to "MemberTable" }
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
             stereotype("Column") { "columnName" to "id" }
@@ -107,7 +107,7 @@ classDiagram(name = "Wahl") {
 
     // Governance-owned stub — id-only, purely so the wahl.antrag_id association can resolve.
     val antrag = classOf(name = "Antrag") {
-        stereotype("Entity") { "tableName" to "antrag" }
+        stereotype("Entity") { "tableName" to "antrag"; "kotlinObjectName" to "AntragTable" }
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
             stereotype("Column") { "columnName" to "id" }
@@ -116,7 +116,7 @@ classDiagram(name = "Wahl") {
 
     // Governance-owned stub — id-only, purely so the wahl.sitzung_id association can resolve.
     val sitzung = classOf(name = "Sitzung") {
-        stereotype("Entity") { "tableName" to "sitzung" }
+        stereotype("Entity") { "tableName" to "sitzung"; "kotlinObjectName" to "SitzungTable" }
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
             stereotype("Column") { "columnName" to "id" }
@@ -128,7 +128,7 @@ classDiagram(name = "Wahl") {
     // kept anyway for documentation/consistency, mirroring 05-governance.kuml.kts's own
     // unused-today Document stub.
     val gremium = classOf(name = "Gremium") {
-        stereotype("Entity") { "tableName" to "gremium" }
+        stereotype("Entity") { "tableName" to "gremium"; "kotlinObjectName" to "GremiumTable" }
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
             stereotype("Column") { "columnName" to "id" }
@@ -141,7 +141,7 @@ classDiagram(name = "Wahl") {
     // of the (circular, at that point) association. Mirrors 06-abstimmung.kuml.kts's own
     // beschluss stub/association exactly.
     val beschluss = classOf(name = "Beschluss") {
-        stereotype("Entity") { "tableName" to "beschluss" }
+        stereotype("Entity") { "tableName" to "beschluss"; "kotlinObjectName" to "BeschlussTable" }
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
             stereotype("Column") { "columnName" to "id" }
@@ -177,7 +177,7 @@ classDiagram(name = "Wahl") {
     }
 
     val wahl = classOf(name = "Wahl") {
-        stereotype("Entity") { "tableName" to "wahl" }
+        stereotype("Entity") { "tableName" to "wahl"; "kotlinObjectName" to "WahlTable" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -187,7 +187,7 @@ classDiagram(name = "Wahl") {
             stereotype("Column") { "columnName" to "title"; "sqlType" to "VARCHAR(300)" }
         }
         attribute(name = "wahlTyp", type = wahlTyp) {
-            stereotype("Column") { "columnName" to "wahl_typ"; "sqlType" to "VARCHAR(20)" }
+            stereotype("Column") { "columnName" to "wahl_typ" }
         }
         attribute(name = "geheim", type = "Boolean") {
             stereotype("Column") { "columnName" to "geheim" }
@@ -203,13 +203,13 @@ classDiagram(name = "Wahl") {
         }
         attribute(name = "zielRolle", type = gremiumRolle) {
             multiplicity = Multiplicity(0, 1)
-            stereotype("Column") { "columnName" to "ziel_rolle"; "sqlType" to "VARCHAR(20)" }
+            stereotype("Column") { "columnName" to "ziel_rolle" }
         }
         attribute(name = "requiredMajorityPercent", type = "Int") {
             stereotype("Column") { "columnName" to "required_majority_percent" }
         }
         attribute(name = "status", type = wahlStatus) {
-            stereotype("Column") { "columnName" to "status"; "sqlType" to "VARCHAR(30)" }
+            stereotype("Column") { "columnName" to "status" }
         }
         // Real FK -> member (id), NOT NULL. Plain «Column» UUID attribute — association-to-FK
         // naming would derive "member_id", not the real schema's "opened_by".
@@ -262,7 +262,7 @@ classDiagram(name = "Wahl") {
     // wahl_kandidatur must be declared before wahl_option (see file header comment) —
     // wahl_option.kandidatur_id references it.
     val wahlKandidatur = classOf(name = "WahlKandidatur") {
-        stereotype("Entity") { "tableName" to "wahl_kandidatur" }
+        stereotype("Entity") { "tableName" to "wahl_kandidatur"; "kotlinObjectName" to "WahlKandidaturTable" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -295,7 +295,7 @@ classDiagram(name = "Wahl") {
     }
 
     val wahlOption = classOf(name = "WahlOption") {
-        stereotype("Entity") { "tableName" to "wahl_option" }
+        stereotype("Entity") { "tableName" to "wahl_option"; "kotlinObjectName" to "WahlOptionTable" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -323,7 +323,7 @@ classDiagram(name = "Wahl") {
     }
 
     val wahlWahlvorstand = classOf(name = "WahlWahlvorstand") {
-        stereotype("Entity") { "tableName" to "wahl_wahlvorstand" }
+        stereotype("Entity") { "tableName" to "wahl_wahlvorstand"; "kotlinObjectName" to "WahlWahlvorstandTable" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -348,7 +348,7 @@ classDiagram(name = "Wahl") {
     }
 
     val wahlWahlberechtigt = classOf(name = "WahlWahlberechtigt") {
-        stereotype("Entity") { "tableName" to "wahl_wahlberechtigt" }
+        stereotype("Entity") { "tableName" to "wahl_wahlberechtigt"; "kotlinObjectName" to "WahlWahlberechtigtTable" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -370,7 +370,7 @@ classDiagram(name = "Wahl") {
     }
 
     val wahlTeilnahme = classOf(name = "WahlTeilnahme") {
-        stereotype("Entity") { "tableName" to "wahl_teilnahme" }
+        stereotype("Entity") { "tableName" to "wahl_teilnahme"; "kotlinObjectName" to "WahlTeilnahmeTable" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -395,7 +395,7 @@ classDiagram(name = "Wahl") {
     }
 
     val wahlFreigabe = classOf(name = "WahlFreigabe") {
-        stereotype("Entity") { "tableName" to "wahl_freigabe" }
+        stereotype("Entity") { "tableName" to "wahl_freigabe"; "kotlinObjectName" to "WahlFreigabeTable" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -423,7 +423,7 @@ classDiagram(name = "Wahl") {
     // header comment for the full privacy rationale. This is a meaningful business rule a naive
     // schema reader could "fix" by mistake (most other member_id FKs in this domain are NOT NULL).
     val wahlStimmzettel = classOf(name = "WahlStimmzettel") {
-        stereotype("Entity") { "tableName" to "wahl_stimmzettel" }
+        stereotype("Entity") { "tableName" to "wahl_stimmzettel"; "kotlinObjectName" to "WahlStimmzettelTable" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -451,7 +451,7 @@ classDiagram(name = "Wahl") {
     }
 
     val wahlStimmzettelAuswahl = classOf(name = "WahlStimmzettelAuswahl") {
-        stereotype("Entity") { "tableName" to "wahl_stimmzettel_auswahl" }
+        stereotype("Entity") { "tableName" to "wahl_stimmzettel_auswahl"; "kotlinObjectName" to "WahlStimmzettelAuswahlTable" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")

@@ -98,16 +98,18 @@ class ContributionSchemaDriftTest :
         }
 
         test(
-            "membership_tier.billing_interval and contribution.status are modelled as VARCHAR(20), matching the real schema (enum-fidelity gap, documented)",
+            "membership_tier.billing_interval and contribution.status are modelled as real ErmDataType.Enum columns",
         ) {
-            // Same accepted gap as MemberStatus/AccountRole in the foundation domain (see
-            // SchemaDriftTest's matching test) — explicit «Column».sqlType="VARCHAR(20)"
-            // overrides take precedence over kUML's enum-to-VARCHAR+CHECK fallback path, matching
-            // the real V2__contributions.sql's plain `VARCHAR(20)` with no CHECK constraint.
+            // Same gap-closure as MemberStatus/AccountRole in the foundation domain (see
+            // SchemaDriftTest's matching test) — with the «Column».sqlType overrides removed,
+            // kUML's enum-to-Enum+CHECK fallback path applies, emitting a typed
+            // ErmDataType.Enum(name, values) instead of an untyped VARCHAR override.
             val billingInterval = model.entities.single { it.name == "membership_tier" }.attributeByName("billing_interval")
             val status = model.entities.single { it.name == "contribution" }.attributeByName("status")
-            billingInterval?.type shouldBe ErmDataType.Custom("VARCHAR(20)")
-            status?.type shouldBe ErmDataType.Custom("VARCHAR(20)")
+            billingInterval?.type shouldBe
+                ErmDataType.Enum(name = "BillingInterval", values = listOf("MONTHLY", "QUARTERLY", "YEARLY"))
+            status?.type shouldBe
+                ErmDataType.Enum(name = "ContributionStatus", values = listOf("OPEN", "PAID", "WAIVED", "OVERDUE"))
         }
 
         test("decimal columns are modelled with the real schema's DECIMAL(12,2) precision, not the default DECIMAL(19,2)") {
