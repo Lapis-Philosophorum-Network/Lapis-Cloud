@@ -3,15 +3,15 @@ package network.lapis.cloud.server.dsgvo
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
-import network.lapis.cloud.server.db.tables.AbstimmungStimmeTable
-import network.lapis.cloud.server.db.tables.AbstimmungTable
-import network.lapis.cloud.server.db.tables.AntragTable
-import network.lapis.cloud.server.db.tables.AnwesenheitTable
-import network.lapis.cloud.server.db.tables.BeschlussTable
-import network.lapis.cloud.server.db.tables.GremiumMitgliedschaftTable
-import network.lapis.cloud.server.db.tables.GremiumTable
-import network.lapis.cloud.server.db.tables.SitzungTable
-import network.lapis.cloud.server.db.tables.TagesordnungspunktTable
+import network.lapis.cloud.server.db.generated.AbstimmungStimmeTable
+import network.lapis.cloud.server.db.generated.AbstimmungTable
+import network.lapis.cloud.server.db.generated.AntragTable
+import network.lapis.cloud.server.db.generated.AnwesenheitTable
+import network.lapis.cloud.server.db.generated.BeschlussTable
+import network.lapis.cloud.server.db.generated.GremiumMitgliedschaftTable
+import network.lapis.cloud.server.db.generated.GremiumTable
+import network.lapis.cloud.server.db.generated.SitzungTable
+import network.lapis.cloud.server.db.generated.TagesordnungspunktTable
 import network.lapis.cloud.shared.domain.ErasureMode
 import org.jetbrains.exposed.v1.core.ResultRow
 import org.jetbrains.exposed.v1.core.eq
@@ -40,7 +40,7 @@ import kotlin.uuid.Uuid
  * motion text and review rationale, a Vickrey ballot's staked/settled LTR amounts) are
  * organizational/legal-defensibility records (and, for ballots, also the member's property
  * record), not purely personal data, and all FK pointers resolve to the now-anonymized
- * [network.lapis.cloud.server.db.tables.MemberTable] row post-erasure (see
+ * [network.lapis.cloud.server.db.generated.MemberTable] row post-erasure (see
  * [FoundationPersonalData]).
  */
 object GovernancePersonalData : PersonalDataContributor {

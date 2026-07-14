@@ -18,8 +18,8 @@ import io.ktor.utils.io.ByteReadChannel
 import io.ktor.utils.io.readAvailable
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
-import network.lapis.cloud.server.db.tables.DocumentTable
-import network.lapis.cloud.server.db.tables.DocumentVersionTable
+import network.lapis.cloud.server.db.generated.DocumentTable
+import network.lapis.cloud.server.db.generated.DocumentVersionTable
 import network.lapis.cloud.server.security.ForbiddenException
 import network.lapis.cloud.server.security.canAccessDocumentAtLevel
 import network.lapis.cloud.server.security.isPrivileged

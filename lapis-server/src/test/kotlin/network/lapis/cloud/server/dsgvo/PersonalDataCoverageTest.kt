@@ -55,7 +55,7 @@ class PersonalDataCoverageTest :
             // (email/message body/file name) to begin with, only counters/UUIDs/enums.
             val columnNames =
                 transaction {
-                    network.lapis.cloud.server.db.tables.DsgvoAuditLogTable.columns
+                    network.lapis.cloud.server.db.generated.DsgvoAuditLogTable.columns
                         .map { it.name }
                         .toSet()
                 }

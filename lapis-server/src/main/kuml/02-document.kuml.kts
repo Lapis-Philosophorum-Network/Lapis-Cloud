@@ -8,10 +8,11 @@
 // docs/architecture/domain-model.adoc and CLAUDE.md's kUML-Repo-Konventionen (vault) for the
 // full rationale (enum-to-VARCHAR type-fidelity gap, Kotlin-object-naming-override gap).
 //
-// Unlike foundation/contribution, this domain does NOT need a cross-domain Member stub: both of
-// its Member-referencing FKs (document.created_by, document_version.uploaded_by) are modelled as
-// plain «Column» UUID attributes rather than UML associations (see the naming-gap note below), so
-// there is no association target to resolve.
+// Both of this domain's Member-referencing FKs (document.created_by, document_version.uploaded_by)
+// are modelled as plain «Column» UUID attributes rather than UML associations (see the naming-gap
+// note below) — pinned instead via «Column».fkEntity, which is why this file, symmetrically,
+// carries a minimal id-only Member stub (owned by Foundation), same cross-domain-stub pattern
+// established by contribution's own Member stub.
 //
 // Two self/circular-reference cases (both explicitly called out in the retrofit plan and both
 // already handled identically by the hand-written DocumentTables.kt — see its own comments):
@@ -63,6 +64,17 @@ import dev.kuml.uml.dsl.stereotype
 classDiagram(name = "Document") {
     applyProfile(ermMappingProfile)
 
+    // Foundation-owned stub — id-only, mirrors the cross-domain-stub pattern established by
+    // contribution's own Member stub. Only exists here so UmlToErmTransformer can resolve
+    // document.created_by / document_version.uploaded_by's «Column».fkEntity target.
+    val member = classOf(name = "Member") {
+        stereotype("Entity") { "tableName" to "member"; "kotlinObjectName" to "MemberTable" }
+        attribute(name = "id", type = "UUID") {
+            stereotype("Id")
+            stereotype("Column") { "columnName" to "id" }
+        }
+    }
+
     val documentAccessLevel = enumOf(name = "DocumentAccessLevel") {
         literal(name = "PUBLIC_MEMBERS")
         literal(name = "BOARD_ONLY")
@@ -100,7 +112,7 @@ classDiagram(name = "Document") {
         // derive "document_folder_id", not the real schema's "folder_id", with no DSL-level way
         // to override it). Pinned against the real schema's FK shape in DocumentSchemaDriftTest.
         attribute(name = "folderId", type = "UUID") {
-            stereotype("Column") { "columnName" to "folder_id" }
+            stereotype("Column") { "columnName" to "folder_id"; "fkEntity" to "DocumentFolder" }
         }
         attribute(name = "title", type = "String") {
             stereotype("Column") { "columnName" to "title"; "sqlType" to "VARCHAR(300)" }
@@ -116,13 +128,13 @@ classDiagram(name = "Document") {
         // comment (association-to-FK naming would derive "member_id", not the real schema's
         // "created_by").
         attribute(name = "createdBy", type = "UUID") {
-            stereotype("Column") { "columnName" to "created_by" }
+            stereotype("Column") { "columnName" to "created_by"; "fkEntity" to "Member" }
         }
         attribute(name = "createdAt", type = "LocalDateTime") {
             stereotype("Column") { "columnName" to "created_at" }
         }
         attribute(name = "accessLevel", type = documentAccessLevel) {
-            stereotype("Column") { "columnName" to "access_level" }
+            stereotype("Column") { "columnName" to "access_level"; "enumType" to "network.lapis.cloud.shared.domain.DocumentAccessLevel" }
         }
         attribute(name = "isDeleted", type = "Boolean") {
             defaultValue = "FALSE"
@@ -159,7 +171,7 @@ classDiagram(name = "Document") {
         // comment (association-to-FK naming would derive "member_id", not the real schema's
         // "uploaded_by").
         attribute(name = "uploadedBy", type = "UUID") {
-            stereotype("Column") { "columnName" to "uploaded_by" }
+            stereotype("Column") { "columnName" to "uploaded_by"; "fkEntity" to "Member" }
         }
         attribute(name = "uploadedAt", type = "LocalDateTime") {
             stereotype("Column") { "columnName" to "uploaded_at" }

@@ -1,6 +1,6 @@
 package network.lapis.cloud.server.economy
 
-import network.lapis.cloud.server.db.tables.LtrBalanceTable
+import network.lapis.cloud.server.db.generated.LtrBalanceTable
 import org.jetbrains.exposed.v1.core.eq
 import org.jetbrains.exposed.v1.jdbc.selectAll
 import java.math.BigDecimal

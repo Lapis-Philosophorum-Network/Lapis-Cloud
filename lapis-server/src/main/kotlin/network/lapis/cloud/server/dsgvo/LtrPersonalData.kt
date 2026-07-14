@@ -2,7 +2,7 @@ package network.lapis.cloud.server.dsgvo
 
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
-import network.lapis.cloud.server.db.tables.LtrBalanceTable
+import network.lapis.cloud.server.db.generated.LtrBalanceTable
 import network.lapis.cloud.shared.domain.ErasureMode
 import org.jetbrains.exposed.v1.core.eq
 import org.jetbrains.exposed.v1.jdbc.selectAll
@@ -15,7 +15,7 @@ import kotlin.uuid.Uuid
  * precedent: an LTR balance is the member's property record, not incidental notes — anonymizing
  * or deleting it on erasure would either destroy a member's earned property or corrupt the
  * economic bookkeeping other members' Vickrey settlements may reference. `member_id` stays intact
- * and now resolves to the anonymized [network.lapis.cloud.server.db.tables.MemberTable] row post-
+ * and now resolves to the anonymized [network.lapis.cloud.server.db.generated.MemberTable] row post-
  * erasure, same as every other retain-with-reason contributor.
  */
 object LtrPersonalData : PersonalDataContributor {

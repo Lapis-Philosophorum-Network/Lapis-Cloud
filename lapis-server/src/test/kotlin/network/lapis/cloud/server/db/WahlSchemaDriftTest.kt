@@ -5,15 +5,15 @@ import dev.kuml.erm.model.ErmModel
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
 import io.kotest.matchers.shouldBe
-import network.lapis.cloud.server.db.tables.WahlFreigabeTable
-import network.lapis.cloud.server.db.tables.WahlKandidaturTable
-import network.lapis.cloud.server.db.tables.WahlOptionTable
-import network.lapis.cloud.server.db.tables.WahlStimmzettelAuswahlTable
-import network.lapis.cloud.server.db.tables.WahlStimmzettelTable
-import network.lapis.cloud.server.db.tables.WahlTable
-import network.lapis.cloud.server.db.tables.WahlTeilnahmeTable
-import network.lapis.cloud.server.db.tables.WahlWahlberechtigtTable
-import network.lapis.cloud.server.db.tables.WahlWahlvorstandTable
+import network.lapis.cloud.server.db.generated.WahlFreigabeTable
+import network.lapis.cloud.server.db.generated.WahlKandidaturTable
+import network.lapis.cloud.server.db.generated.WahlOptionTable
+import network.lapis.cloud.server.db.generated.WahlStimmzettelAuswahlTable
+import network.lapis.cloud.server.db.generated.WahlStimmzettelTable
+import network.lapis.cloud.server.db.generated.WahlTable
+import network.lapis.cloud.server.db.generated.WahlTeilnahmeTable
+import network.lapis.cloud.server.db.generated.WahlWahlberechtigtTable
+import network.lapis.cloud.server.db.generated.WahlWahlvorstandTable
 import org.jetbrains.exposed.v1.jdbc.JdbcTransaction
 import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 import java.io.File
@@ -27,7 +27,7 @@ import java.io.File
  * `wahl_stimmzettel_auswahl` — V9__demokratische_wahlen.sql), and (b) the hand-written `WahlTable`/
  * `WahlKandidaturTable`/`WahlOptionTable`/`WahlWahlvorstandTable`/`WahlWahlberechtigtTable`/
  * `WahlTeilnahmeTable`/`WahlFreigabeTable`/`WahlStimmzettelTable`/`WahlStimmzettelAuswahlTable`
- * Exposed objects (`network.lapis.cloud.server.db.tables.WahlTables.kt`).
+ * Exposed objects (`network.lapis.cloud.server.db.generated.WahlTables.kt`).
  *
  * Mirrors [SchemaDriftTest] (foundation domain), [ContributionSchemaDriftTest] (contribution
  * domain), [DocumentSchemaDriftTest] (document domain), [CommunicationSchemaDriftTest]
@@ -90,13 +90,14 @@ class WahlSchemaDriftTest :
 
             // ziel_gremium_id -> gremium, nullable: same naming-gap class as document/
             // communication/dsgvo/governance/abstimmung's own mismatched FK columns (default
-            // would be "gremium_id").
+            // would be "gremium_id") — pinned instead via «Column».fkEntity.
             real.foreignKeys["ziel_gremium_id"] shouldBe "gremium"
-            entity.attributeByName("ziel_gremium_id")?.foreignKey shouldBe null
+            model.entityNameOf(entity.attributeByName("ziel_gremium_id")?.foreignKey?.targetEntityId ?: "") shouldBe "gremium"
 
-            // opened_by -> member, NOT NULL: same naming-gap class (default would be "member_id").
+            // opened_by -> member, NOT NULL: same naming-gap class (default would be "member_id")
+            // — pinned instead via «Column».fkEntity.
             real.foreignKeys["opened_by"] shouldBe "member"
-            entity.attributeByName("opened_by")?.foreignKey shouldBe null
+            model.entityNameOf(entity.attributeByName("opened_by")?.foreignKey?.targetEntityId ?: "") shouldBe "member"
         }
 
         test("wahl_kandidatur table shape matches the real migrated schema") {
@@ -133,9 +134,10 @@ class WahlSchemaDriftTest :
             model.entityNameOf(entity.attributeByName("wahl_id")?.foreignKey?.targetEntityId ?: "") shouldBe "wahl"
 
             // kandidatur_id -> wahl_kandidatur, nullable: default would be "wahl_kandidatur_id",
-            // not the real schema's "kandidatur_id" — plain «Column» attribute.
+            // not the real schema's "kandidatur_id" — plain «Column» attribute pinned instead via
+            // «Column».fkEntity.
             real.foreignKeys["kandidatur_id"] shouldBe "wahl_kandidatur"
-            entity.attributeByName("kandidatur_id")?.foreignKey shouldBe null
+            model.entityNameOf(entity.attributeByName("kandidatur_id")?.foreignKey?.targetEntityId ?: "") shouldBe "wahl_kandidatur"
         }
 
         test("wahl_wahlvorstand table shape matches the real migrated schema") {
@@ -294,14 +296,14 @@ class WahlSchemaDriftTest :
             }
 
             // stimmzettel_id -> wahl_stimmzettel, NOT NULL: default would be "wahl_stimmzettel_id"
-            // — plain «Column» attribute.
+            // — plain «Column» attribute pinned instead via «Column».fkEntity.
             real.foreignKeys["stimmzettel_id"] shouldBe "wahl_stimmzettel"
-            entity.attributeByName("stimmzettel_id")?.foreignKey shouldBe null
+            model.entityNameOf(entity.attributeByName("stimmzettel_id")?.foreignKey?.targetEntityId ?: "") shouldBe "wahl_stimmzettel"
 
             // option_id -> wahl_option, NOT NULL: default would be "wahl_option_id" — plain
-            // «Column» attribute.
+            // «Column» attribute pinned instead via «Column».fkEntity.
             real.foreignKeys["option_id"] shouldBe "wahl_option"
-            entity.attributeByName("option_id")?.foreignKey shouldBe null
+            model.entityNameOf(entity.attributeByName("option_id")?.foreignKey?.targetEntityId ?: "") shouldBe "wahl_option"
         }
 
         // ── (2) Model vs. hand-written Exposed Table objects ────────────────────
@@ -378,6 +380,7 @@ class WahlSchemaDriftTest :
                 ErmDataType.Enum(
                     name = "WahlTyp",
                     values = listOf("JA_NEIN", "EINZELWAHL", "MEHRFACHWAHL", "LISTENWAHL", "RANGLISTENWAHL"),
+                    externalFqName = "network.lapis.cloud.shared.domain.WahlTyp",
                 )
             entity.attributeByName("status")?.type shouldBe
                 ErmDataType.Enum(
@@ -391,11 +394,13 @@ class WahlSchemaDriftTest :
                             "AUSGEZAEHLT",
                             "ABGEBROCHEN",
                         ),
+                    externalFqName = "network.lapis.cloud.shared.domain.WahlStatus",
                 )
             entity.attributeByName("ziel_rolle")?.type shouldBe
                 ErmDataType.Enum(
                     name = "GremiumRolle",
                     values = listOf("VORSITZ", "STELLV_VORSITZ", "SCHRIFTFUEHRUNG", "MITGLIED", "BEISITZ"),
+                    externalFqName = "network.lapis.cloud.shared.domain.GremiumRolle",
                 )
         }
     })

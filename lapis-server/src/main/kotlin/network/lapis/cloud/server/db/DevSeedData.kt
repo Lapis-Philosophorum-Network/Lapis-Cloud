@@ -1,9 +1,9 @@
 package network.lapis.cloud.server.db
 
 import kotlinx.datetime.LocalDate
-import network.lapis.cloud.server.db.tables.AccountTable
-import network.lapis.cloud.server.db.tables.MemberTable
-import network.lapis.cloud.server.db.tables.MembershipTierTable
+import network.lapis.cloud.server.db.generated.AccountTable
+import network.lapis.cloud.server.db.generated.MemberTable
+import network.lapis.cloud.server.db.generated.MembershipTierTable
 import network.lapis.cloud.shared.domain.AccountRole
 import network.lapis.cloud.shared.domain.BillingInterval
 import network.lapis.cloud.shared.domain.MemberStatus

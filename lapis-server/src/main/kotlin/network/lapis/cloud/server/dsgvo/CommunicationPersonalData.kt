@@ -3,11 +3,11 @@ package network.lapis.cloud.server.dsgvo
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
-import network.lapis.cloud.server.db.tables.DirectMessageTable
-import network.lapis.cloud.server.db.tables.MailingDeliveryLogTable
-import network.lapis.cloud.server.db.tables.MailingListSubscriptionTable
-import network.lapis.cloud.server.db.tables.MailingListTable
-import network.lapis.cloud.server.db.tables.MailingMessageTable
+import network.lapis.cloud.server.db.generated.DirectMessageTable
+import network.lapis.cloud.server.db.generated.MailingDeliveryLogTable
+import network.lapis.cloud.server.db.generated.MailingListSubscriptionTable
+import network.lapis.cloud.server.db.generated.MailingListTable
+import network.lapis.cloud.server.db.generated.MailingMessageTable
 import network.lapis.cloud.shared.domain.ErasureMode
 import org.jetbrains.exposed.v1.core.eq
 import org.jetbrains.exposed.v1.core.or

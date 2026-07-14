@@ -6,9 +6,9 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
-import network.lapis.cloud.server.db.tables.DsgvoAuditLogTable
-import network.lapis.cloud.server.db.tables.ErasureRequestTable
-import network.lapis.cloud.server.db.tables.MemberTable
+import network.lapis.cloud.server.db.generated.DsgvoAuditLogTable
+import network.lapis.cloud.server.db.generated.ErasureRequestTable
+import network.lapis.cloud.server.db.generated.MemberTable
 import network.lapis.cloud.server.dsgvo.PersonalDataRegistry
 import network.lapis.cloud.server.dsgvo.TableErasureOutcome
 import network.lapis.cloud.server.dsgvo.nowUtc

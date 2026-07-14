@@ -11,7 +11,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
-import network.lapis.cloud.server.db.tables.DsgvoAuditLogTable
+import network.lapis.cloud.server.db.generated.DsgvoAuditLogTable
 import network.lapis.cloud.server.dsgvo.PersonalDataRegistry
 import network.lapis.cloud.server.dsgvo.nowUtc
 import network.lapis.cloud.server.security.ForbiddenException
@@ -31,7 +31,7 @@ import kotlin.uuid.Uuid
  *
  * Access control mirrors [network.lapis.cloud.server.rpc.DsgvoService]: the subject themselves,
  * or ADMIN — enforced here independently, not only in a UI. Every call writes one
- * [network.lapis.cloud.server.db.tables.DsgvoAuditLogTable] row (metadata/counts only, see that
+ * [network.lapis.cloud.server.db.generated.DsgvoAuditLogTable] row (metadata/counts only, see that
  * table's KDoc), inside the same transaction as the read, so the log can never diverge from what
  * was actually exported.
  *

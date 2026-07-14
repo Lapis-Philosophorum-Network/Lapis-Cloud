@@ -5,11 +5,11 @@ import dev.kuml.erm.model.ErmModel
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
 import io.kotest.matchers.shouldBe
-import network.lapis.cloud.server.db.tables.DirectMessageTable
-import network.lapis.cloud.server.db.tables.MailingDeliveryLogTable
-import network.lapis.cloud.server.db.tables.MailingListSubscriptionTable
-import network.lapis.cloud.server.db.tables.MailingListTable
-import network.lapis.cloud.server.db.tables.MailingMessageTable
+import network.lapis.cloud.server.db.generated.DirectMessageTable
+import network.lapis.cloud.server.db.generated.MailingDeliveryLogTable
+import network.lapis.cloud.server.db.generated.MailingListSubscriptionTable
+import network.lapis.cloud.server.db.generated.MailingListTable
+import network.lapis.cloud.server.db.generated.MailingMessageTable
 import org.jetbrains.exposed.v1.jdbc.JdbcTransaction
 import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 import java.io.File
@@ -64,12 +64,11 @@ class CommunicationSchemaDriftTest :
                     col.nullable shouldBe attr.nullable
                 }
             }
-            // created_by has a real FK in the migrated schema, but (same rationale as document's
-            // folder_id/created_by) is modelled as a plain «Column» attribute, not a UML
-            // association — the derived default name would be "member_id", not the real schema's
-            // "created_by".
+            // created_by has a real FK in the migrated schema. Same rationale as document's
+            // folder_id/created_by — the derived association default name would be "member_id",
+            // not the real schema's "created_by" — pinned instead via «Column».fkEntity.
             real.foreignKeys["created_by"] shouldBe "member"
-            entity.attributeByName("created_by")?.foreignKey shouldBe null
+            model.entityNameOf(entity.attributeByName("created_by")?.foreignKey?.targetEntityId ?: "") shouldBe "member"
         }
 
         test("mailing_list_subscription table shape matches the real migrated schema") {
@@ -118,11 +117,12 @@ class CommunicationSchemaDriftTest :
                 }
             }
             // mailing_list_id matches the association-derived default and is a real UML
-            // association; sent_by does not (would derive "member_id") and is a plain «Column».
+            // association; sent_by does not (would derive "member_id") and is a plain «Column»
+            // pinned via «Column».fkEntity instead.
             real.foreignKeys["mailing_list_id"] shouldBe "mailing_list"
             real.foreignKeys["sent_by"] shouldBe "member"
             model.entityNameOf(entity.attributeByName("mailing_list_id")?.foreignKey?.targetEntityId ?: "") shouldBe "mailing_list"
-            entity.attributeByName("sent_by")?.foreignKey shouldBe null
+            model.entityNameOf(entity.attributeByName("sent_by")?.foreignKey?.targetEntityId ?: "") shouldBe "member"
         }
 
         test("mailing_delivery_log table shape matches the real migrated schema") {
@@ -168,11 +168,11 @@ class CommunicationSchemaDriftTest :
             // real association pair here would never resolve to "sender_id" AND "recipient_id"
             // together (one side always ends up "member_id"). Both FKs are therefore modelled as
             // plain «Column» UUID attributes instead, per the retrofit plan's risk-note fallback
-            // strategy. Real FK existence/target is still independently pinned here.
+            // strategy, pinned via «Column».fkEntity.
             real.foreignKeys["sender_id"] shouldBe "member"
             real.foreignKeys["recipient_id"] shouldBe "member"
-            entity.attributeByName("sender_id")?.foreignKey shouldBe null
-            entity.attributeByName("recipient_id")?.foreignKey shouldBe null
+            model.entityNameOf(entity.attributeByName("sender_id")?.foreignKey?.targetEntityId ?: "") shouldBe "member"
+            model.entityNameOf(entity.attributeByName("recipient_id")?.foreignKey?.targetEntityId ?: "") shouldBe "member"
         }
 
         // ── (2) Model vs. hand-written Exposed Table objects ────────────────────
@@ -218,7 +218,11 @@ class CommunicationSchemaDriftTest :
             // removed, kUML's enum-to-Enum+CHECK fallback path applies.
             val status = model.entities.single { it.name == "mailing_message" }.attributeByName("status")
             status?.type shouldBe
-                ErmDataType.Enum(name = "MailingMessageStatus", values = listOf("DRAFT", "QUEUED", "SENT", "FAILED"))
+                ErmDataType.Enum(
+                    name = "MailingMessageStatus",
+                    values = listOf("DRAFT", "QUEUED", "SENT", "FAILED"),
+                    externalFqName = "network.lapis.cloud.shared.domain.MailingMessageStatus",
+                )
         }
 
         test("mailing_delivery_log.delivery_status is modelled as a real ErmDataType.Enum column") {
@@ -227,7 +231,11 @@ class CommunicationSchemaDriftTest :
                     .single { it.name == "mailing_delivery_log" }
                     .attributeByName("delivery_status")
             deliveryStatus?.type shouldBe
-                ErmDataType.Enum(name = "DeliveryStatus", values = listOf("SENT", "BOUNCED", "SKIPPED_UNSUBSCRIBED"))
+                ErmDataType.Enum(
+                    name = "DeliveryStatus",
+                    values = listOf("SENT", "BOUNCED", "SKIPPED_UNSUBSCRIBED"),
+                    externalFqName = "network.lapis.cloud.shared.domain.DeliveryStatus",
+                )
         }
     })
 

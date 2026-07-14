@@ -8,7 +8,7 @@ import kotlin.uuid.Uuid
 /**
  * Per-table erasure outcome, reported by [PersonalDataContributor.erase] and aggregated into
  * `ErasureRequestTable.outcomeSummary` / `DsgvoAuditLogTable.outcomeSummary` (both in
- * `network.lapis.cloud.server.db.tables.DsgvoTables`) by
+ * `network.lapis.cloud.server.db.generated.DsgvoTables`) by
  * `network.lapis.cloud.server.rpc.DsgvoService`. Counts only — never payload, see
  * `docs/architecture/dsgvo.adoc` "Audit-Log-Datenschutz".
  */

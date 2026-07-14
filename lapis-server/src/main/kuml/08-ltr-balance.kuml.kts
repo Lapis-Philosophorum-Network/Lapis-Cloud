@@ -47,6 +47,11 @@
 // contribution.amountDue's narrower DECIMAL(12,2)) — UmlErmTypeMapper's bare "decimal" keyword
 // defaults to DECIMAL(19,2), so the override is required here for the same reason contribution's
 // amountDue needed one.
+//
+// member_id's FK target is pinned via «Column».fkEntity (not an association — see above), which
+// is why this file, symmetrically, carries a minimal id-only Member stub (owned by Foundation)
+// purely so UmlToErmTransformer can resolve it within this single-file evaluation — same
+// cross-domain-stub pattern established by contribution/document/dsgvo's own Member stubs.
 import dev.kuml.profile.erm.ermMappingProfile
 import dev.kuml.uml.dsl.applyProfile
 import dev.kuml.uml.dsl.stereotype
@@ -54,16 +59,25 @@ import dev.kuml.uml.dsl.stereotype
 classDiagram(name = "LtrBalance") {
     applyProfile(ermMappingProfile)
 
+    val member = classOf(name = "Member") {
+        stereotype("Entity") { "tableName" to "member"; "kotlinObjectName" to "MemberTable" }
+        attribute(name = "id", type = "UUID") {
+            stereotype("Id")
+            stereotype("Column") { "columnName" to "id" }
+        }
+    }
+
     val ltrBalance = classOf(name = "LtrBalance") {
         stereotype("Entity") { "tableName" to "ltr_balance"; "kotlinObjectName" to "LtrBalanceTable" }
 
         // Real column is simultaneously PRIMARY KEY and FK -> member (id). Modelled as a plain
         // «Column» UUID attribute carrying «Id» (not a UML association — see file header comment
-        // for why an association can never produce primaryKey=true here). Real FK existence/target
-        // is independently pinned via LtrBalanceSchemaDriftTest's information_schema introspection.
+        // for why an association can never produce primaryKey=true here). FK target pinned via
+        // «Column».fkEntity, independently cross-checked via LtrBalanceSchemaDriftTest's
+        // information_schema introspection.
         attribute(name = "memberId", type = "UUID") {
             stereotype("Id")
-            stereotype("Column") { "columnName" to "member_id" }
+            stereotype("Column") { "columnName" to "member_id"; "fkEntity" to "Member" }
         }
         attribute(name = "balanceLtr", type = "BigDecimal") {
             stereotype("Column") { "columnName" to "balance_ltr"; "sqlType" to "DECIMAL(18,2)" }

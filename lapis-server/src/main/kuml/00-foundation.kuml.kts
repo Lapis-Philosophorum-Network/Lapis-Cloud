@@ -65,7 +65,7 @@ classDiagram(name = "Foundation") {
             stereotype("Column") { "columnName" to "email"; "sqlType" to "VARCHAR(320)"; "unique" to true }
         }
         attribute(name = "status", type = memberStatus) {
-            stereotype("Column") { "columnName" to "status" }
+            stereotype("Column") { "columnName" to "status"; "enumType" to "network.lapis.cloud.shared.domain.MemberStatus" }
         }
         attribute(name = "joinedAt", type = "LocalDate") {
             stereotype("Column") { "columnName" to "joined_at" }
@@ -97,7 +97,7 @@ classDiagram(name = "Foundation") {
             stereotype("Column") { "columnName" to "oidc_subject"; "sqlType" to "VARCHAR(200)" }
         }
         attribute(name = "role", type = accountRole) {
-            stereotype("Column") { "columnName" to "role" }
+            stereotype("Column") { "columnName" to "role"; "enumType" to "network.lapis.cloud.shared.domain.AccountRole" }
         }
     }
 

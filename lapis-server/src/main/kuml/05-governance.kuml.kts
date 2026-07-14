@@ -21,11 +21,9 @@
 //
 // Cross-domain stubs: minimal id-only Member (Foundation-owned) and Document (Document-domain-
 // owned) stubs, same pattern as prior domains' Member stubs — purely so UmlToErmTransformer can
-// resolve this domain's few real FK associations within this single-file evaluation. As it turns
-// out below, protocol_document_id ends up as a plain column (name mismatch), so the Document stub
-// only exists for documentation/consistency purposes and isn't actually the target of any real
-// association here — kept anyway in case a future revision needs it, mirroring how other domains
-// keep small unused-today stubs cheap.
+// resolve this domain's real FK columns within this single-file evaluation. protocol_document_id
+// (name mismatch vs. the association-derived default) is pinned via «Column».fkEntity against
+// this Document stub rather than a UML association — see sitzung's own comment below.
 //
 // N-way multi-role-FK-collision finding (this is the domain the retrofit plan's risk note was
 // written for): sitzung has FOUR independent FKs to member (called_by/chair_member_id/
@@ -87,6 +85,16 @@ classDiagram(name = "Governance") {
     // contribution's/document's/communication's own Member stub.
     val member = classOf(name = "Member") {
         stereotype("Entity") { "tableName" to "member"; "kotlinObjectName" to "MemberTable" }
+        attribute(name = "id", type = "UUID") {
+            stereotype("Id")
+            stereotype("Column") { "columnName" to "id" }
+        }
+    }
+
+    // Document-domain-owned stub — id-only, mirrors the Member stub above. Only exists here so
+    // UmlToErmTransformer can resolve sitzung.protocol_document_id's «Column».fkEntity target.
+    val document = classOf(name = "Document") {
+        stereotype("Entity") { "tableName" to "document"; "kotlinObjectName" to "DocumentTable" }
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
             stereotype("Column") { "columnName" to "id" }
@@ -162,7 +170,7 @@ classDiagram(name = "Governance") {
             stereotype("Column") { "columnName" to "name"; "sqlType" to "VARCHAR(200)" }
         }
         attribute(name = "type", type = gremiumType) {
-            stereotype("Column") { "columnName" to "type" }
+            stereotype("Column") { "columnName" to "type"; "enumType" to "network.lapis.cloud.shared.domain.GremiumType" }
         }
         attribute(name = "description", type = "String") {
             stereotype("Column") { "columnName" to "description"; "sqlType" to "VARCHAR(1000)" }
@@ -188,7 +196,7 @@ classDiagram(name = "Governance") {
             stereotype("Column") { "columnName" to "id" }
         }
         attribute(name = "rolle", type = gremiumRolle) {
-            stereotype("Column") { "columnName" to "rolle" }
+            stereotype("Column") { "columnName" to "rolle"; "enumType" to "network.lapis.cloud.shared.domain.GremiumRolle" }
         }
         attribute(name = "since", type = "LocalDate") {
             stereotype("Column") { "columnName" to "since" }
@@ -229,10 +237,10 @@ classDiagram(name = "Governance") {
             stereotype("Column") { "columnName" to "location"; "sqlType" to "VARCHAR(300)" }
         }
         attribute(name = "format", type = sitzungsFormat) {
-            stereotype("Column") { "columnName" to "format" }
+            stereotype("Column") { "columnName" to "format"; "enumType" to "network.lapis.cloud.shared.domain.SitzungsFormat" }
         }
         attribute(name = "status", type = sitzungsStatus) {
-            stereotype("Column") { "columnName" to "status" }
+            stereotype("Column") { "columnName" to "status"; "enumType" to "network.lapis.cloud.shared.domain.SitzungsStatus" }
         }
         // Real FK -> member (id), nullable. Plain «Column» UUID attribute — see the file header
         // comment (N=4 multi-role-FK-collision case; the FIRST association processed for a given
@@ -240,7 +248,7 @@ classDiagram(name = "Governance") {
         // own role, which does not match the real "called_by" column).
         attribute(name = "calledBy", type = "UUID") {
             multiplicity = Multiplicity(0, 1)
-            stereotype("Column") { "columnName" to "called_by" }
+            stereotype("Column") { "columnName" to "called_by"; "fkEntity" to "Member" }
         }
         attribute(name = "calledAt", type = "LocalDateTime") {
             multiplicity = Multiplicity(0, 1)
@@ -250,20 +258,20 @@ classDiagram(name = "Governance") {
         // family as calledBy above.
         attribute(name = "chairMemberId", type = "UUID") {
             multiplicity = Multiplicity(0, 1)
-            stereotype("Column") { "columnName" to "chair_member_id" }
+            stereotype("Column") { "columnName" to "chair_member_id"; "fkEntity" to "Member" }
         }
         // Real FK -> member (id), nullable. Plain «Column» UUID attribute — same N=4 collision
         // family as calledBy above.
         attribute(name = "minuteTakerMemberId", type = "UUID") {
             multiplicity = Multiplicity(0, 1)
-            stereotype("Column") { "columnName" to "minute_taker_member_id" }
+            stereotype("Column") { "columnName" to "minute_taker_member_id"; "fkEntity" to "Member" }
         }
         // Real FK -> document (id), nullable. Plain «Column» UUID attribute — association-to-FK
         // naming would derive "document_id", not the real schema's "protocol_document_id" (same
         // naming-gap class as document/communication/dsgvo's own mismatched FK columns).
         attribute(name = "protocolDocumentId", type = "UUID") {
             multiplicity = Multiplicity(0, 1)
-            stereotype("Column") { "columnName" to "protocol_document_id" }
+            stereotype("Column") { "columnName" to "protocol_document_id"; "fkEntity" to "Document" }
         }
         attribute(name = "createdAt", type = "LocalDateTime") {
             stereotype("Column") { "columnName" to "created_at" }
@@ -299,7 +307,7 @@ classDiagram(name = "Governance") {
         // "presenter_member_id").
         attribute(name = "presenterMemberId", type = "UUID") {
             multiplicity = Multiplicity(0, 1)
-            stereotype("Column") { "columnName" to "presenter_member_id" }
+            stereotype("Column") { "columnName" to "presenter_member_id"; "fkEntity" to "Member" }
         }
     }
 
@@ -317,14 +325,14 @@ classDiagram(name = "Governance") {
             stereotype("Column") { "columnName" to "id" }
         }
         attribute(name = "status", type = anwesenheitStatus) {
-            stereotype("Column") { "columnName" to "status" }
+            stereotype("Column") { "columnName" to "status"; "enumType" to "network.lapis.cloud.shared.domain.AnwesenheitStatus" }
         }
         // Real FK -> member (id), nullable. Plain «Column» UUID attribute — association-to-FK
         // naming would derive "member_id" (already claimed by the memberId association below),
         // not the real schema's "represented_by_member_id".
         attribute(name = "representedByMemberId", type = "UUID") {
             multiplicity = Multiplicity(0, 1)
-            stereotype("Column") { "columnName" to "represented_by_member_id" }
+            stereotype("Column") { "columnName" to "represented_by_member_id"; "fkEntity" to "Member" }
         }
         attribute(name = "note", type = "String") {
             multiplicity = Multiplicity(0, 1)
@@ -379,7 +387,7 @@ classDiagram(name = "Governance") {
             stereotype("Column") { "columnName" to "quorum_met" }
         }
         attribute(name = "status", type = beschlussStatus) {
-            stereotype("Column") { "columnName" to "status" }
+            stereotype("Column") { "columnName" to "status"; "enumType" to "network.lapis.cloud.shared.domain.BeschlussStatus" }
         }
         attribute(name = "decidedAt", type = "LocalDateTime") {
             stereotype("Column") { "columnName" to "decided_at" }
@@ -387,11 +395,11 @@ classDiagram(name = "Governance") {
         // Real FK -> member (id), NOT NULL. Plain «Column» UUID attribute — association-to-FK
         // naming would derive "member_id", not the real schema's "recorded_by".
         attribute(name = "recordedBy", type = "UUID") {
-            stereotype("Column") { "columnName" to "recorded_by" }
+            stereotype("Column") { "columnName" to "recorded_by"; "fkEntity" to "Member" }
         }
         attribute(name = "resolutionMode", type = resolutionMode) {
             defaultValue = "GREMIUM_QUORUM"
-            stereotype("Column") { "columnName" to "resolution_mode" }
+            stereotype("Column") { "columnName" to "resolution_mode"; "enumType" to "network.lapis.cloud.shared.domain.ResolutionMode" }
         }
         // Forward reference into the (not-yet-modelled-in-this-file) abstimmung domain — plain
         // nullable UUID «Column» attribute, NOT a UML association, exactly like
@@ -434,7 +442,7 @@ classDiagram(name = "Governance") {
         // Real FK -> gremium (id), NOT NULL. Plain «Column» UUID attribute — association-to-FK
         // naming would derive "gremium_id", not the real schema's "target_gremium_id".
         attribute(name = "targetGremiumId", type = "UUID") {
-            stereotype("Column") { "columnName" to "target_gremium_id" }
+            stereotype("Column") { "columnName" to "target_gremium_id"; "fkEntity" to "Gremium" }
         }
         attribute(name = "title", type = "String") {
             stereotype("Column") { "columnName" to "title"; "sqlType" to "VARCHAR(300)" }
@@ -448,10 +456,10 @@ classDiagram(name = "Governance") {
         // Real FK -> member (id), NOT NULL. Plain «Column» UUID attribute — association-to-FK
         // naming would derive "member_id", not the real schema's "submitter_member_id".
         attribute(name = "submitterMemberId", type = "UUID") {
-            stereotype("Column") { "columnName" to "submitter_member_id" }
+            stereotype("Column") { "columnName" to "submitter_member_id"; "fkEntity" to "Member" }
         }
         attribute(name = "status", type = antragStatus) {
-            stereotype("Column") { "columnName" to "status" }
+            stereotype("Column") { "columnName" to "status"; "enumType" to "network.lapis.cloud.shared.domain.AntragStatus" }
         }
         attribute(name = "submittedAt", type = "LocalDateTime") {
             stereotype("Column") { "columnName" to "submitted_at" }
@@ -460,7 +468,7 @@ classDiagram(name = "Governance") {
         // naming would derive "member_id", not the real schema's "reviewed_by".
         attribute(name = "reviewedBy", type = "UUID") {
             multiplicity = Multiplicity(0, 1)
-            stereotype("Column") { "columnName" to "reviewed_by" }
+            stereotype("Column") { "columnName" to "reviewed_by"; "fkEntity" to "Member" }
         }
         attribute(name = "reviewedAt", type = "LocalDateTime") {
             multiplicity = Multiplicity(0, 1)

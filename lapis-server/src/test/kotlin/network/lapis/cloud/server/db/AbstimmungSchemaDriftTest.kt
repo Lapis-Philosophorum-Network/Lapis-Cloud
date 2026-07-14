@@ -5,9 +5,9 @@ import dev.kuml.erm.model.ErmModel
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
 import io.kotest.matchers.shouldBe
-import network.lapis.cloud.server.db.tables.AbstimmungOptionTable
-import network.lapis.cloud.server.db.tables.AbstimmungStimmeTable
-import network.lapis.cloud.server.db.tables.AbstimmungTable
+import network.lapis.cloud.server.db.generated.AbstimmungOptionTable
+import network.lapis.cloud.server.db.generated.AbstimmungStimmeTable
+import network.lapis.cloud.server.db.generated.AbstimmungTable
 import org.jetbrains.exposed.v1.jdbc.JdbcTransaction
 import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 import java.io.File
@@ -75,9 +75,10 @@ class AbstimmungSchemaDriftTest :
             model.entityNameOf(entity.attributeByName("beschluss_id")?.foreignKey?.targetEntityId ?: "") shouldBe "beschluss"
 
             // opened_by -> member, NOT NULL: same naming-gap class as document/communication/
-            // dsgvo/governance's own mismatched member-FK columns (default would be "member_id").
+            // dsgvo/governance's own mismatched member-FK columns (default would be "member_id")
+            // — pinned instead via «Column».fkEntity.
             real.foreignKeys["opened_by"] shouldBe "member"
-            entity.attributeByName("opened_by")?.foreignKey shouldBe null
+            model.entityNameOf(entity.attributeByName("opened_by")?.foreignKey?.targetEntityId ?: "") shouldBe "member"
 
             // winner_option_id: real schema has no FK constraint on this column at all (circular
             // with abstimmung_option, which itself FK-references abstimmung) — pinned explicitly.
@@ -119,9 +120,10 @@ class AbstimmungSchemaDriftTest :
             model.entityNameOf(entity.attributeByName("member_id")?.foreignKey?.targetEntityId ?: "") shouldBe "member"
 
             // option_id -> abstimmung_option, NOT NULL: association-derived default would be
-            // "abstimmung_option_id", not the real schema's "option_id" — plain «Column» attribute.
+            // "abstimmung_option_id", not the real schema's "option_id" — plain «Column» attribute
+            // pinned instead via «Column».fkEntity.
             real.foreignKeys["option_id"] shouldBe "abstimmung_option"
-            entity.attributeByName("option_id")?.foreignKey shouldBe null
+            model.entityNameOf(entity.attributeByName("option_id")?.foreignKey?.targetEntityId ?: "") shouldBe "abstimmung_option"
         }
 
         test("abstimmung_stimme's composite UNIQUE constraint has no kUML ERM equivalent (accepted gap, pinned)") {
@@ -164,7 +166,11 @@ class AbstimmungSchemaDriftTest :
             // fallback path applies.
             val status = model.entities.single { it.name == "abstimmung" }.attributeByName("status")
             status?.type shouldBe
-                ErmDataType.Enum(name = "AbstimmungStatus", values = listOf("OFFEN", "GESCHLOSSEN", "ABGEBROCHEN"))
+                ErmDataType.Enum(
+                    name = "AbstimmungStatus",
+                    values = listOf("OFFEN", "GESCHLOSSEN", "ABGEBROCHEN"),
+                    externalFqName = "network.lapis.cloud.shared.domain.AbstimmungStatus",
+                )
         }
     })
 

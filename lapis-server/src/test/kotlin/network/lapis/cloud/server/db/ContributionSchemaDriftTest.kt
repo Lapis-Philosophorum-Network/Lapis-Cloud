@@ -5,8 +5,8 @@ import dev.kuml.erm.model.ErmModel
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
 import io.kotest.matchers.shouldBe
-import network.lapis.cloud.server.db.tables.ContributionTable
-import network.lapis.cloud.server.db.tables.MembershipTierTable
+import network.lapis.cloud.server.db.generated.ContributionTable
+import network.lapis.cloud.server.db.generated.MembershipTierTable
 import org.jetbrains.exposed.v1.jdbc.JdbcTransaction
 import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 import java.io.File
@@ -107,22 +107,30 @@ class ContributionSchemaDriftTest :
             val billingInterval = model.entities.single { it.name == "membership_tier" }.attributeByName("billing_interval")
             val status = model.entities.single { it.name == "contribution" }.attributeByName("status")
             billingInterval?.type shouldBe
-                ErmDataType.Enum(name = "BillingInterval", values = listOf("MONTHLY", "QUARTERLY", "YEARLY"))
+                ErmDataType.Enum(
+                    name = "BillingInterval",
+                    values = listOf("MONTHLY", "QUARTERLY", "YEARLY"),
+                    externalFqName = "network.lapis.cloud.shared.domain.BillingInterval",
+                )
             status?.type shouldBe
-                ErmDataType.Enum(name = "ContributionStatus", values = listOf("OPEN", "PAID", "WAIVED", "OVERDUE"))
+                ErmDataType.Enum(
+                    name = "ContributionStatus",
+                    values = listOf("OPEN", "PAID", "WAIVED", "OVERDUE"),
+                    externalFqName = "network.lapis.cloud.shared.domain.ContributionStatus",
+                )
         }
 
         test("decimal columns are modelled with the real schema's DECIMAL(12,2) precision, not the default DECIMAL(19,2)") {
             // UmlErmTypeMapper's default "bigdecimal" mapping is ErmDataType.Decimal(19, 2) — the
             // real schema uses DECIMAL(12, 2) throughout (contribution_amount, amount_due,
-            // paid_amount). An explicit «Column».sqlType="DECIMAL(12,2)" override (rendered as
-            // ErmDataType.Custom, same mechanism as the VARCHAR overrides above) pins the correct
-            // precision/scale instead of silently drifting to the wider default.
+            // paid_amount). An explicit «Column».sqlType="DECIMAL(12,2)" override is parsed by
+            // UmlErmTypeMapper.mapOverride's DECIMAL(p,s) regex into ErmDataType.Decimal(12, 2),
+            // pinning the correct precision/scale instead of silently drifting to the wider default.
             val tier = model.entities.single { it.name == "membership_tier" }
             val contribution = model.entities.single { it.name == "contribution" }
-            tier.attributeByName("contribution_amount")?.type shouldBe ErmDataType.Custom("DECIMAL(12,2)")
-            contribution.attributeByName("amount_due")?.type shouldBe ErmDataType.Custom("DECIMAL(12,2)")
-            contribution.attributeByName("paid_amount")?.type shouldBe ErmDataType.Custom("DECIMAL(12,2)")
+            tier.attributeByName("contribution_amount")?.type shouldBe ErmDataType.Decimal(12, 2)
+            contribution.attributeByName("amount_due")?.type shouldBe ErmDataType.Decimal(12, 2)
+            contribution.attributeByName("paid_amount")?.type shouldBe ErmDataType.Decimal(12, 2)
         }
     })
 

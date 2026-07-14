@@ -2,9 +2,9 @@ package network.lapis.cloud.server.security
 
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
-import network.lapis.cloud.server.db.tables.GremiumMitgliedschaftTable
-import network.lapis.cloud.server.db.tables.GremiumTable
-import network.lapis.cloud.server.db.tables.MemberTable
+import network.lapis.cloud.server.db.generated.GremiumMitgliedschaftTable
+import network.lapis.cloud.server.db.generated.GremiumTable
+import network.lapis.cloud.server.db.generated.MemberTable
 import network.lapis.cloud.shared.domain.GremiumRolle
 import network.lapis.cloud.shared.domain.GremiumType
 import network.lapis.cloud.shared.domain.MemberStatus

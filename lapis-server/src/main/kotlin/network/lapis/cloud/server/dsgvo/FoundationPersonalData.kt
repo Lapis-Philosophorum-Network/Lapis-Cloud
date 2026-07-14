@@ -2,8 +2,8 @@ package network.lapis.cloud.server.dsgvo
 
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
-import network.lapis.cloud.server.db.tables.AccountTable
-import network.lapis.cloud.server.db.tables.MemberTable
+import network.lapis.cloud.server.db.generated.AccountTable
+import network.lapis.cloud.server.db.generated.MemberTable
 import network.lapis.cloud.shared.domain.ErasureMode
 import org.jetbrains.exposed.v1.core.eq
 import org.jetbrains.exposed.v1.jdbc.deleteWhere
@@ -18,7 +18,7 @@ import kotlin.uuid.Uuid
  * [AccountTable] (login credentials).
  *
  * Erasure: [MemberTable] is anonymized, never hard-deleted, because retentionspflichtige
- * Datensaetze (e.g. [network.lapis.cloud.server.db.tables.ContributionTable], see
+ * Datensaetze (e.g. [network.lapis.cloud.server.db.generated.ContributionTable], see
  * [ContributionPersonalData]) keep a foreign key to it — the row must survive as an FK anchor.
  * [AccountTable] has no retention duty of its own and is always hard-deleted regardless of
  * [ErasureMode]: that is the step that actually severs the member's ability to log in.

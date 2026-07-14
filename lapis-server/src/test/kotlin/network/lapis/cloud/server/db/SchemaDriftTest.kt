@@ -5,8 +5,8 @@ import dev.kuml.erm.model.ErmModel
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
 import io.kotest.matchers.shouldBe
-import network.lapis.cloud.server.db.tables.AccountTable
-import network.lapis.cloud.server.db.tables.MemberTable
+import network.lapis.cloud.server.db.generated.AccountTable
+import network.lapis.cloud.server.db.generated.MemberTable
 import org.jetbrains.exposed.v1.jdbc.JdbcTransaction
 import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 import java.io.File
@@ -117,9 +117,17 @@ class SchemaDriftTest :
             val status = model.entities.single { it.name == "member" }.attributeByName("status")
             val role = model.entities.single { it.name == "account" }.attributeByName("role")
             status?.type shouldBe
-                ErmDataType.Enum(name = "MemberStatus", values = listOf("ANTRAG", "AKTIV", "GAST", "AUSGETRETEN"))
+                ErmDataType.Enum(
+                    name = "MemberStatus",
+                    values = listOf("ANTRAG", "AKTIV", "GAST", "AUSGETRETEN"),
+                    externalFqName = "network.lapis.cloud.shared.domain.MemberStatus",
+                )
             role?.type shouldBe
-                ErmDataType.Enum(name = "AccountRole", values = listOf("MEMBER", "BOARD", "TREASURER", "ADMIN"))
+                ErmDataType.Enum(
+                    name = "AccountRole",
+                    values = listOf("MEMBER", "BOARD", "TREASURER", "ADMIN"),
+                    externalFqName = "network.lapis.cloud.shared.domain.AccountRole",
+                )
         }
     })
 

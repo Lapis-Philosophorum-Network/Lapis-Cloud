@@ -1,8 +1,8 @@
 package network.lapis.cloud.server.rpc
 
 import io.ktor.server.application.ApplicationCall
-import network.lapis.cloud.server.db.tables.AccountTable
-import network.lapis.cloud.server.db.tables.MemberTable
+import network.lapis.cloud.server.db.generated.AccountTable
+import network.lapis.cloud.server.db.generated.MemberTable
 import network.lapis.cloud.server.security.resolveCurrentMember
 import network.lapis.cloud.shared.domain.MemberDto
 import network.lapis.cloud.shared.domain.MemberSummaryDto

@@ -3,11 +3,11 @@ package network.lapis.cloud.server.rpc
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
-import network.lapis.cloud.server.db.tables.AnwesenheitTable
-import network.lapis.cloud.server.db.tables.BeschlussTable
-import network.lapis.cloud.server.db.tables.GremiumTable
-import network.lapis.cloud.server.db.tables.MemberTable
-import network.lapis.cloud.server.db.tables.SitzungTable
+import network.lapis.cloud.server.db.generated.AnwesenheitTable
+import network.lapis.cloud.server.db.generated.BeschlussTable
+import network.lapis.cloud.server.db.generated.GremiumTable
+import network.lapis.cloud.server.db.generated.MemberTable
+import network.lapis.cloud.server.db.generated.SitzungTable
 import network.lapis.cloud.server.security.CurrentMember
 import network.lapis.cloud.shared.domain.AnwesenheitStatus
 import network.lapis.cloud.shared.domain.BeschlussDto

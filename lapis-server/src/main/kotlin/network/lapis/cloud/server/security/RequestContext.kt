@@ -3,8 +3,8 @@ package network.lapis.cloud.server.security
 import dev.kilua.rpc.AbstractServiceException
 import dev.kilua.rpc.annotations.RpcServiceException
 import io.ktor.server.application.ApplicationCall
-import network.lapis.cloud.server.db.tables.AccountTable
-import network.lapis.cloud.server.db.tables.MemberTable
+import network.lapis.cloud.server.db.generated.AccountTable
+import network.lapis.cloud.server.db.generated.MemberTable
 import network.lapis.cloud.shared.domain.AccountRole
 import network.lapis.cloud.shared.domain.DocumentAccessLevel
 import org.jetbrains.exposed.v1.core.eq

@@ -3,13 +3,13 @@ package network.lapis.cloud.server.dsgvo
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
-import network.lapis.cloud.server.db.tables.WahlFreigabeTable
-import network.lapis.cloud.server.db.tables.WahlKandidaturTable
-import network.lapis.cloud.server.db.tables.WahlStimmzettelTable
-import network.lapis.cloud.server.db.tables.WahlTable
-import network.lapis.cloud.server.db.tables.WahlTeilnahmeTable
-import network.lapis.cloud.server.db.tables.WahlWahlberechtigtTable
-import network.lapis.cloud.server.db.tables.WahlWahlvorstandTable
+import network.lapis.cloud.server.db.generated.WahlFreigabeTable
+import network.lapis.cloud.server.db.generated.WahlKandidaturTable
+import network.lapis.cloud.server.db.generated.WahlStimmzettelTable
+import network.lapis.cloud.server.db.generated.WahlTable
+import network.lapis.cloud.server.db.generated.WahlTeilnahmeTable
+import network.lapis.cloud.server.db.generated.WahlWahlberechtigtTable
+import network.lapis.cloud.server.db.generated.WahlWahlvorstandTable
 import network.lapis.cloud.shared.domain.ErasureMode
 import org.jetbrains.exposed.v1.core.eq
 import org.jetbrains.exposed.v1.jdbc.selectAll
@@ -21,8 +21,8 @@ import kotlin.uuid.Uuid
  * (`member_id`), [WahlWahlberechtigtTable] (`member_id`), [WahlTeilnahmeTable] (`member_id`),
  * [WahlFreigabeTable] (`member_id`) and [WahlStimmzettelTable] (`member_id`, nullable -- always
  * `NULL` on the `geheim` path, populated only on the non-secret path).
- * [network.lapis.cloud.server.db.tables.WahlOptionTable] and
- * [network.lapis.cloud.server.db.tables.WahlStimmzettelAuswahlTable] deliberately have **no**
+ * [network.lapis.cloud.server.db.generated.WahlOptionTable] and
+ * [network.lapis.cloud.server.db.generated.WahlStimmzettelAuswahlTable] deliberately have **no**
  * contributor entry -- see [PersonalDataRegistry.noPersonalDataAllowlist] for the written reason
  * each is allowlisted instead: neither carries a `member` FK of its own (an option resolves to a
  * member only one hop away via `wahl_kandidatur`; a selection resolves to one only two hops away

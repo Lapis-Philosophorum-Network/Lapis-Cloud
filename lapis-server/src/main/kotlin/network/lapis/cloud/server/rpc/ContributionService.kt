@@ -7,9 +7,9 @@ import kotlinx.datetime.LocalDate
 import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
-import network.lapis.cloud.server.db.tables.ContributionTable
-import network.lapis.cloud.server.db.tables.MemberTable
-import network.lapis.cloud.server.db.tables.MembershipTierTable
+import network.lapis.cloud.server.db.generated.ContributionTable
+import network.lapis.cloud.server.db.generated.MemberTable
+import network.lapis.cloud.server.db.generated.MembershipTierTable
 import network.lapis.cloud.server.security.ForbiddenException
 import network.lapis.cloud.server.security.isPrivileged
 import network.lapis.cloud.server.security.requireRole

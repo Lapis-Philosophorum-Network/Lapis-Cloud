@@ -8,7 +8,7 @@ import kotlin.uuid.Uuid
 /**
  * One member's stake into one basket — the pure-function input shape for
  * [computeVickreySettlement], deliberately decoupled from
- * [network.lapis.cloud.server.db.tables.AbstimmungStimmeTable] so this file has zero DB
+ * [network.lapis.cloud.server.db.generated.AbstimmungStimmeTable] so this file has zero DB
  * dependency and can be property-tested directly (see `AbstimmungVickreyTest`).
  */
 data class Ballot(

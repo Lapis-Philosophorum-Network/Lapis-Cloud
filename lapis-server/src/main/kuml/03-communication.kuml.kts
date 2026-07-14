@@ -112,7 +112,7 @@ classDiagram(name = "Communication") {
         // comment (association-to-FK naming would derive "member_id", not the real schema's
         // "created_by").
         attribute(name = "createdBy", type = "UUID") {
-            stereotype("Column") { "columnName" to "created_by" }
+            stereotype("Column") { "columnName" to "created_by"; "fkEntity" to "Member" }
         }
     }
 
@@ -164,14 +164,14 @@ classDiagram(name = "Communication") {
         // comment (association-to-FK naming would derive "member_id", not the real schema's
         // "sent_by").
         attribute(name = "sentBy", type = "UUID") {
-            stereotype("Column") { "columnName" to "sent_by" }
+            stereotype("Column") { "columnName" to "sent_by"; "fkEntity" to "Member" }
         }
         attribute(name = "sentAt", type = "LocalDateTime") {
             multiplicity = Multiplicity(0, 1)
             stereotype("Column") { "columnName" to "sent_at" }
         }
         attribute(name = "status", type = mailingMessageStatus) {
-            stereotype("Column") { "columnName" to "status" }
+            stereotype("Column") { "columnName" to "status"; "enumType" to "network.lapis.cloud.shared.domain.MailingMessageStatus" }
         }
     }
 
@@ -193,7 +193,7 @@ classDiagram(name = "Communication") {
             stereotype("Column") { "columnName" to "delivered_at" }
         }
         attribute(name = "deliveryStatus", type = deliveryStatus) {
-            stereotype("Column") { "columnName" to "delivery_status" }
+            stereotype("Column") { "columnName" to "delivery_status"; "enumType" to "network.lapis.cloud.shared.domain.DeliveryStatus" }
         }
     }
 
@@ -226,12 +226,12 @@ classDiagram(name = "Communication") {
         // same-target collision case, where a real association pair would resolve to
         // "member_id"/"<role>_id" rather than "sender_id"/"recipient_id" together.
         attribute(name = "senderId", type = "UUID") {
-            stereotype("Column") { "columnName" to "sender_id" }
+            stereotype("Column") { "columnName" to "sender_id"; "fkEntity" to "Member" }
         }
         // Real FK -> member (id), NOT NULL. Plain «Column» UUID attribute — same rationale as
         // senderId above.
         attribute(name = "recipientId", type = "UUID") {
-            stereotype("Column") { "columnName" to "recipient_id" }
+            stereotype("Column") { "columnName" to "recipient_id"; "fkEntity" to "Member" }
         }
         attribute(name = "sentAt", type = "LocalDateTime") {
             stereotype("Column") { "columnName" to "sent_at" }

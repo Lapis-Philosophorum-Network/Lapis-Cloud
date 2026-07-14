@@ -3,7 +3,7 @@ package network.lapis.cloud.server.dsgvo
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
-import network.lapis.cloud.server.db.tables.ContributionTable
+import network.lapis.cloud.server.db.generated.ContributionTable
 import network.lapis.cloud.shared.domain.ErasureMode
 import org.jetbrains.exposed.v1.core.eq
 import org.jetbrains.exposed.v1.jdbc.selectAll
@@ -15,7 +15,7 @@ import kotlin.uuid.Uuid
  * retention duty (GoBD/HGB/AO, 10 Jahre) explicitly overrides the general anonymize-or-delete
  * default. Only the free-text `note` column (may contain third-party remarks, e.g. a
  * treasurer's comment about another member) is cleared. The `member_id` pointer stays intact and
- * now resolves to the anonymized [network.lapis.cloud.server.db.tables.MemberTable] row — see
+ * now resolves to the anonymized [network.lapis.cloud.server.db.generated.MemberTable] row — see
  * [FoundationPersonalData].
  */
 object ContributionPersonalData : PersonalDataContributor {

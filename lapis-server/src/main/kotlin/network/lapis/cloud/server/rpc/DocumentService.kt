@@ -3,10 +3,10 @@ package network.lapis.cloud.server.rpc
 import io.ktor.server.application.ApplicationCall
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
-import network.lapis.cloud.server.db.tables.DocumentFolderTable
-import network.lapis.cloud.server.db.tables.DocumentTable
-import network.lapis.cloud.server.db.tables.DocumentVersionTable
-import network.lapis.cloud.server.db.tables.MemberTable
+import network.lapis.cloud.server.db.generated.DocumentFolderTable
+import network.lapis.cloud.server.db.generated.DocumentTable
+import network.lapis.cloud.server.db.generated.DocumentVersionTable
+import network.lapis.cloud.server.db.generated.MemberTable
 import network.lapis.cloud.server.security.ForbiddenException
 import network.lapis.cloud.server.security.canAccessDocumentAtLevel
 import network.lapis.cloud.server.security.requireRole

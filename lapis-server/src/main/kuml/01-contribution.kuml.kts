@@ -74,7 +74,7 @@ classDiagram(name = "Contribution") {
             stereotype("Column") { "columnName" to "contribution_amount"; "sqlType" to "DECIMAL(12,2)" }
         }
         attribute(name = "billingInterval", type = billingInterval) {
-            stereotype("Column") { "columnName" to "billing_interval" }
+            stereotype("Column") { "columnName" to "billing_interval"; "enumType" to "network.lapis.cloud.shared.domain.BillingInterval" }
         }
         attribute(name = "active", type = "Boolean") {
             defaultValue = "TRUE"
@@ -99,7 +99,7 @@ classDiagram(name = "Contribution") {
             stereotype("Column") { "columnName" to "amount_due"; "sqlType" to "DECIMAL(12,2)" }
         }
         attribute(name = "status", type = contributionStatus) {
-            stereotype("Column") { "columnName" to "status" }
+            stereotype("Column") { "columnName" to "status"; "enumType" to "network.lapis.cloud.shared.domain.ContributionStatus" }
         }
         attribute(name = "paidAt", type = "LocalDateTime") {
             multiplicity = Multiplicity(0, 1)

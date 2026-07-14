@@ -3,8 +3,8 @@ package network.lapis.cloud.server.rpc
 import io.ktor.server.application.ApplicationCall
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
-import network.lapis.cloud.server.db.tables.DirectMessageTable
-import network.lapis.cloud.server.db.tables.MemberTable
+import network.lapis.cloud.server.db.generated.DirectMessageTable
+import network.lapis.cloud.server.db.generated.MemberTable
 import network.lapis.cloud.server.security.resolveCurrentMember
 import network.lapis.cloud.shared.domain.DirectMessageDto
 import network.lapis.cloud.shared.rpc.IDirectMessageService

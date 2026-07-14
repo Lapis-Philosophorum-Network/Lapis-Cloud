@@ -8,11 +8,11 @@
 // docs/architecture/domain-model.adoc and CLAUDE.md's kUML-Repo-Konventionen (vault) for the
 // full rationale (enum-to-VARCHAR type-fidelity gap, Kotlin-object-naming-override gap).
 //
-// Unlike foundation/contribution/communication, this domain does NOT need a cross-domain Member
-// stub (nor an erasure_request-referencing stub, despite dsgvo_audit_log.request_id pointing back
-// at erasure_request WITHIN this same file): every single Member-/ErasureRequest-referencing FK
-// in this domain is modelled as a plain «Column» UUID attribute rather than a UML association —
-// see the naming-derivation notes below — so there is no association target to resolve at all.
+// Every single Member-/ErasureRequest-referencing FK in this domain is modelled as a plain
+// «Column» UUID attribute rather than a UML association — see the naming-derivation notes below —
+// pinned instead via «Column».fkEntity, which is why this file, symmetrically, carries a minimal
+// id-only Member stub (owned by Foundation); erasure_request itself is already declared within
+// this same file, so dsgvo_audit_log.request_id needs no separate stub.
 //
 // V5__dsgvo.sql also ALTERs member to add member.anonymized_at — already modelled on Member in
 // 00-foundation.kuml.kts (see that file's own header comment); not repeated here, this file only
@@ -73,6 +73,17 @@ import dev.kuml.uml.dsl.stereotype
 classDiagram(name = "Dsgvo") {
     applyProfile(ermMappingProfile)
 
+    // Foundation-owned stub — id-only, mirrors the cross-domain-stub pattern established by
+    // contribution's own Member stub. Only exists here so UmlToErmTransformer can resolve this
+    // domain's Member-referencing «Column».fkEntity targets.
+    val member = classOf(name = "Member") {
+        stereotype("Entity") { "tableName" to "member"; "kotlinObjectName" to "MemberTable" }
+        attribute(name = "id", type = "UUID") {
+            stereotype("Id")
+            stereotype("Column") { "columnName" to "id" }
+        }
+    }
+
     val erasureMode = enumOf(name = "ErasureMode") {
         literal(name = "ANONYMIZE")
         literal(name = "HARD_DELETE_WHERE_UNCONSTRAINED")
@@ -115,7 +126,7 @@ classDiagram(name = "Dsgvo") {
         // comment (three-FKs-to-member collision case; association-to-FK naming would derive
         // "member_id" for at most one of the three, never all three real names together).
         attribute(name = "subjectMemberId", type = "UUID") {
-            stereotype("Column") { "columnName" to "subject_member_id" }
+            stereotype("Column") { "columnName" to "subject_member_id"; "fkEntity" to "Member" }
         }
         attribute(name = "requestedAt", type = "LocalDateTime") {
             stereotype("Column") { "columnName" to "requested_at" }
@@ -123,22 +134,22 @@ classDiagram(name = "Dsgvo") {
         // Real FK -> member (id), NOT NULL. Plain «Column» UUID attribute — see the file header
         // comment.
         attribute(name = "requestedBy", type = "UUID") {
-            stereotype("Column") { "columnName" to "requested_by" }
+            stereotype("Column") { "columnName" to "requested_by"; "fkEntity" to "Member" }
         }
         attribute(name = "reason", type = "String") {
             stereotype("Column") { "columnName" to "reason"; "sqlType" to "VARCHAR(1000)" }
         }
         attribute(name = "mode", type = erasureMode) {
-            stereotype("Column") { "columnName" to "mode" }
+            stereotype("Column") { "columnName" to "mode"; "enumType" to "network.lapis.cloud.shared.domain.ErasureMode" }
         }
         attribute(name = "status", type = erasureStatus) {
-            stereotype("Column") { "columnName" to "status" }
+            stereotype("Column") { "columnName" to "status"; "enumType" to "network.lapis.cloud.shared.domain.ErasureStatus" }
         }
         // Real FK -> member (id), nullable. Plain «Column» UUID attribute — see the file header
         // comment.
         attribute(name = "decidedBy", type = "UUID") {
             multiplicity = Multiplicity(0, 1)
-            stereotype("Column") { "columnName" to "decided_by" }
+            stereotype("Column") { "columnName" to "decided_by"; "fkEntity" to "Member" }
         }
         attribute(name = "decidedAt", type = "LocalDateTime") {
             multiplicity = Multiplicity(0, 1)
@@ -177,26 +188,26 @@ classDiagram(name = "Dsgvo") {
         // comment.
         attribute(name = "actorMemberId", type = "UUID") {
             multiplicity = Multiplicity(0, 1)
-            stereotype("Column") { "columnName" to "actor_member_id" }
+            stereotype("Column") { "columnName" to "actor_member_id"; "fkEntity" to "Member" }
         }
         attribute(name = "actorRole", type = accountRole) {
             multiplicity = Multiplicity(0, 1)
-            stereotype("Column") { "columnName" to "actor_role" }
+            stereotype("Column") { "columnName" to "actor_role"; "enumType" to "network.lapis.cloud.shared.domain.AccountRole" }
         }
         attribute(name = "action", type = dsgvoAuditAction) {
-            stereotype("Column") { "columnName" to "action" }
+            stereotype("Column") { "columnName" to "action"; "enumType" to "network.lapis.cloud.shared.domain.DsgvoAuditAction" }
         }
         // Real FK -> member (id), NOT NULL. Plain «Column» UUID attribute — see the file header
         // comment.
         attribute(name = "subjectMemberId", type = "UUID") {
-            stereotype("Column") { "columnName" to "subject_member_id" }
+            stereotype("Column") { "columnName" to "subject_member_id"; "fkEntity" to "Member" }
         }
         // Real FK -> erasure_request (id), nullable. Plain «Column» UUID attribute — see the file
         // header comment (association-to-FK naming would derive "erasure_request_id", not the
         // real schema's "request_id").
         attribute(name = "requestId", type = "UUID") {
             multiplicity = Multiplicity(0, 1)
-            stereotype("Column") { "columnName" to "request_id" }
+            stereotype("Column") { "columnName" to "request_id"; "fkEntity" to "ErasureRequest" }
         }
         // JSON-encoded-as-string, not ErmDataType.Json — see the file header comment.
         attribute(name = "outcomeSummary", type = "String") {

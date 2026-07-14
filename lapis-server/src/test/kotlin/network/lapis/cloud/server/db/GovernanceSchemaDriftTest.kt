@@ -5,13 +5,13 @@ import dev.kuml.erm.model.ErmModel
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
 import io.kotest.matchers.shouldBe
-import network.lapis.cloud.server.db.tables.AntragTable
-import network.lapis.cloud.server.db.tables.AnwesenheitTable
-import network.lapis.cloud.server.db.tables.BeschlussTable
-import network.lapis.cloud.server.db.tables.GremiumMitgliedschaftTable
-import network.lapis.cloud.server.db.tables.GremiumTable
-import network.lapis.cloud.server.db.tables.SitzungTable
-import network.lapis.cloud.server.db.tables.TagesordnungspunktTable
+import network.lapis.cloud.server.db.generated.AntragTable
+import network.lapis.cloud.server.db.generated.AnwesenheitTable
+import network.lapis.cloud.server.db.generated.BeschlussTable
+import network.lapis.cloud.server.db.generated.GremiumMitgliedschaftTable
+import network.lapis.cloud.server.db.generated.GremiumTable
+import network.lapis.cloud.server.db.generated.SitzungTable
+import network.lapis.cloud.server.db.generated.TagesordnungspunktTable
 import org.jetbrains.exposed.v1.jdbc.JdbcTransaction
 import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 import java.io.File
@@ -45,10 +45,11 @@ class GovernanceSchemaDriftTest :
         /** Resolves an `ErmForeignKey.targetEntityId` back to its entity name within [model]. */
         fun ErmModel.entityNameOf(entityId: String): String? = entities.firstOrNull { it.id == entityId }?.name
 
-        test("model declares exactly the seven governance entities plus the Member stub") {
+        test("model declares exactly the seven governance entities plus the Member and Document stubs") {
             model.entities.map { it.name }.toSet() shouldBe
                 setOf(
                     "member",
+                    "document",
                     "gremium",
                     "gremium_mitgliedschaft",
                     "sitzung",
@@ -115,19 +116,24 @@ class GovernanceSchemaDriftTest :
             // NOT UML associations — see the .kuml.kts file header comment for the empirical
             // finding (the FIRST association processed for a (fkClass, refClass) pair always
             // claims the bare "member_id" default regardless of its own role, so no ordering of
-            // these three real column names could all be reproduced via real associations).
+            // these three real column names could all be reproduced via real associations) —
+            // pinned instead via «Column».fkEntity.
             real.foreignKeys["called_by"] shouldBe "member"
             real.foreignKeys["chair_member_id"] shouldBe "member"
             real.foreignKeys["minute_taker_member_id"] shouldBe "member"
-            entity.attributeByName("called_by")?.foreignKey shouldBe null
-            entity.attributeByName("chair_member_id")?.foreignKey shouldBe null
-            entity.attributeByName("minute_taker_member_id")?.foreignKey shouldBe null
+            model.entityNameOf(entity.attributeByName("called_by")?.foreignKey?.targetEntityId ?: "") shouldBe "member"
+            model.entityNameOf(entity.attributeByName("chair_member_id")?.foreignKey?.targetEntityId ?: "") shouldBe "member"
+            model.entityNameOf(
+                entity.attributeByName("minute_taker_member_id")?.foreignKey?.targetEntityId ?: "",
+            ) shouldBe "member"
 
             // protocol_document_id -> document: plain «Column» attribute (naming-gap: derived
-            // default would be "document_id", not "protocol_document_id"). No Document stub was
-            // needed in this file precisely because this FK never becomes a real association.
+            // default would be "document_id", not "protocol_document_id") — pinned instead via
+            // «Column».fkEntity against this file's Document stub.
             real.foreignKeys["protocol_document_id"] shouldBe "document"
-            entity.attributeByName("protocol_document_id")?.foreignKey shouldBe null
+            model.entityNameOf(
+                entity.attributeByName("protocol_document_id")?.foreignKey?.targetEntityId ?: "",
+            ) shouldBe "document"
         }
 
         test("tagesordnungspunkt table shape matches the real migrated schema") {
@@ -145,9 +151,9 @@ class GovernanceSchemaDriftTest :
             model.entityNameOf(entity.attributeByName("sitzung_id")?.foreignKey?.targetEntityId ?: "") shouldBe "sitzung"
 
             // presenter_member_id -> member: plain «Column» attribute (default would be
-            // "member_id", not "presenter_member_id").
+            // "member_id", not "presenter_member_id") — pinned instead via «Column».fkEntity.
             real.foreignKeys["presenter_member_id"] shouldBe "member"
-            entity.attributeByName("presenter_member_id")?.foreignKey shouldBe null
+            model.entityNameOf(entity.attributeByName("presenter_member_id")?.foreignKey?.targetEntityId ?: "") shouldBe "member"
         }
 
         test("tagesordnungspunkt's composite UNIQUE constraint has no kUML ERM equivalent (accepted gap, pinned)") {
@@ -177,9 +183,12 @@ class GovernanceSchemaDriftTest :
             model.entityNameOf(entity.attributeByName("member_id")?.foreignKey?.targetEntityId ?: "") shouldBe "member"
 
             // represented_by_member_id -> member: plain «Column» attribute (default "member_id"
-            // already claimed by the real member_id association above).
+            // already claimed by the real member_id association above) — pinned instead via
+            // «Column».fkEntity.
             real.foreignKeys["represented_by_member_id"] shouldBe "member"
-            entity.attributeByName("represented_by_member_id")?.foreignKey shouldBe null
+            model.entityNameOf(
+                entity.attributeByName("represented_by_member_id")?.foreignKey?.targetEntityId ?: "",
+            ) shouldBe "member"
         }
 
         test("anwesenheit's composite UNIQUE constraint has no kUML ERM equivalent (accepted gap, pinned)") {
@@ -210,9 +219,9 @@ class GovernanceSchemaDriftTest :
             ) shouldBe "tagesordnungspunkt"
 
             // recorded_by -> member: plain «Column» attribute (default would be "member_id", not
-            // "recorded_by").
+            // "recorded_by") — pinned instead via «Column».fkEntity.
             real.foreignKeys["recorded_by"] shouldBe "member"
-            entity.attributeByName("recorded_by")?.foreignKey shouldBe null
+            model.entityNameOf(entity.attributeByName("recorded_by")?.foreignKey?.targetEntityId ?: "") shouldBe "member"
 
             // abstimmung_id / wahl_id: real FKs into tables that don't exist in this domain's own
             // script (forward references into the later abstimmung/wahl waves) — modelled as
@@ -247,13 +256,16 @@ class GovernanceSchemaDriftTest :
             model.entityNameOf(entity.attributeByName("beschluss_id")?.foreignKey?.targetEntityId ?: "") shouldBe "beschluss"
 
             // target_gremium_id / submitter_member_id / reviewed_by: plain «Column» attributes —
-            // none match the association-derived default ("gremium_id" / "member_id" / "member_id").
+            // none match the association-derived default ("gremium_id" / "member_id" / "member_id")
+            // — pinned instead via «Column».fkEntity.
             real.foreignKeys["target_gremium_id"] shouldBe "gremium"
             real.foreignKeys["submitter_member_id"] shouldBe "member"
             real.foreignKeys["reviewed_by"] shouldBe "member"
-            entity.attributeByName("target_gremium_id")?.foreignKey shouldBe null
-            entity.attributeByName("submitter_member_id")?.foreignKey shouldBe null
-            entity.attributeByName("reviewed_by")?.foreignKey shouldBe null
+            model.entityNameOf(entity.attributeByName("target_gremium_id")?.foreignKey?.targetEntityId ?: "") shouldBe "gremium"
+            model.entityNameOf(
+                entity.attributeByName("submitter_member_id")?.foreignKey?.targetEntityId ?: "",
+            ) shouldBe "member"
+            model.entityNameOf(entity.attributeByName("reviewed_by")?.foreignKey?.targetEntityId ?: "") shouldBe "member"
         }
 
         // ── (2) Model vs. hand-written Exposed Table objects ────────────────────
@@ -317,6 +329,7 @@ class GovernanceSchemaDriftTest :
                 ErmDataType.Enum(
                     name = "GremiumType",
                     values = listOf("VORSTAND", "ARBEITSKREIS", "AUSSCHUSS", "SONSTIGES", "MITGLIEDERVERSAMMLUNG"),
+                    externalFqName = "network.lapis.cloud.shared.domain.GremiumType",
                 )
         }
 
@@ -326,6 +339,7 @@ class GovernanceSchemaDriftTest :
                 ErmDataType.Enum(
                     name = "GremiumRolle",
                     values = listOf("VORSITZ", "STELLV_VORSITZ", "SCHRIFTFUEHRUNG", "MITGLIED", "BEISITZ"),
+                    externalFqName = "network.lapis.cloud.shared.domain.GremiumRolle",
                 )
         }
 
@@ -333,9 +347,17 @@ class GovernanceSchemaDriftTest :
             val format = model.entities.single { it.name == "sitzung" }.attributeByName("format")
             val status = model.entities.single { it.name == "sitzung" }.attributeByName("status")
             format?.type shouldBe
-                ErmDataType.Enum(name = "SitzungsFormat", values = listOf("PRAESENZ", "ONLINE", "HYBRID"))
+                ErmDataType.Enum(
+                    name = "SitzungsFormat",
+                    values = listOf("PRAESENZ", "ONLINE", "HYBRID"),
+                    externalFqName = "network.lapis.cloud.shared.domain.SitzungsFormat",
+                )
             status?.type shouldBe
-                ErmDataType.Enum(name = "SitzungsStatus", values = listOf("GEPLANT", "DURCHGEFUEHRT", "ABGESAGT"))
+                ErmDataType.Enum(
+                    name = "SitzungsStatus",
+                    values = listOf("GEPLANT", "DURCHGEFUEHRT", "ABGESAGT"),
+                    externalFqName = "network.lapis.cloud.shared.domain.SitzungsStatus",
+                )
         }
 
         test("anwesenheit.status is modelled as a real ErmDataType.Enum column") {
@@ -344,6 +366,7 @@ class GovernanceSchemaDriftTest :
                 ErmDataType.Enum(
                     name = "AnwesenheitStatus",
                     values = listOf("ANWESEND", "ENTSCHULDIGT", "UNENTSCHULDIGT", "VERTRETEN"),
+                    externalFqName = "network.lapis.cloud.shared.domain.AnwesenheitStatus",
                 )
         }
 
@@ -351,11 +374,16 @@ class GovernanceSchemaDriftTest :
             val status = model.entities.single { it.name == "beschluss" }.attributeByName("status")
             val resolutionMode = model.entities.single { it.name == "beschluss" }.attributeByName("resolution_mode")
             status?.type shouldBe
-                ErmDataType.Enum(name = "BeschlussStatus", values = listOf("ANGENOMMEN", "ABGELEHNT", "VERTAGT"))
+                ErmDataType.Enum(
+                    name = "BeschlussStatus",
+                    values = listOf("ANGENOMMEN", "ABGELEHNT", "VERTAGT"),
+                    externalFqName = "network.lapis.cloud.shared.domain.BeschlussStatus",
+                )
             resolutionMode?.type shouldBe
                 ErmDataType.Enum(
                     name = "ResolutionMode",
                     values = listOf("GREMIUM_QUORUM", "MERITOKRATISCH", "DEMOKRATISCH"),
+                    externalFqName = "network.lapis.cloud.shared.domain.ResolutionMode",
                 )
         }
 
@@ -375,6 +403,7 @@ class GovernanceSchemaDriftTest :
                             "VERTAGT",
                             "ZURUECKGEZOGEN",
                         ),
+                    externalFqName = "network.lapis.cloud.shared.domain.AntragStatus",
                 )
         }
     })

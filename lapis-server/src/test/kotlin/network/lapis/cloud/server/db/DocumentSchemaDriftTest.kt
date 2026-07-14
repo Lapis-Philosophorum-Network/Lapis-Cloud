@@ -5,9 +5,9 @@ import dev.kuml.erm.model.ErmModel
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
 import io.kotest.matchers.shouldBe
-import network.lapis.cloud.server.db.tables.DocumentFolderTable
-import network.lapis.cloud.server.db.tables.DocumentTable
-import network.lapis.cloud.server.db.tables.DocumentVersionTable
+import network.lapis.cloud.server.db.generated.DocumentFolderTable
+import network.lapis.cloud.server.db.generated.DocumentTable
+import network.lapis.cloud.server.db.generated.DocumentVersionTable
 import org.jetbrains.exposed.v1.jdbc.JdbcTransaction
 import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 import java.io.File
@@ -32,15 +32,17 @@ class DocumentSchemaDriftTest :
         val scriptFile = File(KumlModelLoader.kumlSourceDir, "02-document.kuml.kts")
         val model: ErmModel by lazy { KumlModelLoader.loadErmModel(scriptFile) }
 
-        test("model declares exactly document_folder, document, document_version") {
-            // Unlike foundation/contribution, no cross-domain Member stub is needed here: both
-            // Member-referencing FKs (document.created_by, document_version.uploaded_by) are
-            // modelled as plain «Column» UUID attributes, not UML associations (see the
-            // .kuml.kts file header comment for the naming-gap rationale), so there is no
-            // association target to resolve.
+        test("model declares exactly document_folder, document, document_version plus the Member stub") {
+            // Both Member-referencing FKs (document.created_by, document_version.uploaded_by) are
+            // modelled as plain «Column» UUID attributes rather than UML associations (see the
+            // .kuml.kts file header comment for the naming-gap rationale), pinned instead via
+            // «Column».fkEntity against a minimal id-only Member stub declared in this file.
             model.entities.map { it.name }.toSet() shouldBe
-                setOf("document_folder", "document", "document_version")
+                setOf("document_folder", "document", "document_version", "member")
         }
+
+        /** Resolves an `ErmForeignKey.targetEntityId` back to its entity name within [model]. */
+        fun entityNameOf(entityId: String?): String? = model.entities.firstOrNull { it.id == entityId }?.name
 
         // ── (1) Model vs. real H2-migrated schema ───────────────────────────────
 
@@ -80,23 +82,28 @@ class DocumentSchemaDriftTest :
                     col.nullable shouldBe attr.nullable
                 }
             }
-            // folder_id and created_by both have real FKs in the migrated schema, but neither is
+            // folder_id and created_by both have real FKs in the migrated schema. Neither is
             // modelled as a UML association here (see the .kuml.kts file header comment): the
             // association-to-FK column-naming default ("document_folder_id" / "member_id") does
-            // not match the real schema's actual column names ("folder_id" / "created_by"), and
-            // there is no DSL-level way to override the derived name without an actual naming
-            // collision (which would leave a spurious duplicate column). Pinned explicitly here
-            // rather than silently allowed to drift.
+            // not match the real schema's actual column names ("folder_id" / "created_by").
+            // Pinned instead via «Column».fkEntity — verified here against both the real schema
+            // and the resolved ERM foreign key.
             real.foreignKeys["folder_id"] shouldBe "document_folder"
             real.foreignKeys["created_by"] shouldBe "member"
-            model.entities
-                .single { it.name == "document" }
-                .attributeByName("folder_id")
-                ?.foreignKey shouldBe null
-            model.entities
-                .single { it.name == "document" }
-                .attributeByName("created_by")
-                ?.foreignKey shouldBe null
+            entityNameOf(
+                model.entities
+                    .single { it.name == "document" }
+                    .attributeByName("folder_id")
+                    ?.foreignKey
+                    ?.targetEntityId,
+            ) shouldBe "document_folder"
+            entityNameOf(
+                model.entities
+                    .single { it.name == "document" }
+                    .attributeByName("created_by")
+                    ?.foreignKey
+                    ?.targetEntityId,
+            ) shouldBe "member"
             // current_version_id has a real FK in the migrated schema (added via a second ALTER
             // TABLE after both tables exist, fk_document_current_version) but deliberately no FK
             // at the Exposed layer (avoids a document <-> document_version circular reference at
@@ -122,15 +129,18 @@ class DocumentSchemaDriftTest :
                 }
             }
             real.foreignKeys["document_id"] shouldBe "document"
-            // uploaded_by has a real FK in the migrated schema, but (same rationale as
-            // document.folder_id/created_by above) is modelled as a plain «Column» attribute, not
-            // a UML association — the derived default name would be "member_id", not the real
-            // schema's "uploaded_by".
+            // uploaded_by has a real FK in the migrated schema. Same rationale as
+            // document.folder_id/created_by above — the derived association default name would be
+            // "member_id", not the real schema's "uploaded_by" — pinned instead via
+            // «Column».fkEntity.
             real.foreignKeys["uploaded_by"] shouldBe "member"
-            model.entities
-                .single { it.name == "document_version" }
-                .attributeByName("uploaded_by")
-                ?.foreignKey shouldBe null
+            entityNameOf(
+                model.entities
+                    .single { it.name == "document_version" }
+                    .attributeByName("uploaded_by")
+                    ?.foreignKey
+                    ?.targetEntityId,
+            ) shouldBe "member"
         }
 
         test("document_version's composite UNIQUE constraint has no kUML ERM equivalent (accepted gap, pinned)") {
@@ -179,6 +189,7 @@ class DocumentSchemaDriftTest :
                 ErmDataType.Enum(
                     name = "DocumentAccessLevel",
                     values = listOf("PUBLIC_MEMBERS", "BOARD_ONLY", "ADMIN_ONLY"),
+                    externalFqName = "network.lapis.cloud.shared.domain.DocumentAccessLevel",
                 )
         }
 

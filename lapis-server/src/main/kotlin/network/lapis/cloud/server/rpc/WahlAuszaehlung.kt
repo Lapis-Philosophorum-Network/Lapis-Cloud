@@ -6,7 +6,7 @@ import kotlin.uuid.Uuid
 /**
  * One ballot's candidate selection(s) -- the pure-function input shape for
  * [computePersonenwahlErgebnis], deliberately decoupled from
- * [network.lapis.cloud.server.db.tables.WahlStimmzettelAuswahlTable] so this file has zero DB
+ * [network.lapis.cloud.server.db.generated.WahlStimmzettelAuswahlTable] so this file has zero DB
  * dependency and can be property-tested directly (see `WahlAuszaehlungTest`). Size `1` for
  * [network.lapis.cloud.shared.domain.WahlTyp.EINZELWAHL], `1..sitzeCount` for
  * [network.lapis.cloud.shared.domain.WahlTyp.MEHRFACHWAHL].

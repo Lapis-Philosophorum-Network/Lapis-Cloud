@@ -1,7 +1,7 @@
 package network.lapis.cloud.server.security
 
-import network.lapis.cloud.server.db.tables.MemberTable
-import network.lapis.cloud.server.db.tables.WahlWahlvorstandTable
+import network.lapis.cloud.server.db.generated.MemberTable
+import network.lapis.cloud.server.db.generated.WahlWahlvorstandTable
 import network.lapis.cloud.shared.domain.MemberStatus
 import org.jetbrains.exposed.v1.core.and
 import org.jetbrains.exposed.v1.core.eq

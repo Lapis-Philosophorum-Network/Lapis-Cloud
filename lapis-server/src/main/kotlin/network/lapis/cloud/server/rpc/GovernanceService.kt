@@ -5,17 +5,17 @@ import kotlinx.datetime.LocalDate
 import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
-import network.lapis.cloud.server.db.tables.AbstimmungOptionTable
-import network.lapis.cloud.server.db.tables.AbstimmungStimmeTable
-import network.lapis.cloud.server.db.tables.AbstimmungTable
-import network.lapis.cloud.server.db.tables.AntragTable
-import network.lapis.cloud.server.db.tables.AnwesenheitTable
-import network.lapis.cloud.server.db.tables.BeschlussTable
-import network.lapis.cloud.server.db.tables.GremiumMitgliedschaftTable
-import network.lapis.cloud.server.db.tables.GremiumTable
-import network.lapis.cloud.server.db.tables.MemberTable
-import network.lapis.cloud.server.db.tables.SitzungTable
-import network.lapis.cloud.server.db.tables.TagesordnungspunktTable
+import network.lapis.cloud.server.db.generated.AbstimmungOptionTable
+import network.lapis.cloud.server.db.generated.AbstimmungStimmeTable
+import network.lapis.cloud.server.db.generated.AbstimmungTable
+import network.lapis.cloud.server.db.generated.AntragTable
+import network.lapis.cloud.server.db.generated.AnwesenheitTable
+import network.lapis.cloud.server.db.generated.BeschlussTable
+import network.lapis.cloud.server.db.generated.GremiumMitgliedschaftTable
+import network.lapis.cloud.server.db.generated.GremiumTable
+import network.lapis.cloud.server.db.generated.MemberTable
+import network.lapis.cloud.server.db.generated.SitzungTable
+import network.lapis.cloud.server.db.generated.TagesordnungspunktTable
 import network.lapis.cloud.server.economy.LtrBalanceProvider
 import network.lapis.cloud.server.economy.PlaceholderLtrBalanceProvider
 import network.lapis.cloud.server.security.ForbiddenException
@@ -81,7 +81,7 @@ private val ZERO_LTR: BigDecimal = BigDecimal.ZERO.setScale(2)
  * DoS caps on [network.lapis.cloud.shared.domain.AbstimmungOpenInput.optionLabels] — well above
  * any realistic Sachentscheidung's option count/label length, but bounded so a careless or
  * malicious caller cannot make `openAbstimmung` insert an unbounded number of
- * [network.lapis.cloud.server.db.tables.AbstimmungOptionTable] rows or exceed that table's
+ * [network.lapis.cloud.server.db.generated.AbstimmungOptionTable] rows or exceed that table's
  * `label VARCHAR(200)` column with a confusing DB-level error instead of a clean 409.
  */
 private const val MAX_ABSTIMMUNG_OPTIONS = 50

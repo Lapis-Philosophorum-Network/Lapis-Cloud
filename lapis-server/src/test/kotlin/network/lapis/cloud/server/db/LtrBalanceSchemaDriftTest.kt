@@ -5,7 +5,7 @@ import dev.kuml.erm.model.ErmModel
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
 import io.kotest.matchers.shouldBe
-import network.lapis.cloud.server.db.tables.LtrBalanceTable
+import network.lapis.cloud.server.db.generated.LtrBalanceTable
 import org.jetbrains.exposed.v1.jdbc.JdbcTransaction
 import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 import java.io.File
@@ -36,8 +36,11 @@ class LtrBalanceSchemaDriftTest :
         val scriptFile = File(KumlModelLoader.kumlSourceDir, "08-ltr-balance.kuml.kts")
         val model: ErmModel by lazy { KumlModelLoader.loadErmModel(scriptFile) }
 
-        test("model declares exactly the ltr_balance entity (no cross-domain stub needed)") {
-            model.entities.map { it.name }.toSet() shouldBe setOf("ltr_balance")
+        /** Resolves an `ErmForeignKey.targetEntityId` back to its entity name within [model]. */
+        fun entityNameOf(entityId: String?): String? = model.entities.firstOrNull { it.id == entityId }?.name
+
+        test("model declares exactly the ltr_balance entity plus the Member stub") {
+            model.entities.map { it.name }.toSet() shouldBe setOf("ltr_balance", "member")
         }
 
         // ── (1) Model vs. real H2-migrated schema ───────────────────────────────
@@ -63,11 +66,11 @@ class LtrBalanceSchemaDriftTest :
 
             // member_id is also a real FK -> member (id) in the live schema. Modelled as a plain
             // «Column»+«Id» UUID attribute rather than a UML association (see file header
-            // comment: an association-derived FK column can never be primaryKey=true), so the
-            // model-level ErmAttribute carries no ErmForeignKey — pinned explicitly here rather
-            // than silently dropped.
+            // comment: an association-derived FK column can never be primaryKey=true) — pinned
+            // instead via «Column».fkEntity, so the model-level ErmAttribute now carries a real
+            // ErmForeignKey alongside primaryKey=true.
             real.foreignKeys["member_id"] shouldBe "member"
-            entity.attributeByName("member_id")?.foreignKey shouldBe null
+            entityNameOf(entity.attributeByName("member_id")?.foreignKey?.targetEntityId) shouldBe "member"
         }
 
         // ── (2) Model vs. hand-written Exposed Table object ─────────────────────
@@ -82,12 +85,13 @@ class LtrBalanceSchemaDriftTest :
         test("balance_ltr is modelled as DECIMAL(18,2), matching the real schema and LtrBalanceTable (precision-override pin)") {
             // UmlErmTypeMapper's bare "decimal" keyword defaults to DECIMAL(19,2) (same default
             // contribution.amountDue needed to override) — the real V8 schema/hand-written table
-            // use the wider DECIMAL(18,2), so an explicit «Column».sqlType override is required.
+            // use the wider DECIMAL(18,2), so an explicit «Column».sqlType="DECIMAL(18,2)" override
+            // is required, parsed by mapOverride's DECIMAL(p,s) regex into ErmDataType.Decimal(18, 2).
             // Not the enum-fidelity gap (no enum columns in this domain at all) — a distinct,
             // separately-pinned precision gap, same mechanism/rationale as contribution's own
             // DECIMAL(12,2) pin.
             val balanceLtr = model.entities.single { it.name == "ltr_balance" }.attributeByName("balance_ltr")
-            balanceLtr?.type shouldBe ErmDataType.Custom("DECIMAL(18,2)")
+            balanceLtr?.type shouldBe ErmDataType.Decimal(18, 2)
         }
     })
 

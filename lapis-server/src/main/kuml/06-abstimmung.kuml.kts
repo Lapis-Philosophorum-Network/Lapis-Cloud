@@ -127,12 +127,12 @@ classDiagram(name = "Abstimmung") {
             stereotype("Column") { "columnName" to "title"; "sqlType" to "VARCHAR(300)" }
         }
         attribute(name = "status", type = abstimmungStatus) {
-            stereotype("Column") { "columnName" to "status" }
+            stereotype("Column") { "columnName" to "status"; "enumType" to "network.lapis.cloud.shared.domain.AbstimmungStatus" }
         }
         // Real FK -> member (id), NOT NULL. Plain «Column» UUID attribute — association-to-FK
         // naming would derive "member_id", not the real schema's "opened_by".
         attribute(name = "openedBy", type = "UUID") {
-            stereotype("Column") { "columnName" to "opened_by" }
+            stereotype("Column") { "columnName" to "opened_by"; "fkEntity" to "Member" }
         }
         attribute(name = "openedAt", type = "LocalDateTime") {
             stereotype("Column") { "columnName" to "opened_at" }
@@ -204,7 +204,7 @@ classDiagram(name = "Abstimmung") {
         // association-to-FK naming would derive "abstimmung_option_id", not the real schema's
         // "option_id".
         attribute(name = "optionId", type = "UUID") {
-            stereotype("Column") { "columnName" to "option_id" }
+            stereotype("Column") { "columnName" to "option_id"; "fkEntity" to "AbstimmungOption" }
         }
         attribute(name = "stakeLtr", type = "BigDecimal") {
             stereotype("Column") { "columnName" to "stake_ltr"; "sqlType" to "DECIMAL(18,2)" }

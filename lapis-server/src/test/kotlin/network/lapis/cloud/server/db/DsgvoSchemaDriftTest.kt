@@ -5,8 +5,8 @@ import dev.kuml.erm.model.ErmModel
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
 import io.kotest.matchers.shouldBe
-import network.lapis.cloud.server.db.tables.DsgvoAuditLogTable
-import network.lapis.cloud.server.db.tables.ErasureRequestTable
+import network.lapis.cloud.server.db.generated.DsgvoAuditLogTable
+import network.lapis.cloud.server.db.generated.ErasureRequestTable
 import org.jetbrains.exposed.v1.jdbc.JdbcTransaction
 import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 import java.io.File
@@ -31,8 +31,11 @@ class DsgvoSchemaDriftTest :
         val scriptFile = File(KumlModelLoader.kumlSourceDir, "04-dsgvo.kuml.kts")
         val model: ErmModel by lazy { KumlModelLoader.loadErmModel(scriptFile) }
 
-        test("model declares exactly the two dsgvo entities (no cross-domain stub needed)") {
-            model.entities.map { it.name }.toSet() shouldBe setOf("erasure_request", "dsgvo_audit_log")
+        /** Resolves an `ErmForeignKey.targetEntityId` back to its entity name within [model]. */
+        fun entityNameOf(entityId: String?): String? = model.entities.firstOrNull { it.id == entityId }?.name
+
+        test("model declares exactly the two dsgvo entities plus the Member stub") {
+            model.entities.map { it.name }.toSet() shouldBe setOf("erasure_request", "dsgvo_audit_log", "member")
         }
 
         // ── (1) Model vs. real H2-migrated schema ───────────────────────────────
@@ -51,13 +54,14 @@ class DsgvoSchemaDriftTest :
             }
             // All three real FKs to member (subject_member_id NOT NULL, requested_by NOT NULL,
             // decided_by nullable) are modelled as plain «Column» attributes, not UML associations
-            // — see the .kuml.kts file header comment (three-FKs-to-member collision case).
+            // — see the .kuml.kts file header comment (three-FKs-to-member collision case) —
+            // pinned instead via «Column».fkEntity.
             real.foreignKeys["subject_member_id"] shouldBe "member"
             real.foreignKeys["requested_by"] shouldBe "member"
             real.foreignKeys["decided_by"] shouldBe "member"
-            entity.attributeByName("subject_member_id")?.foreignKey shouldBe null
-            entity.attributeByName("requested_by")?.foreignKey shouldBe null
-            entity.attributeByName("decided_by")?.foreignKey shouldBe null
+            entityNameOf(entity.attributeByName("subject_member_id")?.foreignKey?.targetEntityId) shouldBe "member"
+            entityNameOf(entity.attributeByName("requested_by")?.foreignKey?.targetEntityId) shouldBe "member"
+            entityNameOf(entity.attributeByName("decided_by")?.foreignKey?.targetEntityId) shouldBe "member"
         }
 
         test("dsgvo_audit_log table shape matches the real migrated schema") {
@@ -76,13 +80,13 @@ class DsgvoSchemaDriftTest :
             // matches the association-derived "member_id" default. request_id (nullable) ->
             // erasure_request, but the derived default would be "erasure_request_id", not
             // "request_id". All three modelled as plain «Column» attributes — see the .kuml.kts
-            // file header comment.
+            // file header comment — pinned instead via «Column».fkEntity.
             real.foreignKeys["actor_member_id"] shouldBe "member"
             real.foreignKeys["subject_member_id"] shouldBe "member"
             real.foreignKeys["request_id"] shouldBe "erasure_request"
-            entity.attributeByName("actor_member_id")?.foreignKey shouldBe null
-            entity.attributeByName("subject_member_id")?.foreignKey shouldBe null
-            entity.attributeByName("request_id")?.foreignKey shouldBe null
+            entityNameOf(entity.attributeByName("actor_member_id")?.foreignKey?.targetEntityId) shouldBe "member"
+            entityNameOf(entity.attributeByName("subject_member_id")?.foreignKey?.targetEntityId) shouldBe "member"
+            entityNameOf(entity.attributeByName("request_id")?.foreignKey?.targetEntityId) shouldBe "erasure_request"
         }
 
         // ── (2) Model vs. hand-written Exposed Table objects ────────────────────
@@ -108,11 +112,16 @@ class DsgvoSchemaDriftTest :
             val mode = model.entities.single { it.name == "erasure_request" }.attributeByName("mode")
             val status = model.entities.single { it.name == "erasure_request" }.attributeByName("status")
             mode?.type shouldBe
-                ErmDataType.Enum(name = "ErasureMode", values = listOf("ANONYMIZE", "HARD_DELETE_WHERE_UNCONSTRAINED"))
+                ErmDataType.Enum(
+                    name = "ErasureMode",
+                    values = listOf("ANONYMIZE", "HARD_DELETE_WHERE_UNCONSTRAINED"),
+                    externalFqName = "network.lapis.cloud.shared.domain.ErasureMode",
+                )
             status?.type shouldBe
                 ErmDataType.Enum(
                     name = "ErasureStatus",
                     values = listOf("REQUESTED", "APPROVED", "REJECTED", "COMPLETED"),
+                    externalFqName = "network.lapis.cloud.shared.domain.ErasureStatus",
                 )
         }
 
@@ -122,7 +131,11 @@ class DsgvoSchemaDriftTest :
             val actorRole = model.entities.single { it.name == "dsgvo_audit_log" }.attributeByName("actor_role")
             val action = model.entities.single { it.name == "dsgvo_audit_log" }.attributeByName("action")
             actorRole?.type shouldBe
-                ErmDataType.Enum(name = "AccountRole", values = listOf("MEMBER", "BOARD", "TREASURER", "ADMIN"))
+                ErmDataType.Enum(
+                    name = "AccountRole",
+                    values = listOf("MEMBER", "BOARD", "TREASURER", "ADMIN"),
+                    externalFqName = "network.lapis.cloud.shared.domain.AccountRole",
+                )
             action?.type shouldBe
                 ErmDataType.Enum(
                     name = "DsgvoAuditAction",
@@ -134,6 +147,7 @@ class DsgvoSchemaDriftTest :
                             "ERASURE_REJECTED",
                             "ERASURE_EXECUTED",
                         ),
+                    externalFqName = "network.lapis.cloud.shared.domain.DsgvoAuditAction",
                 )
         }
 
@@ -141,15 +155,13 @@ class DsgvoSchemaDriftTest :
             // JSON-encoded-as-string, not an unsupported-json-type workaround — see the .kuml.kts
             // file header comment. Both real columns are plain VARCHAR(4000) with no JSON-specific
             // DB feature (no CHECK, no native JSON column type). The explicit «Column».sqlType
-            // override is parsed by UmlErmTypeMapper.mapOverride, which — since
-            // "varchar(4000)" isn't the bare "varchar" keyword its vocabulary recognises — falls
-            // through to ErmDataType.Custom holding the raw override string verbatim (same
-            // mechanism as the enum-fidelity sqlType overrides above, just without a checkExpression
-            // since there's no enumDef for a plain String attribute).
+            // override is parsed by UmlErmTypeMapper.mapOverride's VARCHAR(n) regex into
+            // ErmDataType.Varchar(4000), pinning the correct length instead of the bare "varchar"
+            // keyword's default of 255.
             val erasureOutcome = model.entities.single { it.name == "erasure_request" }.attributeByName("outcome_summary")
             val auditOutcome = model.entities.single { it.name == "dsgvo_audit_log" }.attributeByName("outcome_summary")
-            erasureOutcome?.type shouldBe ErmDataType.Custom("VARCHAR(4000)")
-            auditOutcome?.type shouldBe ErmDataType.Custom("VARCHAR(4000)")
+            erasureOutcome?.type shouldBe ErmDataType.Varchar(4000)
+            auditOutcome?.type shouldBe ErmDataType.Varchar(4000)
         }
     })
 

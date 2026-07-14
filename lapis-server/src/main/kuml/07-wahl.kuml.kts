@@ -187,7 +187,7 @@ classDiagram(name = "Wahl") {
             stereotype("Column") { "columnName" to "title"; "sqlType" to "VARCHAR(300)" }
         }
         attribute(name = "wahlTyp", type = wahlTyp) {
-            stereotype("Column") { "columnName" to "wahl_typ" }
+            stereotype("Column") { "columnName" to "wahl_typ"; "enumType" to "network.lapis.cloud.shared.domain.WahlTyp" }
         }
         attribute(name = "geheim", type = "Boolean") {
             stereotype("Column") { "columnName" to "geheim" }
@@ -199,22 +199,22 @@ classDiagram(name = "Wahl") {
         // naming would derive "gremium_id", not the real schema's "ziel_gremium_id".
         attribute(name = "zielGremiumId", type = "UUID") {
             multiplicity = Multiplicity(0, 1)
-            stereotype("Column") { "columnName" to "ziel_gremium_id" }
+            stereotype("Column") { "columnName" to "ziel_gremium_id"; "fkEntity" to "Gremium" }
         }
         attribute(name = "zielRolle", type = gremiumRolle) {
             multiplicity = Multiplicity(0, 1)
-            stereotype("Column") { "columnName" to "ziel_rolle" }
+            stereotype("Column") { "columnName" to "ziel_rolle"; "enumType" to "network.lapis.cloud.shared.domain.GremiumRolle" }
         }
         attribute(name = "requiredMajorityPercent", type = "Int") {
             stereotype("Column") { "columnName" to "required_majority_percent" }
         }
         attribute(name = "status", type = wahlStatus) {
-            stereotype("Column") { "columnName" to "status" }
+            stereotype("Column") { "columnName" to "status"; "enumType" to "network.lapis.cloud.shared.domain.WahlStatus" }
         }
         // Real FK -> member (id), NOT NULL. Plain «Column» UUID attribute — association-to-FK
         // naming would derive "member_id", not the real schema's "opened_by".
         attribute(name = "openedBy", type = "UUID") {
-            stereotype("Column") { "columnName" to "opened_by" }
+            stereotype("Column") { "columnName" to "opened_by"; "fkEntity" to "Member" }
         }
         attribute(name = "openedAt", type = "LocalDateTime") {
             stereotype("Column") { "columnName" to "opened_at" }
@@ -312,7 +312,7 @@ classDiagram(name = "Wahl") {
         // "kandidatur_id".
         attribute(name = "kandidaturId", type = "UUID") {
             multiplicity = Multiplicity(0, 1)
-            stereotype("Column") { "columnName" to "kandidatur_id" }
+            stereotype("Column") { "columnName" to "kandidatur_id"; "fkEntity" to "WahlKandidatur" }
         }
     }
 
@@ -461,13 +461,13 @@ classDiagram(name = "Wahl") {
         // association-to-FK naming would derive "wahl_stimmzettel_id", not the real schema's
         // "stimmzettel_id".
         attribute(name = "stimmzettelId", type = "UUID") {
-            stereotype("Column") { "columnName" to "stimmzettel_id" }
+            stereotype("Column") { "columnName" to "stimmzettel_id"; "fkEntity" to "WahlStimmzettel" }
         }
         // Real FK -> wahl_option (id), NOT NULL. Plain «Column» UUID attribute —
         // association-to-FK naming would derive "wahl_option_id", not the real schema's
         // "option_id".
         attribute(name = "optionId", type = "UUID") {
-            stereotype("Column") { "columnName" to "option_id" }
+            stereotype("Column") { "columnName" to "option_id"; "fkEntity" to "WahlOption" }
         }
     }
 }

@@ -3,8 +3,8 @@ package network.lapis.cloud.server.dsgvo
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
-import network.lapis.cloud.server.db.tables.DocumentTable
-import network.lapis.cloud.server.db.tables.DocumentVersionTable
+import network.lapis.cloud.server.db.generated.DocumentTable
+import network.lapis.cloud.server.db.generated.DocumentVersionTable
 import network.lapis.cloud.shared.domain.ErasureMode
 import org.jetbrains.exposed.v1.core.eq
 import org.jetbrains.exposed.v1.jdbc.selectAll
