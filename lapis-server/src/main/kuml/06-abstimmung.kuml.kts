@@ -56,12 +56,6 @@
 // max), modelled with an explicit «Column».sqlType="VARCHAR(30)" override — same
 // mechanism/rationale as every prior domain's enum columns (real V8 schema has a plain VARCHAR(30)
 // column, no CHECK constraint).
-//
-// abstimmung_stimme's composite UNIQUE constraint (uq_abstimmung_stimme_member, UNIQUE
-// (abstimmung_id, member_id)) has no kUML ERM-profile equivalent (only single-column
-// «Column».unique exists) — same accepted-gap class as contribution/document/communication/
-// governance's own composite UNIQUE constraints, pinned explicitly in AbstimmungSchemaDriftTest
-// rather than silently ignored.
 import dev.kuml.profile.erm.ermMappingProfile
 import dev.kuml.uml.Multiplicity
 import dev.kuml.uml.dsl.applyProfile
@@ -118,6 +112,8 @@ classDiagram(name = "Abstimmung") {
 
     val abstimmung = classOf(name = "Abstimmung") {
         stereotype("Entity") { "tableName" to "abstimmung"; "kotlinObjectName" to "AbstimmungTable" }
+        stereotype("Index") { "columns" to listOf("antrag_id"); "name" to "idx_abstimmung_antrag" }
+        stereotype("Index") { "columns" to listOf("status"); "name" to "idx_abstimmung_status" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -174,6 +170,7 @@ classDiagram(name = "Abstimmung") {
 
     val abstimmungOption = classOf(name = "AbstimmungOption") {
         stereotype("Entity") { "tableName" to "abstimmung_option"; "kotlinObjectName" to "AbstimmungOptionTable" }
+        stereotype("Index") { "columns" to listOf("abstimmung_id"); "name" to "idx_abstimmung_option_abstimmung" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -195,6 +192,13 @@ classDiagram(name = "Abstimmung") {
 
     val abstimmungStimme = classOf(name = "AbstimmungStimme") {
         stereotype("Entity") { "tableName" to "abstimmung_stimme"; "kotlinObjectName" to "AbstimmungStimmeTable" }
+        stereotype("Index") {
+            "columns" to listOf("abstimmung_id", "member_id")
+            "unique" to true
+            "name" to "uq_abstimmung_stimme_member"
+        }
+        stereotype("Index") { "columns" to listOf("abstimmung_id"); "name" to "idx_abstimmung_stimme_abstimmung" }
+        stereotype("Index") { "columns" to listOf("member_id"); "name" to "idx_abstimmung_stimme_member" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")

@@ -80,13 +80,6 @@
 // wahl.ziel_rolle — kUML has no cross-file model-import (confirmed by every prior domain's own
 // enum re-declarations), so the enum literal set is duplicated here too, exactly like the
 // entity-stub pattern for shared entities.
-//
-// Composite UNIQUE gaps (no kUML ERM-profile equivalent — only single-column «Column».unique
-// exists), pinned explicitly in WahlSchemaDriftTest rather than silently ignored, same accepted-
-// gap class as contribution/document/communication/governance/abstimmung's own composite uniques:
-// uq_wahl_wahlvorstand_member (wahl_id, member_id), uq_wahl_wahlberechtigt_member
-// (wahl_id, member_id), uq_wahl_teilnahme_member (wahl_id, member_id), uq_wahl_freigabe_member
-// (wahl_id, member_id), uq_wahl_stimmzettel_member (wahl_id, member_id).
 import dev.kuml.profile.erm.ermMappingProfile
 import dev.kuml.uml.Multiplicity
 import dev.kuml.uml.dsl.applyProfile
@@ -178,6 +171,9 @@ classDiagram(name = "Wahl") {
 
     val wahl = classOf(name = "Wahl") {
         stereotype("Entity") { "tableName" to "wahl"; "kotlinObjectName" to "WahlTable" }
+        stereotype("Index") { "columns" to listOf("antrag_id"); "name" to "idx_wahl_antrag" }
+        stereotype("Index") { "columns" to listOf("sitzung_id"); "name" to "idx_wahl_sitzung" }
+        stereotype("Index") { "columns" to listOf("status"); "name" to "idx_wahl_status" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -263,6 +259,8 @@ classDiagram(name = "Wahl") {
     // wahl_option.kandidatur_id references it.
     val wahlKandidatur = classOf(name = "WahlKandidatur") {
         stereotype("Entity") { "tableName" to "wahl_kandidatur"; "kotlinObjectName" to "WahlKandidaturTable" }
+        stereotype("Index") { "columns" to listOf("wahl_id"); "name" to "idx_wahl_kandidatur_wahl" }
+        stereotype("Index") { "columns" to listOf("member_id"); "name" to "idx_wahl_kandidatur_member" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -296,6 +294,7 @@ classDiagram(name = "Wahl") {
 
     val wahlOption = classOf(name = "WahlOption") {
         stereotype("Entity") { "tableName" to "wahl_option"; "kotlinObjectName" to "WahlOptionTable" }
+        stereotype("Index") { "columns" to listOf("wahl_id"); "name" to "idx_wahl_option_wahl" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -324,6 +323,12 @@ classDiagram(name = "Wahl") {
 
     val wahlWahlvorstand = classOf(name = "WahlWahlvorstand") {
         stereotype("Entity") { "tableName" to "wahl_wahlvorstand"; "kotlinObjectName" to "WahlWahlvorstandTable" }
+        stereotype("Index") {
+            "columns" to listOf("wahl_id", "member_id")
+            "unique" to true
+            "name" to "uq_wahl_wahlvorstand_member"
+        }
+        stereotype("Index") { "columns" to listOf("wahl_id"); "name" to "idx_wahl_wahlvorstand_wahl" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -349,6 +354,12 @@ classDiagram(name = "Wahl") {
 
     val wahlWahlberechtigt = classOf(name = "WahlWahlberechtigt") {
         stereotype("Entity") { "tableName" to "wahl_wahlberechtigt"; "kotlinObjectName" to "WahlWahlberechtigtTable" }
+        stereotype("Index") {
+            "columns" to listOf("wahl_id", "member_id")
+            "unique" to true
+            "name" to "uq_wahl_wahlberechtigt_member"
+        }
+        stereotype("Index") { "columns" to listOf("wahl_id"); "name" to "idx_wahl_wahlberechtigt_wahl" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -371,6 +382,12 @@ classDiagram(name = "Wahl") {
 
     val wahlTeilnahme = classOf(name = "WahlTeilnahme") {
         stereotype("Entity") { "tableName" to "wahl_teilnahme"; "kotlinObjectName" to "WahlTeilnahmeTable" }
+        stereotype("Index") {
+            "columns" to listOf("wahl_id", "member_id")
+            "unique" to true
+            "name" to "uq_wahl_teilnahme_member"
+        }
+        stereotype("Index") { "columns" to listOf("wahl_id"); "name" to "idx_wahl_teilnahme_wahl" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -396,6 +413,12 @@ classDiagram(name = "Wahl") {
 
     val wahlFreigabe = classOf(name = "WahlFreigabe") {
         stereotype("Entity") { "tableName" to "wahl_freigabe"; "kotlinObjectName" to "WahlFreigabeTable" }
+        stereotype("Index") {
+            "columns" to listOf("wahl_id", "member_id")
+            "unique" to true
+            "name" to "uq_wahl_freigabe_member"
+        }
+        stereotype("Index") { "columns" to listOf("wahl_id"); "name" to "idx_wahl_freigabe_wahl" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -424,6 +447,12 @@ classDiagram(name = "Wahl") {
     // schema reader could "fix" by mistake (most other member_id FKs in this domain are NOT NULL).
     val wahlStimmzettel = classOf(name = "WahlStimmzettel") {
         stereotype("Entity") { "tableName" to "wahl_stimmzettel"; "kotlinObjectName" to "WahlStimmzettelTable" }
+        stereotype("Index") {
+            "columns" to listOf("wahl_id", "member_id")
+            "unique" to true
+            "name" to "uq_wahl_stimmzettel_member"
+        }
+        stereotype("Index") { "columns" to listOf("wahl_id"); "name" to "idx_wahl_stimmzettel_wahl" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -452,6 +481,11 @@ classDiagram(name = "Wahl") {
 
     val wahlStimmzettelAuswahl = classOf(name = "WahlStimmzettelAuswahl") {
         stereotype("Entity") { "tableName" to "wahl_stimmzettel_auswahl"; "kotlinObjectName" to "WahlStimmzettelAuswahlTable" }
+        stereotype("Index") {
+            "columns" to listOf("stimmzettel_id")
+            "name" to "idx_wahl_stimmzettel_auswahl_stimmzettel"
+        }
+        stereotype("Index") { "columns" to listOf("option_id"); "name" to "idx_wahl_stimmzettel_auswahl_option" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")

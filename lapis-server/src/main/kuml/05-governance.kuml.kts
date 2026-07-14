@@ -64,7 +64,14 @@
 // wahl domains' OWN scripts (06-abstimmung.kuml.kts / 07-wahl.kuml.kts, later waves) declare the
 // real «FK» association from their side instead (Abstimmung.beschlussId -> Beschluss,
 // Wahl.beschlussId -> Beschluss), which is a clean forward reference with no cycle problem in
-// that direction since Beschluss already exists (as a stub) by then.
+// that direction since Beschluss already exists (as a stub) by then. Left as plain columns rather
+// than pinned via «Column».fkEntity for the same reason as document.current_version_id: the real
+// risk is genuine bidirectional Kotlin `object`-initializer circularity at the Exposed layer
+// (beschluss <-> abstimmung and beschluss <-> wahl are both truly bidirectional), which
+// «Column».fkEntity's later-pass resolution sidesteps at the script-evaluation level but not at
+// the generated-Kotlin level. Consequence: the generated SQL/Flyway baseline also lacks these two
+// FK constraints (present in the pre-swap hand-written V6/V8/V9 migrations) — a deliberate,
+// pre-existing trade-off, not a new regression.
 //
 // Eight enum columns in this domain, all modelled with explicit «Column».sqlType overrides (same
 // mechanism/rationale as every prior domain's enum columns — real V6/V7 schema has plain VARCHAR
@@ -190,6 +197,8 @@ classDiagram(name = "Governance") {
 
     val gremiumMitgliedschaft = classOf(name = "GremiumMitgliedschaft") {
         stereotype("Entity") { "tableName" to "gremium_mitgliedschaft"; "kotlinObjectName" to "GremiumMitgliedschaftTable" }
+        stereotype("Index") { "columns" to listOf("gremium_id"); "name" to "idx_gremium_mitgliedschaft_gremium" }
+        stereotype("Index") { "columns" to listOf("member_id"); "name" to "idx_gremium_mitgliedschaft_member" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -221,6 +230,7 @@ classDiagram(name = "Governance") {
 
     val sitzung = classOf(name = "Sitzung") {
         stereotype("Entity") { "tableName" to "sitzung"; "kotlinObjectName" to "SitzungTable" }
+        stereotype("Index") { "columns" to listOf("gremium_id"); "name" to "idx_sitzung_gremium" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -286,6 +296,12 @@ classDiagram(name = "Governance") {
 
     val tagesordnungspunkt = classOf(name = "Tagesordnungspunkt") {
         stereotype("Entity") { "tableName" to "tagesordnungspunkt"; "kotlinObjectName" to "TagesordnungspunktTable" }
+        stereotype("Index") {
+            "columns" to listOf("sitzung_id", "position")
+            "unique" to true
+            "name" to "uq_tagesordnungspunkt_position"
+        }
+        stereotype("Index") { "columns" to listOf("sitzung_id"); "name" to "idx_tagesordnungspunkt_sitzung" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -319,6 +335,12 @@ classDiagram(name = "Governance") {
 
     val anwesenheit = classOf(name = "Anwesenheit") {
         stereotype("Entity") { "tableName" to "anwesenheit"; "kotlinObjectName" to "AnwesenheitTable" }
+        stereotype("Index") {
+            "columns" to listOf("sitzung_id", "member_id")
+            "unique" to true
+            "name" to "uq_anwesenheit_member"
+        }
+        stereotype("Index") { "columns" to listOf("sitzung_id"); "name" to "idx_anwesenheit_sitzung" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -360,6 +382,7 @@ classDiagram(name = "Governance") {
 
     val beschluss = classOf(name = "Beschluss") {
         stereotype("Entity") { "tableName" to "beschluss"; "kotlinObjectName" to "BeschlussTable" }
+        stereotype("Index") { "columns" to listOf("sitzung_id"); "name" to "idx_beschluss_sitzung" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -434,6 +457,10 @@ classDiagram(name = "Governance") {
 
     val antrag = classOf(name = "Antrag") {
         stereotype("Entity") { "tableName" to "antrag"; "kotlinObjectName" to "AntragTable" }
+        stereotype("Index") { "columns" to listOf("target_gremium_id"); "name" to "idx_antrag_target_gremium" }
+        stereotype("Index") { "columns" to listOf("status"); "name" to "idx_antrag_status" }
+        stereotype("Index") { "columns" to listOf("submitter_member_id"); "name" to "idx_antrag_submitter" }
+        stereotype("Index") { "columns" to listOf("sitzung_id"); "name" to "idx_antrag_sitzung" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")

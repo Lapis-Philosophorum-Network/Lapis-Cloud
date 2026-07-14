@@ -57,11 +57,6 @@
 // explicit «Column».sqlType overrides (VARCHAR(20) / VARCHAR(30) respectively), same
 // mechanism/rationale as member.status / account.role / document.access_level in the prior
 // domains (real V4__communication.sql has plain VARCHAR columns, no CHECK constraints).
-//
-// Known, accepted gap (pinned in CommunicationSchemaDriftTest rather than silently dropped):
-// mailing_list_subscription's composite UNIQUE (mailing_list_id, member_id)
-// (uq_mailing_subscription_list_member in V4__communication.sql) has no kUML ERM-profile
-// equivalent — same accepted gap as contribution's/document's composite UNIQUE constraints.
 import dev.kuml.profile.erm.ermMappingProfile
 import dev.kuml.uml.Multiplicity
 import dev.kuml.uml.dsl.applyProfile
@@ -118,6 +113,12 @@ classDiagram(name = "Communication") {
 
     val mailingListSubscription = classOf(name = "MailingListSubscription") {
         stereotype("Entity") { "tableName" to "mailing_list_subscription"; "kotlinObjectName" to "MailingListSubscriptionTable" }
+        stereotype("Index") {
+            "columns" to listOf("mailing_list_id", "member_id")
+            "unique" to true
+            "name" to "uq_mailing_subscription_list_member"
+        }
+        stereotype("Index") { "columns" to listOf("mailing_list_id"); "name" to "idx_mailing_subscription_list" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -149,6 +150,7 @@ classDiagram(name = "Communication") {
 
     val mailingMessage = classOf(name = "MailingMessage") {
         stereotype("Entity") { "tableName" to "mailing_message"; "kotlinObjectName" to "MailingMessageTable" }
+        stereotype("Index") { "columns" to listOf("mailing_list_id"); "name" to "idx_mailing_message_list" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -213,6 +215,8 @@ classDiagram(name = "Communication") {
 
     val directMessage = classOf(name = "DirectMessage") {
         stereotype("Entity") { "tableName" to "direct_message"; "kotlinObjectName" to "DirectMessageTable" }
+        stereotype("Index") { "columns" to listOf("recipient_id"); "name" to "idx_direct_message_recipient" }
+        stereotype("Index") { "columns" to listOf("sender_id"); "name" to "idx_direct_message_sender" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")

@@ -15,12 +15,20 @@
 // established by contribution's own Member stub.
 //
 // Two self/circular-reference cases (both explicitly called out in the retrofit plan and both
-// already handled identically by the hand-written DocumentTables.kt — see its own comments):
+// already handled identically by the hand-written DocumentTables.kt — see its own comments).
+// Both COULD now be pinned via «Column».fkEntity (which resolves in a pass after every entity
+// exists, so it has no script-declaration-order problem), but are deliberately left as plain
+// columns: the real risk isn't script-declaration order, it's genuine bidirectional Kotlin
+// `object`-initializer circularity at the Exposed layer if both tables end up referencing each
+// other's columns — the same reason the original hand-written DocumentTables.kt never declared
+// these either. Since the SQL/Flyway baseline is now generated from this same model, both real
+// FK constraints (present in the pre-swap hand-written V3__documents.sql) are consequently absent
+// from the generated baseline too — a deliberate, pre-existing trade-off, not a new regression.
 //  - document_folder.parent_folder_id is genuinely self-referential. UmlToErmTransformer
 //    explicitly skips self-referential UML associations ("cosmetic only, out of V3.4.6 scope"),
 //    so this is modelled as a plain nullable UUID «Column» attribute, not a UML association —
 //    exactly matching the hand-written table's own behaviour (no .references() on this column
-//    at the Exposed layer either; the real FK constraint lives only in the raw V3 SQL).
+//    at the Exposed layer either).
 //  - document.current_version_id is nullable with NO FK at the Exposed layer specifically to
 //    avoid a circular reference at DSL-declaration time (document <-> document_version). Modelled
 //    here as a plain nullable UUID «Column» attribute (not an association) for the same reason —
@@ -102,6 +110,7 @@ classDiagram(name = "Document") {
 
     val document = classOf(name = "Document") {
         stereotype("Entity") { "tableName" to "document"; "kotlinObjectName" to "DocumentTable" }
+        stereotype("Index") { "columns" to listOf("folder_id"); "name" to "idx_document_folder" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -144,6 +153,12 @@ classDiagram(name = "Document") {
 
     val documentVersion = classOf(name = "DocumentVersion") {
         stereotype("Entity") { "tableName" to "document_version"; "kotlinObjectName" to "DocumentVersionTable" }
+        stereotype("Index") {
+            "columns" to listOf("document_id", "version_number")
+            "unique" to true
+            "name" to "uq_document_version_number"
+        }
+        stereotype("Index") { "columns" to listOf("document_id"); "name" to "idx_document_version_document" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")

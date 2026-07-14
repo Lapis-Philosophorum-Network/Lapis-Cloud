@@ -126,15 +126,23 @@ class AbstimmungSchemaDriftTest :
             model.entityNameOf(entity.attributeByName("option_id")?.foreignKey?.targetEntityId ?: "") shouldBe "abstimmung_option"
         }
 
-        test("abstimmung_stimme's composite UNIQUE constraint has no kUML ERM equivalent (accepted gap, pinned)") {
-            // uq_abstimmung_stimme_member UNIQUE (abstimmung_id, member_id) — same accepted gap as
-            // contribution's/document's/communication's/governance's own composite UNIQUE
-            // constraints. ErmProfileNames' «Column».unique tag is single-column only.
+        test("abstimmung_stimme's composite UNIQUE constraint is pinned via a class-level «Index»") {
+            // uq_abstimmung_stimme_member UNIQUE (abstimmung_id, member_id) — pinned via a
+            // class-level «Index» (composite, unique=true), same mechanism as contribution's/
+            // document's/communication's/governance's own composite UNIQUE constraints.
             val entity = model.entities.single { it.name == "abstimmung_stimme" }
             val real = transaction { introspectAbstimmungTable("abstimmung_stimme") }
 
             real.compositeUniqueConstraints shouldContainExactlyInAnyOrder listOf(setOf("abstimmung_id", "member_id"))
             entity.attributes.none { it.unique } shouldBe true
+            entity.indexes.single { it.name == "uq_abstimmung_stimme_member" }.let {
+                it.unique shouldBe true
+                it.attributeIds.toSet() shouldBe
+                    setOf(
+                        entity.attributeByName("abstimmung_id")!!.id,
+                        entity.attributeByName("member_id")!!.id,
+                    )
+            }
         }
 
         // ── (2) Model vs. hand-written Exposed Table objects ────────────────────
@@ -228,20 +236,29 @@ private fun JdbcTransaction.introspectAbstimmungTable(tableName: String): Intros
         }
     }
 
+    // Detects both inline CONSTRAINT ... UNIQUE and standalone CREATE UNIQUE INDEX (generated via
+    // a class-level «Index») — H2's information_schema.table_constraints only surfaces the
+    // former, never a plain named unique index, so both sources are unioned.
     val uniqueColumnsByConstraint = mutableMapOf<String, MutableSet<String>>()
     exec(
         """
-        SELECT tc.constraint_name, kcu.column_name
+        SELECT tc.constraint_name AS name, kcu.column_name
         FROM information_schema.table_constraints tc
         JOIN information_schema.key_column_usage kcu
             ON tc.constraint_name = kcu.constraint_name
             AND tc.table_schema = kcu.table_schema
         WHERE tc.constraint_type = 'UNIQUE' AND tc.table_name = '$tableName'
+        UNION
+        SELECT i.index_name AS name, ic.column_name
+        FROM information_schema.index_columns ic
+        JOIN information_schema.indexes i
+            ON ic.index_name = i.index_name AND ic.table_name = i.table_name
+        WHERE i.index_type_name = 'UNIQUE INDEX' AND ic.table_name = '$tableName'
         """.trimIndent(),
     ) { rs ->
         while (rs.next()) {
             uniqueColumnsByConstraint
-                .getOrPut(rs.getString("constraint_name")) { mutableSetOf() }
+                .getOrPut(rs.getString("name")) { mutableSetOf() }
                 .add(rs.getString("column_name"))
         }
     }

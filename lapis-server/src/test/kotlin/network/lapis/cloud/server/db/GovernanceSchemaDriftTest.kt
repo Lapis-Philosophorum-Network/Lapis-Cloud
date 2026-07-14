@@ -156,14 +156,23 @@ class GovernanceSchemaDriftTest :
             model.entityNameOf(entity.attributeByName("presenter_member_id")?.foreignKey?.targetEntityId ?: "") shouldBe "member"
         }
 
-        test("tagesordnungspunkt's composite UNIQUE constraint has no kUML ERM equivalent (accepted gap, pinned)") {
-            // uq_tagesordnungspunkt_position UNIQUE (sitzung_id, position) — same accepted gap as
-            // contribution's/document's/communication's own composite UNIQUE constraints.
+        test("tagesordnungspunkt's composite UNIQUE constraint is pinned via a class-level «Index»") {
+            // uq_tagesordnungspunkt_position UNIQUE (sitzung_id, position) — pinned via a
+            // class-level «Index» (composite, unique=true), same mechanism as contribution's/
+            // document's/communication's own composite UNIQUE constraints.
             val real = transaction { introspectGovernanceTable("tagesordnungspunkt") }
             real.compositeUniqueConstraints shouldContainExactlyInAnyOrder listOf(setOf("sitzung_id", "position"))
 
             val entity = model.entities.single { it.name == "tagesordnungspunkt" }
             entity.attributes.none { it.unique } shouldBe true
+            entity.indexes.single { it.name == "uq_tagesordnungspunkt_position" }.let {
+                it.unique shouldBe true
+                it.attributeIds.toSet() shouldBe
+                    setOf(
+                        entity.attributeByName("sitzung_id")!!.id,
+                        entity.attributeByName("position")!!.id,
+                    )
+            }
         }
 
         test("anwesenheit table shape matches the real migrated schema") {
@@ -191,13 +200,22 @@ class GovernanceSchemaDriftTest :
             ) shouldBe "member"
         }
 
-        test("anwesenheit's composite UNIQUE constraint has no kUML ERM equivalent (accepted gap, pinned)") {
-            // uq_anwesenheit_member UNIQUE (sitzung_id, member_id).
+        test("anwesenheit's composite UNIQUE constraint is pinned via a class-level «Index»") {
+            // uq_anwesenheit_member UNIQUE (sitzung_id, member_id) — pinned via a class-level
+            // «Index» (composite, unique=true).
             val real = transaction { introspectGovernanceTable("anwesenheit") }
             real.compositeUniqueConstraints shouldContainExactlyInAnyOrder listOf(setOf("sitzung_id", "member_id"))
 
             val entity = model.entities.single { it.name == "anwesenheit" }
             entity.attributes.none { it.unique } shouldBe true
+            entity.indexes.single { it.name == "uq_anwesenheit_member" }.let {
+                it.unique shouldBe true
+                it.attributeIds.toSet() shouldBe
+                    setOf(
+                        entity.attributeByName("sitzung_id")!!.id,
+                        entity.attributeByName("member_id")!!.id,
+                    )
+            }
         }
 
         test("beschluss table shape matches the real migrated schema") {
@@ -223,12 +241,16 @@ class GovernanceSchemaDriftTest :
             real.foreignKeys["recorded_by"] shouldBe "member"
             model.entityNameOf(entity.attributeByName("recorded_by")?.foreignKey?.targetEntityId ?: "") shouldBe "member"
 
-            // abstimmung_id / wahl_id: real FKs into tables that don't exist in this domain's own
-            // script (forward references into the later abstimmung/wahl waves) — modelled as
-            // plain nullable UUID «Column» attributes, exactly like document.current_version_id's
-            // circular-reference workaround. No FK wiring possible or expected here.
-            real.foreignKeys["abstimmung_id"] shouldBe "abstimmung"
-            real.foreignKeys["wahl_id"] shouldBe "wahl"
+            // abstimmung_id / wahl_id: forward references into the later abstimmung/wahl waves,
+            // modelled as plain nullable UUID «Column» attributes rather than pinned via
+            // «Column».fkEntity — beschluss<->abstimmung and beschluss<->wahl are both genuinely
+            // bidirectional, so the real risk is Kotlin `object`-initializer circularity at the
+            // Exposed layer, same reasoning as document.current_version_id. Since the SQL/Flyway
+            // baseline is now generated from this same model, the real schema (unlike the
+            // pre-swap hand-written V6/V8/V9 migrations) consequently has no FK here either — a
+            // deliberate, pre-existing trade-off, not a new regression.
+            real.foreignKeys["abstimmung_id"] shouldBe null
+            real.foreignKeys["wahl_id"] shouldBe null
             entity.attributeByName("abstimmung_id")?.foreignKey shouldBe null
             entity.attributeByName("wahl_id")?.foreignKey shouldBe null
         }
@@ -462,20 +484,29 @@ private fun JdbcTransaction.introspectGovernanceTable(tableName: String): Intros
         }
     }
 
+    // Detects both inline CONSTRAINT ... UNIQUE and standalone CREATE UNIQUE INDEX (generated via
+    // a class-level «Index») — H2's information_schema.table_constraints only surfaces the
+    // former, never a plain named unique index, so both sources are unioned.
     val uniqueColumnsByConstraint = mutableMapOf<String, MutableSet<String>>()
     exec(
         """
-        SELECT tc.constraint_name, kcu.column_name
+        SELECT tc.constraint_name AS name, kcu.column_name
         FROM information_schema.table_constraints tc
         JOIN information_schema.key_column_usage kcu
             ON tc.constraint_name = kcu.constraint_name
             AND tc.table_schema = kcu.table_schema
         WHERE tc.constraint_type = 'UNIQUE' AND tc.table_name = '$tableName'
+        UNION
+        SELECT i.index_name AS name, ic.column_name
+        FROM information_schema.index_columns ic
+        JOIN information_schema.indexes i
+            ON ic.index_name = i.index_name AND ic.table_name = i.table_name
+        WHERE i.index_type_name = 'UNIQUE INDEX' AND ic.table_name = '$tableName'
         """.trimIndent(),
     ) { rs ->
         while (rs.next()) {
             uniqueColumnsByConstraint
-                .getOrPut(rs.getString("constraint_name")) { mutableSetOf() }
+                .getOrPut(rs.getString("name")) { mutableSetOf() }
                 .add(rs.getString("column_name"))
         }
     }

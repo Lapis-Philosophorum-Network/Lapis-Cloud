@@ -16,11 +16,6 @@
 // UmlToErmTransformer can resolve contribution.member_id's association target.
 //
 // Known, accepted gaps (see SchemaDriftTest for the pinned assertions):
-//  - contribution's composite UNIQUE (member_id, membership_tier_id, period_start, period_end)
-//    (uq_contribution_member_tier_period in V2__contributions.sql) has no kUML ERM-profile
-//    equivalent — «Column».unique only supports single-column uniqueness (TAG_UNIQUE is a
-//    boolTag on one attribute's «Column» stereotype; ErmProfileNames has no composite-unique-
-//    constraint tag at all). Documented and pinned as a gap rather than silently dropped.
 //  - membership_tier.active's `DEFAULT TRUE` and contribution.created_at's implicit
 //    application-supplied default are not modelled via defaultValue here (SchemaDriftTest,
 //    like foundation's, does not introspect column defaults — only name/nullable/FK shape) —
@@ -84,6 +79,14 @@ classDiagram(name = "Contribution") {
 
     val contribution = classOf(name = "Contribution") {
         stereotype("Entity") { "tableName" to "contribution"; "kotlinObjectName" to "ContributionTable" }
+        // Idempotenz-Garantie fuer generateContributionsForPeriod (see V2__contributions.sql).
+        stereotype("Index") {
+            "columns" to listOf("member_id", "membership_tier_id", "period_start", "period_end")
+            "unique" to true
+            "name" to "uq_contribution_member_tier_period"
+        }
+        stereotype("Index") { "columns" to listOf("member_id"); "name" to "idx_contribution_member" }
+        stereotype("Index") { "columns" to listOf("status"); "name" to "idx_contribution_status" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")

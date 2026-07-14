@@ -117,6 +117,8 @@ classDiagram(name = "Dsgvo") {
 
     val erasureRequest = classOf(name = "ErasureRequest") {
         stereotype("Entity") { "tableName" to "erasure_request"; "kotlinObjectName" to "ErasureRequestTable" }
+        stereotype("Index") { "columns" to listOf("subject_member_id"); "name" to "idx_erasure_request_subject" }
+        stereotype("Index") { "columns" to listOf("status"); "name" to "idx_erasure_request_status" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
@@ -176,6 +178,8 @@ classDiagram(name = "Dsgvo") {
 
     val dsgvoAuditLog = classOf(name = "DsgvoAuditLog") {
         stereotype("Entity") { "tableName" to "dsgvo_audit_log"; "kotlinObjectName" to "DsgvoAuditLogTable" }
+        stereotype("Index") { "columns" to listOf("subject_member_id"); "name" to "idx_dsgvo_audit_log_subject" }
+        stereotype("Index") { "columns" to listOf("request_id"); "name" to "idx_dsgvo_audit_log_request" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")

@@ -77,17 +77,17 @@ class SchemaDriftTest :
                 }
             }
             real.foreignKeys["member_id"] shouldBe "member"
-            // Known, accepted gap (see the .kuml.kts header comment): the real schema has
-            // member_id UNIQUE (1:1 association), but UmlToErmTransformer's association-to-FK
-            // rule always synthesizes unique=false — no «Column» stereotype is applicable to an
-            // association-derived attribute. Asserted explicitly here (not silently skipped) so
-            // a future kUML release that closes this gap trips this assertion and prompts
-            // re-tightening the model instead of the gap silently rotting further.
+            // The real schema has member_id UNIQUE (1:1 association). UmlToErmTransformer's
+            // association-to-FK rule always synthesizes unique=false on the attribute itself (no
+            // «Column» stereotype is applicable to an association-derived attribute) — pinned
+            // instead via a class-level «Index» (single-column, unique=true), which renders as a
+            // separate ErmIndex rather than ErmAttribute.unique.
             real.columns.getValue("member_id").unique shouldBe true
-            model.entities
-                .single { it.name == "account" }
-                .attributeByName("member_id")
-                ?.unique shouldBe false
+            entity.attributeByName("member_id")?.unique shouldBe false
+            entity.indexes.single { it.name == "uq_account_member_id" }.let {
+                it.unique shouldBe true
+                it.attributeIds shouldBe listOf(entity.attributeByName("member_id")!!.id)
+            }
         }
 
         // ── (2) Model vs. hand-written Exposed Table objects ────────────────────
@@ -184,6 +184,10 @@ private fun JdbcTransaction.introspectTable(tableName: String): IntrospectedTabl
         }
     }
 
+    // Detects both inline CONSTRAINT ... UNIQUE (e.g. member.email) and standalone CREATE UNIQUE
+    // INDEX (e.g. account's uq_account_member_id, generated via «Column».unique / «Index» —
+    // H2's information_schema.table_constraints only surfaces the former, never a plain named
+    // unique index, so both sources are unioned here.
     val uniqueColumns = mutableSetOf<String>()
     exec(
         """
@@ -193,6 +197,12 @@ private fun JdbcTransaction.introspectTable(tableName: String): IntrospectedTabl
             ON tc.constraint_name = kcu.constraint_name
             AND tc.table_schema = kcu.table_schema
         WHERE tc.constraint_type = 'UNIQUE' AND tc.table_name = '$tableName'
+        UNION
+        SELECT ic.column_name
+        FROM information_schema.index_columns ic
+        JOIN information_schema.indexes i
+            ON ic.index_name = i.index_name AND ic.table_name = i.table_name
+        WHERE i.index_type_name = 'UNIQUE INDEX' AND ic.table_name = '$tableName'
         """.trimIndent(),
     ) { rs ->
         while (rs.next()) {

@@ -65,20 +65,27 @@ class ContributionSchemaDriftTest :
             real.foreignKeys["membership_tier_id"] shouldBe "membership_tier"
         }
 
-        test("contribution's composite UNIQUE constraint has no kUML ERM equivalent (accepted gap, pinned)") {
+        test("contribution's composite UNIQUE constraint is pinned via a class-level «Index»") {
             // uq_contribution_member_tier_period UNIQUE (member_id, membership_tier_id,
-            // period_start, period_end) in V2__contributions.sql. ErmProfileNames' «Column».unique
-            // tag is single-column only — no composite-unique-constraint tag exists in the ERM
-            // mapping profile today. Pinned explicitly here (real=composite-unique present, model
-            // has no representation of it at all) rather than silently allowing drift, so a future
-            // kUML release adding composite-unique support is noticed and the model can be
-            // tightened.
+            // period_start, period_end) — «Column».unique is single-column only, so this is pinned
+            // via a class-level «Index» (composite, unique=true) instead, which renders as a named
+            // CREATE UNIQUE INDEX rather than ErmAttribute.unique.
             val real = transaction { introspectContributionTable("contribution") }
             real.compositeUniqueConstraints shouldContainExactlyInAnyOrder
                 listOf(setOf("member_id", "membership_tier_id", "period_start", "period_end"))
 
             val entity = model.entities.single { it.name == "contribution" }
             entity.attributes.none { it.unique } shouldBe true
+            entity.indexes.single { it.name == "uq_contribution_member_tier_period" }.let {
+                it.unique shouldBe true
+                it.attributeIds.toSet() shouldBe
+                    setOf(
+                        entity.attributeByName("member_id")!!.id,
+                        entity.attributeByName("membership_tier_id")!!.id,
+                        entity.attributeByName("period_start")!!.id,
+                        entity.attributeByName("period_end")!!.id,
+                    )
+            }
         }
 
         // ── (2) Model vs. hand-written Exposed Table objects ────────────────────
@@ -189,20 +196,30 @@ private fun JdbcTransaction.introspectContributionTable(tableName: String): Intr
         }
     }
 
+    // Detects both inline CONSTRAINT ... UNIQUE and standalone CREATE UNIQUE INDEX (e.g.
+    // uq_contribution_member_tier_period, generated via a class-level «Index») — H2's
+    // information_schema.table_constraints only surfaces the former, never a plain named unique
+    // index, so both sources are unioned (keyed by constraint/index name, no collision risk).
     val uniqueColumnsByConstraint = mutableMapOf<String, MutableSet<String>>()
     exec(
         """
-        SELECT tc.constraint_name, kcu.column_name
+        SELECT tc.constraint_name AS name, kcu.column_name
         FROM information_schema.table_constraints tc
         JOIN information_schema.key_column_usage kcu
             ON tc.constraint_name = kcu.constraint_name
             AND tc.table_schema = kcu.table_schema
         WHERE tc.constraint_type = 'UNIQUE' AND tc.table_name = '$tableName'
+        UNION
+        SELECT i.index_name AS name, ic.column_name
+        FROM information_schema.index_columns ic
+        JOIN information_schema.indexes i
+            ON ic.index_name = i.index_name AND ic.table_name = i.table_name
+        WHERE i.index_type_name = 'UNIQUE INDEX' AND ic.table_name = '$tableName'
         """.trimIndent(),
     ) { rs ->
         while (rs.next()) {
             uniqueColumnsByConstraint
-                .getOrPut(rs.getString("constraint_name")) { mutableSetOf() }
+                .getOrPut(rs.getString("name")) { mutableSetOf() }
                 .add(rs.getString("column_name"))
         }
     }

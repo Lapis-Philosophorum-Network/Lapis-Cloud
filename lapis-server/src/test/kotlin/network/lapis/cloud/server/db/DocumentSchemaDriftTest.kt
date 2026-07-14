@@ -58,12 +58,16 @@ class DocumentSchemaDriftTest :
                     col.nullable shouldBe attr.nullable
                 }
             }
-            // parent_folder_id is a genuinely self-referential FK in the real schema (REFERENCES
-            // document_folder (id)) — UmlToErmTransformer skips self-referential UML associations,
-            // so the model has no FK representation for it at all (plain «Column» attribute, same
-            // as the hand-written DocumentFolderTable, which also declares no .references() on
-            // this column). Pinned explicitly rather than silently allowed to drift.
-            real.foreignKeys["parent_folder_id"] shouldBe "document_folder"
+            // parent_folder_id is a genuinely self-referential FK. UmlToErmTransformer skips
+            // self-referential UML associations, and it's deliberately left as a plain «Column»
+            // attribute rather than pinned via «Column».fkEntity (which could technically resolve
+            // it) — the real risk is Kotlin `object`-initializer circularity at the Exposed layer,
+            // same as the hand-written DocumentFolderTable's own choice. Since the SQL/Flyway
+            // baseline is now generated from this same model, the real schema (unlike the
+            // pre-swap hand-written V3__documents.sql) consequently has no FK here either — a
+            // deliberate, pre-existing trade-off, not a new regression. Pinned explicitly rather
+            // than silently allowed to drift.
+            real.foreignKeys["parent_folder_id"] shouldBe null
             model.entities
                 .single { it.name == "document_folder" }
                 .attributeByName("parent_folder_id")
@@ -104,12 +108,15 @@ class DocumentSchemaDriftTest :
                     ?.foreignKey
                     ?.targetEntityId,
             ) shouldBe "member"
-            // current_version_id has a real FK in the migrated schema (added via a second ALTER
-            // TABLE after both tables exist, fk_document_current_version) but deliberately no FK
-            // at the Exposed layer (avoids a document <-> document_version circular reference at
-            // DSL-declaration time) — modelled here as a plain «Column» attribute, matching the
-            // hand-written DocumentTable. Pinned explicitly rather than silently allowed to drift.
-            real.foreignKeys["current_version_id"] shouldBe "document_version"
+            // current_version_id deliberately has no FK at the Exposed layer (avoids a document
+            // <-> document_version circular Kotlin `object`-initializer reference) — modelled here
+            // as a plain «Column» attribute, matching the hand-written DocumentTable's own choice.
+            // The pre-swap hand-written V3__documents.sql still had a real FK here (added via a
+            // second ALTER TABLE after both tables existed, fk_document_current_version), but
+            // since the SQL/Flyway baseline is now generated from this same model, the real schema
+            // consequently lacks it too — a deliberate, pre-existing trade-off, not a new
+            // regression. Pinned explicitly rather than silently allowed to drift.
+            real.foreignKeys["current_version_id"] shouldBe null
             model.entities
                 .single { it.name == "document" }
                 .attributeByName("current_version_id")
@@ -143,18 +150,25 @@ class DocumentSchemaDriftTest :
             ) shouldBe "member"
         }
 
-        test("document_version's composite UNIQUE constraint has no kUML ERM equivalent (accepted gap, pinned)") {
-            // uq_document_version_number UNIQUE (document_id, version_number) in
-            // V3__documents.sql. Same accepted gap as contribution's
-            // uq_contribution_member_tier_period (see ContributionSchemaDriftTest) —
-            // ErmProfileNames' «Column».unique tag is single-column only, no composite-unique-
-            // constraint tag exists in the ERM mapping profile today.
+        test("document_version's composite UNIQUE constraint is pinned via a class-level «Index»") {
+            // uq_document_version_number UNIQUE (document_id, version_number) in the generated
+            // baseline (was V3__documents.sql pre-swap) — «Column».unique is single-column only,
+            // so this is pinned via a class-level «Index» (composite, unique=true) instead, which
+            // renders as a named CREATE UNIQUE INDEX rather than ErmAttribute.unique.
             val real = transaction { introspectDocumentTable("document_version") }
             real.compositeUniqueConstraints shouldContainExactlyInAnyOrder
                 listOf(setOf("document_id", "version_number"))
 
             val entity = model.entities.single { it.name == "document_version" }
             entity.attributes.none { it.unique } shouldBe true
+            entity.indexes.single { it.name == "uq_document_version_number" }.let {
+                it.unique shouldBe true
+                it.attributeIds.toSet() shouldBe
+                    setOf(
+                        entity.attributeByName("document_id")!!.id,
+                        entity.attributeByName("version_number")!!.id,
+                    )
+            }
         }
 
         // ── (2) Model vs. hand-written Exposed Table objects ────────────────────
@@ -266,20 +280,29 @@ private fun JdbcTransaction.introspectDocumentTable(tableName: String): Introspe
         }
     }
 
+    // Detects both inline CONSTRAINT ... UNIQUE and standalone CREATE UNIQUE INDEX (generated via
+    // a class-level «Index») — H2's information_schema.table_constraints only surfaces the
+    // former, never a plain named unique index, so both sources are unioned.
     val uniqueColumnsByConstraint = mutableMapOf<String, MutableSet<String>>()
     exec(
         """
-        SELECT tc.constraint_name, kcu.column_name
+        SELECT tc.constraint_name AS name, kcu.column_name
         FROM information_schema.table_constraints tc
         JOIN information_schema.key_column_usage kcu
             ON tc.constraint_name = kcu.constraint_name
             AND tc.table_schema = kcu.table_schema
         WHERE tc.constraint_type = 'UNIQUE' AND tc.table_name = '$tableName'
+        UNION
+        SELECT i.index_name AS name, ic.column_name
+        FROM information_schema.index_columns ic
+        JOIN information_schema.indexes i
+            ON ic.index_name = i.index_name AND ic.table_name = i.table_name
+        WHERE i.index_type_name = 'UNIQUE INDEX' AND ic.table_name = '$tableName'
         """.trimIndent(),
     ) { rs ->
         while (rs.next()) {
             uniqueColumnsByConstraint
-                .getOrPut(rs.getString("constraint_name")) { mutableSetOf() }
+                .getOrPut(rs.getString("name")) { mutableSetOf() }
                 .add(rs.getString("column_name"))
         }
     }

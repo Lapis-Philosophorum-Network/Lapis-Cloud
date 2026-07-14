@@ -13,14 +13,12 @@
 // overriding) — establishes the per-file naming-tag convention this retrofit's later domain
 // waves reuse, and keeps the generated-vs-hand-written structural diff trivial to reason about.
 //
-// Known, accepted gap: account.member_id is UNIQUE in the hand-written table
-// (.references(MemberTable.id).uniqueIndex()) and in V1__foundation.sql (UNIQUE REFERENCES
-// member (id)), but UmlToErmTransformer.addForeignKey always synthesizes association-derived FK
+// account.member_id is UNIQUE in the real schema (V1__foundation.sql: UNIQUE REFERENCES
+// member (id)) — UmlToErmTransformer.addForeignKey always synthesizes association-derived FK
 // columns with unique=false (no «Column» stereotype can be applied to a UML-association-derived
-// attribute — only to explicitly declared attributes, and «FK» is only applicable to
-// associations, not attributes). SchemaDriftTest special-cases this one column rather than
-// silently ignoring the mismatch or dropping the FK constraint by modelling memberId as a plain
-// column instead of an association.
+// attribute), so this can't be pinned via «Column».unique. Pinned instead via a class-level
+// «Index» (single-column, unique=true) on Account — renders as a named CREATE UNIQUE INDEX rather
+// than an inline column constraint, but semantically identical (enforces the same 1:1).
 import dev.kuml.profile.erm.ermMappingProfile
 import dev.kuml.uml.Multiplicity
 import dev.kuml.uml.dsl.applyProfile
@@ -83,6 +81,7 @@ classDiagram(name = "Foundation") {
 
     val account = classOf(name = "Account") {
         stereotype("Entity") { "tableName" to "account"; "kotlinObjectName" to "AccountTable" }
+        stereotype("Index") { "columns" to listOf("member_id"); "unique" to true; "name" to "uq_account_member_id" }
 
         attribute(name = "id", type = "UUID") {
             stereotype("Id")
