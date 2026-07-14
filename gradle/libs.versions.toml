@@ -14,12 +14,7 @@ flyway                  = "12.11.0"
 postgresql              = "42.7.13"
 h2                      = "2.4.240"
 hikaricp                = "7.1.0"
-# TEMPORARY (production codegen swap prep, 2026-07-13): pinned to a local-only mavenLocal
-# snapshot that carries the unreleased «Column».enumType ERM tag (kUML commit d81633c7,
-# on top of the released v0.33.0). Not a real Maven Central coordinate — see
-# settings.gradle.kts for the matching exclusiveContent/mavenLocal() wiring. Reset to
-# the real Maven Central version once kUML publishes it.
-kuml                    = "0.99.99"
+kuml                    = "0.34.0"
 
 [plugins]
 kotlin-multiplatform    = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
