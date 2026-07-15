@@ -57,29 +57,31 @@
 // own comment for why this one is safe despite the multi-FK-to-member pattern), beschluss.
 // sitzung_id, antrag.sitzung_id/tagesordnungspunkt_id/beschluss_id.
 //
-// beschluss.abstimmung_id / beschluss.wahl_id (added by V8/V9 respectively): modelled as plain
-// nullable UUID «Column» attributes, NOT UML associations, because Abstimmung/Wahl entities don't
-// exist in this domain's own script — exactly the same forward-reference-breaks-the-cycle
-// workaround already used for document.current_version_id in the document wave. The abstimmung/
-// wahl domains' OWN scripts (06-abstimmung.kuml.kts / 07-wahl.kuml.kts, later waves) declare the
-// real «FK» association from their side instead (Abstimmung.beschlussId -> Beschluss,
-// Wahl.beschlussId -> Beschluss), which is a clean forward reference with no cycle problem in
-// that direction since Beschluss already exists (as a stub) by then. Left as plain columns rather
-// than pinned via «Column».fkEntity for the same reason as document.current_version_id: the real
-// risk is genuine bidirectional Kotlin `object`-initializer circularity at the Exposed layer
-// (beschluss <-> abstimmung and beschluss <-> wahl are both truly bidirectional), which
-// «Column».fkEntity's later-pass resolution sidesteps at the script-evaluation level but not at
-// the generated-Kotlin level. Consequence: the generated SQL/Flyway baseline also lacks these two
-// FK constraints (present in the pre-swap hand-written V6/V8/V9 migrations) — a deliberate,
+// beschluss.abstimmung_id / beschluss.wahl_id / beschluss.konsensierung_id (added by V8/V9/V0.2.5
+// respectively): modelled as plain nullable UUID «Column» attributes, NOT UML associations,
+// because Abstimmung/Wahl/Konsensierung entities don't exist in this domain's own script —
+// exactly the same forward-reference-breaks-the-cycle workaround already used for
+// document.current_version_id in the document wave. The abstimmung/wahl/konsensierung domains'
+// OWN scripts (06-abstimmung.kuml.kts / 07-wahl.kuml.kts / 09-konsensierung.kuml.kts, later
+// waves) declare the real «FK» association from their side instead (Abstimmung.beschlussId ->
+// Beschluss, Wahl.beschlussId -> Beschluss, Konsensierung.beschlussId -> Beschluss), which is a
+// clean forward reference with no cycle problem in that direction since Beschluss already exists
+// (as a stub) by then. Left as plain columns rather than pinned via «Column».fkEntity for the
+// same reason as document.current_version_id: the real risk is genuine bidirectional Kotlin
+// `object`-initializer circularity at the Exposed layer (beschluss <-> abstimmung, beschluss <->
+// wahl and beschluss <-> konsensierung are all truly bidirectional), which «Column».fkEntity's
+// later-pass resolution sidesteps at the script-evaluation level but not at the generated-Kotlin
+// level. Consequence: the generated SQL/Flyway baseline also lacks these three FK constraints
+// (present in the pre-swap hand-written V6/V8/V9 migrations, for the first two) — a deliberate,
 // pre-existing trade-off, not a new regression.
 //
-// Eight enum columns in this domain, all modelled with explicit «Column».sqlType overrides (same
-// mechanism/rationale as every prior domain's enum columns — real V6/V7 schema has plain VARCHAR
-// columns, no CHECK constraint): gremium.type (VARCHAR(30) — widened from VARCHAR(20) by V7 to
-// fit MITGLIEDERVERSAMMLUNG's 21 chars), gremium_mitgliedschaft.rolle (VARCHAR(20)),
-// sitzung.format (VARCHAR(20)), sitzung.status (VARCHAR(20)), anwesenheit.status (VARCHAR(20)),
-// beschluss.status (VARCHAR(20)), beschluss.resolution_mode (VARCHAR(20)), antrag.status
-// (VARCHAR(30) — ABGELEHNT_VORPRUEFUNG is 21 chars).
+// Eight enum columns in this domain, all modelled with only an «Column».enumType tag and no
+// «Column».sqlType override (post-87563ff convention — see 06-abstimmung.kuml.kts/
+// 07-wahl.kuml.kts's own current attribute shape): gremium.type, gremium_mitgliedschaft.rolle,
+// sitzung.format, sitzung.status, anwesenheit.status, beschluss.status, beschluss.resolution_mode
+// (V0.2.5 adds the ResolutionMode.SYSTEMISCHER_KONSENS literal, widening the generated VARCHAR
+// column to fit its 20 characters — the widening is automatic, derived from the longest literal,
+// no manual override needed), antrag.status.
 import dev.kuml.profile.erm.ermMappingProfile
 import dev.kuml.uml.Multiplicity
 import dev.kuml.uml.dsl.applyProfile
@@ -153,6 +155,7 @@ classDiagram(name = "Governance") {
         literal(name = "GREMIUM_QUORUM")
         literal(name = "MERITOKRATISCH")
         literal(name = "DEMOKRATISCH")
+        literal(name = "SYSTEMISCHER_KONSENS")
     }
 
     val antragStatus = enumOf(name = "AntragStatus") {
@@ -438,6 +441,12 @@ classDiagram(name = "Governance") {
         attribute(name = "wahlId", type = "UUID") {
             multiplicity = Multiplicity(0, 1)
             stereotype("Column") { "columnName" to "wahl_id" }
+        }
+        // Same forward-reference workaround as abstimmungId/wahlId above, but into the
+        // konsensierung domain (V0.2.5, 09-konsensierung.kuml.kts).
+        attribute(name = "konsensierungId", type = "UUID") {
+            multiplicity = Multiplicity(0, 1)
+            stereotype("Column") { "columnName" to "konsensierung_id" }
         }
     }
 

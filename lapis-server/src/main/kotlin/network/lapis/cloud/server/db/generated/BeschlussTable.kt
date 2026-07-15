@@ -22,10 +22,11 @@ public object BeschlussTable : Table("beschluss") {
     public val status: Column<BeschlussStatus> = enumerationByName<BeschlussStatus>("status", 10)
     public val decidedAt: Column<LocalDateTime> = datetime("decided_at")
     public val recordedBy: Column<Uuid> = reference("recorded_by", MemberTable.id)
-    public val resolutionMode: Column<ResolutionMode> = enumerationByName<ResolutionMode>("resolution_mode", 14)
+    public val resolutionMode: Column<ResolutionMode> = enumerationByName<ResolutionMode>("resolution_mode", 20)
     // TODO default = "GREMIUM_QUORUM"
     public val abstimmungId: Column<Uuid?> = uuid("abstimmung_id").nullable()
     public val wahlId: Column<Uuid?> = uuid("wahl_id").nullable()
+    public val konsensierungId: Column<Uuid?> = uuid("konsensierung_id").nullable()
     public val sitzungId: Column<Uuid> = reference("sitzung_id", SitzungTable.id)
     public val tagesordnungspunktId: Column<Uuid?> = optReference("tagesordnungspunkt_id", TagesordnungspunktTable.id)
 

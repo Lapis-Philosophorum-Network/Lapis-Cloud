@@ -404,7 +404,7 @@ class GovernanceSchemaDriftTest :
             resolutionMode?.type shouldBe
                 ErmDataType.Enum(
                     name = "ResolutionMode",
-                    values = listOf("GREMIUM_QUORUM", "MERITOKRATISCH", "DEMOKRATISCH"),
+                    values = listOf("GREMIUM_QUORUM", "MERITOKRATISCH", "DEMOKRATISCH", "SYSTEMISCHER_KONSENS"),
                     externalFqName = "network.lapis.cloud.shared.domain.ResolutionMode",
                 )
         }

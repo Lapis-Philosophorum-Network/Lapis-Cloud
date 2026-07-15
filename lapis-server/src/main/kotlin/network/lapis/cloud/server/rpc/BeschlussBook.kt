@@ -89,18 +89,20 @@ internal fun nextBeschlussNumber(
 
 /**
  * Shared insert path for [GovernanceService.recordBeschluss] and [GovernanceService.resolveAntrag]
- * (V0.2.2), extended in V0.2.3 to also serve [GovernanceService.closeAbstimmung] and in V0.2.4 to
- * also serve `WahlService.auszaehlen` -- what actually makes "resolution links into the existing
+ * (V0.2.2), extended in V0.2.3 to also serve [GovernanceService.closeAbstimmung], in V0.2.4 to
+ * also serve `WahlService.auszaehlen`, and in V0.2.5 to also serve
+ * `KonsensierungService.auswerten` -- what actually makes "resolution links into the existing
  * Beschlussbuch mechanism rather than creating a parallel one" true in code, not just in the DTO
- * shape. [resolutionMode]/[abstimmungId]/[wahlId] default to the pre-V0.2.3 Gremium-Quorum shape
- * so [GovernanceService.recordBeschluss]/[GovernanceService.resolveAntrag] call sites stay
- * source-compatible.
+ * shape. [resolutionMode]/[abstimmungId]/[wahlId]/[konsensierungId] default to the pre-V0.2.3
+ * Gremium-Quorum shape so [GovernanceService.recordBeschluss]/[GovernanceService.resolveAntrag]
+ * call sites stay source-compatible.
  *
  * `quorumMet` is still snapshotted for a [ResolutionMode.MERITOKRATISCH]/[ResolutionMode
- * .DEMOKRATISCH] Beschluss too (for the historical record), even though the outcome itself is
- * decided by LTR baskets or one-person-one-vote ballots, not by this headcount figure --
- * documented decision point carried over from the V0.2.3 implementation plan's "Quorum
- * interaction" note; a minimum-participation guard on Abstimmungen/Wahlen is deferred.
+ * .DEMOKRATISCH]/[ResolutionMode.SYSTEMISCHER_KONSENS] Beschluss too (for the historical record),
+ * even though the outcome itself is decided by LTR baskets, one-person-one-vote ballots or lowest
+ * cumulative resistance, not by this headcount figure -- documented decision point carried over
+ * from the V0.2.3 implementation plan's "Quorum interaction" note; a minimum-participation guard
+ * on Abstimmungen/Wahlen/Konsensierungen is deferred.
  */
 internal fun insertBeschlussRow(
     sId: Uuid,
@@ -111,6 +113,7 @@ internal fun insertBeschlussRow(
     resolutionMode: ResolutionMode = ResolutionMode.GREMIUM_QUORUM,
     abstimmungId: Uuid? = null,
     wahlId: Uuid? = null,
+    konsensierungId: Uuid? = null,
 ): BeschlussDto {
     val quorum = computeQuorum(sId, gremiumId, scheduledDate)
     val gremiumRow = GremiumTable.selectAll().where { GremiumTable.id eq gremiumId }.single()
@@ -134,6 +137,7 @@ internal fun insertBeschlussRow(
         it[BeschlussTable.resolutionMode] = resolutionMode
         it[BeschlussTable.abstimmungId] = abstimmungId
         it[BeschlussTable.wahlId] = wahlId
+        it[BeschlussTable.konsensierungId] = konsensierungId
     }
     return BeschlussTable
         .selectAll()
@@ -161,6 +165,7 @@ internal fun ResultRow.toBeschlussDto(): BeschlussDto =
         resolutionMode = this[BeschlussTable.resolutionMode],
         abstimmungId = this[BeschlussTable.abstimmungId]?.toString(),
         wahlId = this[BeschlussTable.wahlId]?.toString(),
+        konsensierungId = this[BeschlussTable.konsensierungId]?.toString(),
     )
 
 private fun beschlussRecorderDisplayName(memberId: Uuid?): String? =

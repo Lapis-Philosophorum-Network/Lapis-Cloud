@@ -104,7 +104,7 @@ CREATE TABLE erasure_request (
     decision_note VARCHAR(1000) NULL,
     executed_at TIMESTAMP NULL,
     legal_hold BOOLEAN NOT NULL DEFAULT FALSE,
-    outcome_summary VARCHAR(4000) NULL,
+    outcome_summary VARCHAR(8000) NULL,
     CHECK (mode IN ('ANONYMIZE', 'HARD_DELETE_WHERE_UNCONSTRAINED')),
     CHECK (status IN ('REQUESTED', 'APPROVED', 'REJECTED', 'COMPLETED'))
 );
@@ -184,7 +184,7 @@ CREATE TABLE dsgvo_audit_log (
     action VARCHAR(17) NOT NULL,
     subject_member_id UUID NOT NULL,
     request_id UUID NULL,
-    outcome_summary VARCHAR(4000) NULL,
+    outcome_summary VARCHAR(8000) NULL,
     legal_basis VARCHAR(500) NULL,
     CHECK (actor_role IN ('MEMBER', 'BOARD', 'TREASURER', 'ADMIN')),
     CHECK (action IN ('EXPORT', 'ERASURE_REQUESTED', 'ERASURE_APPROVED', 'ERASURE_REJECTED', 'ERASURE_EXECUTED'))
@@ -231,13 +231,14 @@ CREATE TABLE beschluss (
     status VARCHAR(10) NOT NULL,
     decided_at TIMESTAMP NOT NULL,
     recorded_by UUID NOT NULL,
-    resolution_mode VARCHAR(14) NOT NULL DEFAULT 'GREMIUM_QUORUM',
+    resolution_mode VARCHAR(20) NOT NULL DEFAULT 'GREMIUM_QUORUM',
     abstimmung_id UUID NULL,
     wahl_id UUID NULL,
+    konsensierung_id UUID NULL,
     sitzung_id UUID NOT NULL,
     tagesordnungspunkt_id UUID NULL,
     CHECK (status IN ('ANGENOMMEN', 'ABGELEHNT', 'VERTAGT')),
-    CHECK (resolution_mode IN ('GREMIUM_QUORUM', 'MERITOKRATISCH', 'DEMOKRATISCH'))
+    CHECK (resolution_mode IN ('GREMIUM_QUORUM', 'MERITOKRATISCH', 'DEMOKRATISCH', 'SYSTEMISCHER_KONSENS'))
 );
 
 CREATE TABLE antrag (
@@ -299,6 +300,35 @@ CREATE TABLE wahl (
     CHECK (status IN ('VORBEREITUNG', 'KANDIDATENLISTE_FREIGEGEBEN', 'OFFEN', 'GESCHLOSSEN', 'AUSGEZAEHLT', 'ABGEBROCHEN'))
 );
 
+CREATE TABLE konsensierung (
+    id UUID NOT NULL PRIMARY KEY,
+    title VARCHAR(300) NOT NULL,
+    status VARCHAR(11) NOT NULL,
+    geheim BOOLEAN NOT NULL,
+    skala_max INTEGER NOT NULL,
+    aggregation VARCHAR(10) NOT NULL,
+    tiebreak_regel VARCHAR(25) NOT NULL,
+    gk_tragfaehig_schwelle DECIMAL(4, 3) NOT NULL,
+    gk_warn_schwelle DECIMAL(4, 3) NOT NULL,
+    passivloesung_auto BOOLEAN NOT NULL,
+    verbindlichkeit VARCHAR(10) NOT NULL,
+    max_runden INTEGER NOT NULL,
+    runde INTEGER NOT NULL,
+    winner_option_id UUID NULL,
+    opened_by UUID NOT NULL,
+    opened_at TIMESTAMP NOT NULL,
+    bewertung_opened_at TIMESTAMP NULL,
+    bewertung_closed_at TIMESTAMP NULL,
+    tally_run_at TIMESTAMP NULL,
+    antrag_id UUID NOT NULL,
+    sitzung_id UUID NOT NULL,
+    beschluss_id UUID NULL,
+    CHECK (status IN ('SAMMLUNG', 'BEWERTUNG', 'GESCHLOSSEN', 'AUSGEWERTET', 'ABGEBROCHEN')),
+    CHECK (aggregation IN ('MITTELWERT', 'SUMME')),
+    CHECK (tiebreak_regel IN ('NIEDRIGSTER_MAXWIDERSTAND', 'NIEDRIGSTE_STDABW', 'WIEDERHOLUNG')),
+    CHECK (verbindlichkeit IN ('SONDIERUNG', 'BESCHLUSS'))
+);
+
 CREATE TABLE abstimmung_option (
     id UUID NOT NULL PRIMARY KEY,
     label VARCHAR(200) NOT NULL,
@@ -350,6 +380,39 @@ CREATE TABLE wahl_stimmzettel (
     member_id UUID NULL
 );
 
+CREATE TABLE konsensierung_option (
+    id UUID NOT NULL PRIMARY KEY,
+    label VARCHAR(200) NOT NULL,
+    position INTEGER NOT NULL,
+    is_passivloesung BOOLEAN NOT NULL,
+    created_by UUID NOT NULL,
+    konsensierung_id UUID NOT NULL
+);
+
+CREATE TABLE konsensierung_stimmberechtigt (
+    id UUID NOT NULL PRIMARY KEY,
+    runde INTEGER NOT NULL,
+    konsensierung_id UUID NOT NULL,
+    member_id UUID NOT NULL
+);
+
+CREATE TABLE konsensierung_teilnahme (
+    id UUID NOT NULL PRIMARY KEY,
+    voted_at TIMESTAMP NOT NULL,
+    runde INTEGER NOT NULL,
+    konsensierung_id UUID NOT NULL,
+    member_id UUID NOT NULL
+);
+
+CREATE TABLE konsensierung_stimmzettel (
+    id UUID NOT NULL PRIMARY KEY,
+    receipt_code VARCHAR(40) NOT NULL,
+    cast_at TIMESTAMP NOT NULL,
+    runde INTEGER NOT NULL,
+    konsensierung_id UUID NOT NULL,
+    member_id UUID NULL
+);
+
 CREATE TABLE abstimmung_stimme (
     id UUID NOT NULL PRIMARY KEY,
     option_id UUID NOT NULL,
@@ -366,6 +429,13 @@ CREATE TABLE wahl_option (
     position INTEGER NOT NULL,
     kandidatur_id UUID NULL,
     wahl_id UUID NOT NULL
+);
+
+CREATE TABLE konsensierung_widerstand (
+    id UUID NOT NULL PRIMARY KEY,
+    wert INTEGER NOT NULL,
+    stimmzettel_id UUID NOT NULL,
+    option_id UUID NOT NULL
 );
 
 CREATE TABLE wahl_stimmzettel_auswahl (
@@ -450,6 +520,20 @@ ALTER TABLE wahl_stimmzettel ADD CONSTRAINT fk_wahl_stimmzettel_member_id FOREIG
 ALTER TABLE wahl_stimmzettel_auswahl ADD CONSTRAINT fk_wahl_stimmzettel_auswahl_stimmzettel_id FOREIGN KEY (stimmzettel_id) REFERENCES wahl_stimmzettel(id);
 ALTER TABLE wahl_stimmzettel_auswahl ADD CONSTRAINT fk_wahl_stimmzettel_auswahl_option_id FOREIGN KEY (option_id) REFERENCES wahl_option(id);
 ALTER TABLE ltr_balance ADD CONSTRAINT fk_ltr_balance_member_id FOREIGN KEY (member_id) REFERENCES member(id);
+ALTER TABLE konsensierung ADD CONSTRAINT fk_konsensierung_opened_by FOREIGN KEY (opened_by) REFERENCES member(id);
+ALTER TABLE konsensierung ADD CONSTRAINT fk_konsensierung_antrag_id FOREIGN KEY (antrag_id) REFERENCES antrag(id);
+ALTER TABLE konsensierung ADD CONSTRAINT fk_konsensierung_sitzung_id FOREIGN KEY (sitzung_id) REFERENCES sitzung(id);
+ALTER TABLE konsensierung ADD CONSTRAINT fk_konsensierung_beschluss_id FOREIGN KEY (beschluss_id) REFERENCES beschluss(id);
+ALTER TABLE konsensierung_option ADD CONSTRAINT fk_konsensierung_option_created_by FOREIGN KEY (created_by) REFERENCES member(id);
+ALTER TABLE konsensierung_option ADD CONSTRAINT fk_konsensierung_option_konsensierung_id FOREIGN KEY (konsensierung_id) REFERENCES konsensierung(id);
+ALTER TABLE konsensierung_stimmberechtigt ADD CONSTRAINT fk_konsensierung_stimmberechtigt_konsensierung_id FOREIGN KEY (konsensierung_id) REFERENCES konsensierung(id);
+ALTER TABLE konsensierung_stimmberechtigt ADD CONSTRAINT fk_konsensierung_stimmberechtigt_member_id FOREIGN KEY (member_id) REFERENCES member(id);
+ALTER TABLE konsensierung_teilnahme ADD CONSTRAINT fk_konsensierung_teilnahme_konsensierung_id FOREIGN KEY (konsensierung_id) REFERENCES konsensierung(id);
+ALTER TABLE konsensierung_teilnahme ADD CONSTRAINT fk_konsensierung_teilnahme_member_id FOREIGN KEY (member_id) REFERENCES member(id);
+ALTER TABLE konsensierung_stimmzettel ADD CONSTRAINT fk_konsensierung_stimmzettel_konsensierung_id FOREIGN KEY (konsensierung_id) REFERENCES konsensierung(id);
+ALTER TABLE konsensierung_stimmzettel ADD CONSTRAINT fk_konsensierung_stimmzettel_member_id FOREIGN KEY (member_id) REFERENCES member(id);
+ALTER TABLE konsensierung_widerstand ADD CONSTRAINT fk_konsensierung_widerstand_stimmzettel_id FOREIGN KEY (stimmzettel_id) REFERENCES konsensierung_stimmzettel(id);
+ALTER TABLE konsensierung_widerstand ADD CONSTRAINT fk_konsensierung_widerstand_option_id FOREIGN KEY (option_id) REFERENCES konsensierung_option(id);
 
 -- Indexes
 
@@ -505,4 +589,16 @@ CREATE UNIQUE INDEX uq_wahl_stimmzettel_member ON wahl_stimmzettel (wahl_id, mem
 CREATE INDEX idx_wahl_stimmzettel_wahl ON wahl_stimmzettel (wahl_id);
 CREATE INDEX idx_wahl_stimmzettel_auswahl_stimmzettel ON wahl_stimmzettel_auswahl (stimmzettel_id);
 CREATE INDEX idx_wahl_stimmzettel_auswahl_option ON wahl_stimmzettel_auswahl (option_id);
+CREATE INDEX idx_konsensierung_antrag ON konsensierung (antrag_id);
+CREATE INDEX idx_konsensierung_sitzung ON konsensierung (sitzung_id);
+CREATE INDEX idx_konsensierung_status ON konsensierung (status);
+CREATE INDEX idx_konsensierung_option_konsensierung ON konsensierung_option (konsensierung_id);
+CREATE UNIQUE INDEX uq_konsensierung_stimmberechtigt_member_runde ON konsensierung_stimmberechtigt (konsensierung_id, member_id, runde);
+CREATE INDEX idx_konsensierung_stimmberechtigt_konsensierung ON konsensierung_stimmberechtigt (konsensierung_id);
+CREATE UNIQUE INDEX uq_konsensierung_teilnahme_member_runde ON konsensierung_teilnahme (konsensierung_id, member_id, runde);
+CREATE INDEX idx_konsensierung_teilnahme_konsensierung ON konsensierung_teilnahme (konsensierung_id);
+CREATE UNIQUE INDEX uq_konsensierung_stimmzettel_member_runde ON konsensierung_stimmzettel (konsensierung_id, member_id, runde);
+CREATE INDEX idx_konsensierung_stimmzettel_konsensierung ON konsensierung_stimmzettel (konsensierung_id);
+CREATE INDEX idx_konsensierung_widerstand_stimmzettel ON konsensierung_widerstand (stimmzettel_id);
+CREATE INDEX idx_konsensierung_widerstand_option ON konsensierung_widerstand (option_id);
 

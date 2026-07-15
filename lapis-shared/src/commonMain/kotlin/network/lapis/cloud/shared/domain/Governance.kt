@@ -42,9 +42,16 @@ enum class BeschlussStatus { ANGENOMMEN, ABGELEHNT, VERTAGT }
  * Demokratische Wahlen (V0.2.4) add [DEMOKRATISCH]: a one-person-one-vote Wahl
  * ([network.lapis.cloud.shared.domain.WahlDto]) resolved by `WahlService.auszaehlen`, tagged
  * alongside [MERITOKRATISCH] as a third resolution path into the same Beschlussbuch.
+ *
+ * Systemisches Konsensieren (V0.2.5) adds [SYSTEMISCHER_KONSENS]: a lowest-cumulative-resistance
+ * Konsensierung ([network.lapis.cloud.shared.domain.KonsensierungDto]) resolved by
+ * `KonsensierungService.auswerten`, written only when
+ * [network.lapis.cloud.shared.domain.SkVerbindlichkeit.BESCHLUSS] — a
+ * [network.lapis.cloud.shared.domain.SkVerbindlichkeit.SONDIERUNG] Konsensierung never writes a
+ * Beschluss at all (purely advisory).
  */
 @Serializable
-enum class ResolutionMode { GREMIUM_QUORUM, MERITOKRATISCH, DEMOKRATISCH }
+enum class ResolutionMode { GREMIUM_QUORUM, MERITOKRATISCH, DEMOKRATISCH, SYSTEMISCHER_KONSENS }
 
 @Serializable
 data class GremiumDto(
@@ -188,6 +195,10 @@ data class BeschlussDto(
     val abstimmungId: String? = null,
     // Demokratische Wahlen (V0.2.4). Same source-compatible default as abstimmungId above.
     val wahlId: String? = null,
+    // Systemisches Konsensieren (V0.2.5). Same source-compatible default as abstimmungId/wahlId
+    // above. Always null for a SkVerbindlichkeit.SONDIERUNG Konsensierung -- see [ResolutionMode
+    // .SYSTEMISCHER_KONSENS] KDoc.
+    val konsensierungId: String? = null,
 )
 
 @Serializable

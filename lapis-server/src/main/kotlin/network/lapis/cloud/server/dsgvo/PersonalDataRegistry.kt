@@ -27,6 +27,7 @@ object PersonalDataRegistry {
             GovernancePersonalData,
             LtrPersonalData,
             WahlPersonalData,
+            KonsensierungPersonalData,
         )
 
     /**
@@ -50,6 +51,10 @@ object PersonalDataRegistry {
                 "Die Auswahl-Zeile hat keinen eigenen Member-FK -- sie loest erst ueber " +
                 "wahl_stimmzettel (zwei Hops weiter, siehe WahlPersonalData) zu einem Mitglied auf, " +
                 "und dort nur auf dem nicht-geheimen Pfad.",
+            "konsensierung_widerstand" to
+                "Der Widerstandswert selbst hat keinen eigenen Member-FK -- er loest erst ueber " +
+                "konsensierung_stimmzettel (zwei Hops weiter, siehe KonsensierungPersonalData) zu " +
+                "einem Mitglied auf, und dort nur auf dem nicht-geheimen Pfad.",
             "erasure_request" to
                 "Verwaltet den Loeschprozess selbst und referenziert Mitglieder nur per UUID. Bleibt " +
                 "nach der Loeschung als Verfahrensnachweis bestehen (siehe dsgvo.adoc).",

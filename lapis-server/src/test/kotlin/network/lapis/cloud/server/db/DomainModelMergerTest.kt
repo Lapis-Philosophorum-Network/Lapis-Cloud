@@ -35,25 +35,28 @@ class DomainModelMergerTest :
         // ── Test 1: merging the real 9 domain scripts ───────────────────────────────────
 
         test(
-            "merging the real 9 domain scripts succeeds and the uml-to-erm -> erm-to-exposed chain " +
+            "merging the real 10 domain scripts succeeds and the uml-to-erm -> erm-to-exposed chain " +
                 "produces exactly one Table file per distinct table name",
         ) {
             val scriptFiles =
                 requireNotNull(KumlModelLoader.kumlSourceDir.listFiles { f -> f.name.endsWith(".kuml.kts") }) {
                     "kUML source dir not found or not a directory: ${KumlModelLoader.kumlSourceDir.absolutePath}"
                 }.sortedBy { it.name }
-            scriptFiles shouldHaveSize 9
+            scriptFiles shouldHaveSize 10
 
             val diagrams = scriptFiles.map { KumlModelLoader.loadUmlDiagram(it) }
 
             val merged = DomainModelMerger.merge(diagrams)
 
-            // 34 distinct `"tableName" to "..."` values across the 9 .kuml.kts files (verified by
+            // 40 distinct `"tableName" to "..."` values across the 10 .kuml.kts files (verified by
             // grepping `grep -oh '"tableName" to "[a-z_]*"' lapis-server/src/main/kuml/*.kuml.kts |
-            // sort -u | wc -l`; 47 total «Entity» declarations minus 13 cross-domain-stub
-            // duplicates: member x6, sitzung x3, beschluss x3, antrag x3, membership_tier x2,
-            // gremium x2 -> 5+2+2+2+1+1 = 13 dropped).
-            val distinctTableNames = 34
+            // sort -u | wc -l`; 58 total «Entity» declarations minus 18 cross-domain-stub
+            // duplicates: member appears in 7 files (6 dropped), antrag/sitzung/beschluss each
+            // appear in 4 files (3 dropped each), gremium appears in 3 files (2 dropped),
+            // membership_tier appears in 2 files (1 dropped) -> 6+3+3+3+2+1 = 18 dropped.
+            // 09-konsensierung.kuml.kts (V0.2.5) is what pushed member/antrag/sitzung/beschluss/
+            // gremium's counts up by one file each versus the pre-V0.2.5 13-dropped baseline.
+            val distinctTableNames = 40
 
             val result =
                 UmlToExposedViaErmScriptTransformer().transform(
@@ -110,6 +113,12 @@ class DomainModelMergerTest :
                     "WahlStimmzettelTable.kt",
                     "WahlStimmzettelAuswahlTable.kt",
                     "LtrBalanceTable.kt",
+                    "KonsensierungTable.kt",
+                    "KonsensierungOptionTable.kt",
+                    "KonsensierungStimmberechtigtTable.kt",
+                    "KonsensierungTeilnahmeTable.kt",
+                    "KonsensierungStimmzettelTable.kt",
+                    "KonsensierungWiderstandTable.kt",
                 )
         }
 

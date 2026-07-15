@@ -151,17 +151,18 @@ class DsgvoSchemaDriftTest :
                 )
         }
 
-        test("outcome_summary on both tables is modelled as plain VARCHAR(4000), not ErmDataType.Json") {
+        test("outcome_summary on both tables is modelled as plain VARCHAR(8000), not ErmDataType.Json") {
             // JSON-encoded-as-string, not an unsupported-json-type workaround — see the .kuml.kts
-            // file header comment. Both real columns are plain VARCHAR(4000) with no JSON-specific
-            // DB feature (no CHECK, no native JSON column type). The explicit «Column».sqlType
-            // override is parsed by UmlErmTypeMapper.mapOverride's VARCHAR(n) regex into
-            // ErmDataType.Varchar(4000), pinning the correct length instead of the bare "varchar"
-            // keyword's default of 255.
+            // file header comment. Both real columns are plain VARCHAR(8000) (widened from
+            // VARCHAR(4000) by V0.2.5/09-konsensierung.kuml.kts -- see that file's own header
+            // comment for why) with no JSON-specific DB feature (no CHECK, no native JSON column
+            // type). The explicit «Column».sqlType override is parsed by UmlErmTypeMapper
+            // .mapOverride's VARCHAR(n) regex into ErmDataType.Varchar(8000), pinning the correct
+            // length instead of the bare "varchar" keyword's default of 255.
             val erasureOutcome = model.entities.single { it.name == "erasure_request" }.attributeByName("outcome_summary")
             val auditOutcome = model.entities.single { it.name == "dsgvo_audit_log" }.attributeByName("outcome_summary")
-            erasureOutcome?.type shouldBe ErmDataType.Varchar(4000)
-            auditOutcome?.type shouldBe ErmDataType.Varchar(4000)
+            erasureOutcome?.type shouldBe ErmDataType.Varchar(8000)
+            auditOutcome?.type shouldBe ErmDataType.Varchar(8000)
         }
     })
 
