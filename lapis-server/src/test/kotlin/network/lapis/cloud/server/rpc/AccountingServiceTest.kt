@@ -352,6 +352,254 @@ class AccountingServiceTest :
             }
         }
 
+        // The three tests below exercise report-wide aggregations (GuV sums every INCOME/EXPENSE
+        // account in the requested date range; Bilanz sums every ASSET/LIABILITY/EQUITY account
+        // cumulatively since inception through asOf) -- unlike getGeneralLedgerAccount, they are
+        // NOT scoped to a single ledgerAccountId, so they are NOT isolated from postings any other
+        // test in this file creates. Every other test in this Spec dates its fixtures in 2026
+        // (Jan-Jun); the GuV test below therefore uses a distinct year (2030) so its date-range
+        // query never picks up unrelated postings. The Bilanz is cumulative-from-inception by
+        // design (see BalanceSheetDto KDoc) and can never be isolated by choice of date range alone
+        // -- so that test (and the Bilanz half of the Jahresabschluss test) asserts a *delta*
+        // between two calls instead of an absolute total, which is exact and robust regardless of
+        // what other tests contribute.
+
+        test("getIncomeStatement sums income/expense over a date range, excludes DRAFT and out-of-range entries") {
+            testApplication {
+                application {
+                    install(StatusPages) { installAccountingExceptionHandlers() }
+                    routing { registerAccountingTestRoutes() }
+                }
+                val treasurer = createTestMember("acct-treasurer-guv@example.org", AccountRole.TREASURER)
+                val board = createTestMember("acct-board-guv@example.org", AccountRole.BOARD)
+                val plainMember = createTestMember("acct-plain-guv@example.org", AccountRole.MEMBER)
+                val kasse = createLedgerAccount("0928", LedgerAccountType.ASSET)
+                val beitraege = createLedgerAccount("4000", LedgerAccountType.INCOME, accountClass = 4)
+                val miete = createLedgerAccount("6310", LedgerAccountType.EXPENSE, accountClass = 6)
+
+                suspend fun post(
+                    date: LocalDate,
+                    description: String,
+                    postings: List<PostingInput>,
+                ) {
+                    client.post("/test/post-entry?${entryParams(date, description, postings)}") {
+                        header("X-Member-Id", treasurer.toString())
+                    }
+                }
+                // In range: 100 income, 40 expense. Year 2030 -- see comment above the test group.
+                post(
+                    LocalDate(2030, 3, 1),
+                    "Beitrag",
+                    listOf(
+                        PostingInput(kasse.toString(), PostingSide.DEBIT, BigDecimal("100.00")),
+                        PostingInput(beitraege.toString(), PostingSide.CREDIT, BigDecimal("100.00")),
+                    ),
+                )
+                post(
+                    LocalDate(2030, 3, 15),
+                    "Miete",
+                    listOf(
+                        PostingInput(miete.toString(), PostingSide.DEBIT, BigDecimal("40.00")),
+                        PostingInput(kasse.toString(), PostingSide.CREDIT, BigDecimal("40.00")),
+                    ),
+                )
+                // Out of range -- must not contribute.
+                post(
+                    LocalDate(2030, 4, 1),
+                    "Spaeter",
+                    listOf(
+                        PostingInput(kasse.toString(), PostingSide.DEBIT, BigDecimal("500.00")),
+                        PostingInput(beitraege.toString(), PostingSide.CREDIT, BigDecimal("500.00")),
+                    ),
+                )
+                // DRAFT in range -- must not contribute.
+                client.post(
+                    "/test/save-draft?${
+                        entryParams(
+                            LocalDate(2030, 3, 10),
+                            "Entwurf-GuV",
+                            listOf(PostingInput(beitraege.toString(), PostingSide.CREDIT, BigDecimal("999.00"))),
+                        )
+                    }",
+                ) { header("X-Member-Id", treasurer.toString()) }
+
+                val response =
+                    client
+                        .get("/test/income-statement?from=2030-03-01&to=2030-03-31") {
+                            header("X-Member-Id", treasurer.toString())
+                        }.bodyAsText()
+                val parts = response.split(":")
+                parts[0] shouldBe "100.00"
+                parts[1] shouldBe "40.00"
+                parts[2] shouldBe "60.00"
+
+                // Narrower range excludes the Miete booking.
+                val narrowed =
+                    client
+                        .get("/test/income-statement?from=2030-03-01&to=2030-03-01") {
+                            header("X-Member-Id", treasurer.toString())
+                        }.bodyAsText()
+                        .split(":")
+                narrowed[0] shouldBe "100.00"
+                narrowed[1] shouldBe "0"
+
+                // Authorization: BOARD may read, plain MEMBER is forbidden, unauthenticated is unauthorized.
+                client
+                    .get("/test/income-statement?from=2030-03-01&to=2030-03-31") { header("X-Member-Id", board.toString()) }
+                    .status shouldBe HttpStatusCode.OK
+                client
+                    .get("/test/income-statement?from=2030-03-01&to=2030-03-31") { header("X-Member-Id", plainMember.toString()) }
+                    .status shouldBe HttpStatusCode.Forbidden
+                client.get("/test/income-statement?from=2030-03-01&to=2030-03-31").status shouldBe HttpStatusCode.Unauthorized
+            }
+        }
+
+        test("getBalanceSheet is cumulative from inception through asOf and always balances") {
+            testApplication {
+                application {
+                    install(StatusPages) { installAccountingExceptionHandlers() }
+                    routing { registerAccountingTestRoutes() }
+                }
+                val treasurer = createTestMember("acct-treasurer-bilanz@example.org", AccountRole.TREASURER)
+                val plainMember = createTestMember("acct-plain-bilanz@example.org", AccountRole.MEMBER)
+                val kasse = createLedgerAccount("0929", LedgerAccountType.ASSET)
+                val beitraege = createLedgerAccount("4001", LedgerAccountType.INCOME, accountClass = 4)
+                val miete = createLedgerAccount("6311", LedgerAccountType.EXPENSE, accountClass = 6)
+
+                suspend fun balanceSheetParts(asOf: String): List<String> =
+                    client
+                        .get("/test/balance-sheet?asOf=$asOf") { header("X-Member-Id", treasurer.toString()) }
+                        .bodyAsText()
+                        .split(":")
+
+                // Baseline taken before this fixture's own postings -- cumulative from inception
+                // necessarily also reflects whatever earlier tests in this Spec already posted, so
+                // the assertions below use the delta between "before" and "after", not an absolute
+                // total (see comment above the test group).
+                val before = balanceSheetParts("2026-12-31")
+                before[2] shouldBe "true" // balanced, even before this fixture's own postings
+
+                client.post(
+                    "/test/post-entry?${
+                        entryParams(
+                            LocalDate(2026, 2, 1),
+                            "Beitrag",
+                            listOf(
+                                PostingInput(kasse.toString(), PostingSide.DEBIT, BigDecimal("300.00")),
+                                PostingInput(beitraege.toString(), PostingSide.CREDIT, BigDecimal("300.00")),
+                            ),
+                        )
+                    }",
+                ) { header("X-Member-Id", treasurer.toString()) }
+                client.post(
+                    "/test/post-entry?${
+                        entryParams(
+                            LocalDate(2026, 2, 15),
+                            "Miete",
+                            listOf(
+                                PostingInput(miete.toString(), PostingSide.DEBIT, BigDecimal("120.00")),
+                                PostingInput(kasse.toString(), PostingSide.CREDIT, BigDecimal("120.00")),
+                            ),
+                        )
+                    }",
+                ) { header("X-Member-Id", treasurer.toString()) }
+                // DRAFT -- must not contribute.
+                client.post(
+                    "/test/save-draft?${
+                        entryParams(
+                            LocalDate(2026, 2, 20),
+                            "Entwurf-Bilanz",
+                            listOf(PostingInput(kasse.toString(), PostingSide.DEBIT, BigDecimal("999.00"))),
+                        )
+                    }",
+                ) { header("X-Member-Id", treasurer.toString()) }
+
+                val after = balanceSheetParts("2026-12-31")
+                // totalAssets delta (kasse = 300 - 120 = 180) must equal the totalEquityAndLiabilities delta.
+                (BigDecimal(after[0]) - BigDecimal(before[0])).compareTo(BigDecimal("180.00")) shouldBe 0
+                (BigDecimal(after[1]) - BigDecimal(before[1])).compareTo(BigDecimal("180.00")) shouldBe 0
+                after[2] shouldBe "true"
+                // accumulatedResult delta = 300 income - 120 expense = 180, same magnitude as the
+                // GuV result would be for just this fixture's postings.
+                (BigDecimal(after[3]) - BigDecimal(before[3])).compareTo(BigDecimal("180.00")) shouldBe 0
+
+                client
+                    .get("/test/balance-sheet?asOf=2026-12-31") { header("X-Member-Id", plainMember.toString()) }
+                    .status shouldBe HttpStatusCode.Forbidden
+                client.get("/test/balance-sheet?asOf=2026-12-31").status shouldBe HttpStatusCode.Unauthorized
+            }
+        }
+
+        test("getAnnualFinancialStatement: periodResult diverges from accumulatedResult across fiscal years") {
+            testApplication {
+                application {
+                    install(StatusPages) { installAccountingExceptionHandlers() }
+                    routing { registerAccountingTestRoutes() }
+                }
+                val treasurer = createTestMember("acct-treasurer-jahresabschluss@example.org", AccountRole.TREASURER)
+                val plainMember = createTestMember("acct-plain-jahresabschluss@example.org", AccountRole.MEMBER)
+                // Distinct, far-future years (unused by any other test in this Spec) so periodResult
+                // -- a date-range-scoped GuV flow -- is exactly isolated, same reasoning as the GuV
+                // test's year 2030 above.
+                val kasse = createLedgerAccount("0933", LedgerAccountType.ASSET)
+                val beitraege = createLedgerAccount("4002", LedgerAccountType.INCOME, accountClass = 4)
+
+                // Baseline cumulative result strictly before either fixture posting -- see the
+                // Bilanz test above for why cumulative-from-inception figures must be diffed, not
+                // asserted as absolute totals.
+                val before2040 =
+                    client
+                        .get("/test/balance-sheet?asOf=2039-12-31") { header("X-Member-Id", treasurer.toString()) }
+                        .bodyAsText()
+                        .split(":")
+
+                // Year 2040: 200 income.
+                client.post(
+                    "/test/post-entry?${
+                        entryParams(
+                            LocalDate(2040, 6, 1),
+                            "Beitrag-2040",
+                            listOf(
+                                PostingInput(kasse.toString(), PostingSide.DEBIT, BigDecimal("200.00")),
+                                PostingInput(beitraege.toString(), PostingSide.CREDIT, BigDecimal("200.00")),
+                            ),
+                        )
+                    }",
+                ) { header("X-Member-Id", treasurer.toString()) }
+                // Year 2041: 50 income.
+                client.post(
+                    "/test/post-entry?${
+                        entryParams(
+                            LocalDate(2041, 6, 1),
+                            "Beitrag-2041",
+                            listOf(
+                                PostingInput(kasse.toString(), PostingSide.DEBIT, BigDecimal("50.00")),
+                                PostingInput(beitraege.toString(), PostingSide.CREDIT, BigDecimal("50.00")),
+                            ),
+                        )
+                    }",
+                ) { header("X-Member-Id", treasurer.toString()) }
+
+                val statement2041 =
+                    client
+                        .get("/test/annual-statement?year=2041") { header("X-Member-Id", treasurer.toString()) }
+                        .bodyAsText()
+                        .split(":")
+                statement2041[0] shouldBe "2041-12-31" // periodEnd == balanceSheet.asOf
+                statement2041[1] shouldBe "50.00" // periodResult: 2041-only flow, exactly isolated
+                // accumulatedResult delta since the 2039 baseline = both fixture years' income
+                // (200 + 50 = 250), demonstrating the cumulative Bilanz figure legitimately
+                // diverges from the single-year GuV periodResult (50.00) once more than one fiscal
+                // year has activity.
+                (BigDecimal(statement2041[2]) - BigDecimal(before2040[3])).compareTo(BigDecimal("250.00")) shouldBe 0
+
+                client
+                    .get("/test/annual-statement?year=2041") { header("X-Member-Id", plainMember.toString()) }
+                    .status shouldBe HttpStatusCode.Forbidden
+                client.get("/test/annual-statement?year=2041").status shouldBe HttpStatusCode.Unauthorized
+            }
+        }
+
         test("getGeneralLedgerAccount computes correct running balances for both normal-balance sides") {
             testApplication {
                 application {
@@ -465,6 +713,24 @@ private fun Route.registerAccountingTestRoutes() {
         val service = AccountingService(call)
         val dto = service.getGeneralLedgerAccount(call.parameters["ledgerAccountId"]!!)
         call.respondText("${dto.ledgerAccountId}:${dto.openingBalance}:${dto.closingBalance}:${dto.lines.size}")
+    }
+    get("/test/income-statement") {
+        val service = AccountingService(call)
+        val q = call.request.queryParameters
+        val dto = service.getIncomeStatement(from = q["from"]?.let { LocalDate.parse(it) }, to = LocalDate.parse(q["to"]!!))
+        call.respondText("${dto.totalIncome}:${dto.totalExpense}:${dto.result}")
+    }
+    get("/test/balance-sheet") {
+        val service = AccountingService(call)
+        val asOf = LocalDate.parse(call.request.queryParameters["asOf"]!!)
+        val dto = service.getBalanceSheet(asOf)
+        call.respondText("${dto.totalAssets}:${dto.totalEquityAndLiabilities}:${dto.balanced}:${dto.accumulatedResult}")
+    }
+    get("/test/annual-statement") {
+        val service = AccountingService(call)
+        val year = call.request.queryParameters["year"]!!.toInt()
+        val dto = service.getAnnualFinancialStatement(year)
+        call.respondText("${dto.periodEnd}:${dto.periodResult}:${dto.accumulatedResult}")
     }
 }
 

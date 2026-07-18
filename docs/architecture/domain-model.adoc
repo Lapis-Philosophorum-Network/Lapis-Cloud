@@ -407,3 +407,39 @@ comment for the full list): P&L/balance-sheet derivation, the four-sphere Gemein
 separation, §55 AO Mittelverwendungsrechnung, Kassenbuch, Kostenstellen, fiscal-year close,
 USt/VAT handling, Storno/reversal postings, multi-currency, Beleg/attachment storage, automatic
 `Contribution`↔`JournalEntry` reconciliation, bank import, DATEV/ELSTER export.
+
+=== Financial statements (V0.3.2)
+
+`network.lapis.cloud.server.rpc.FinancialStatementCalculator` derives three read-only reports
+purely from the existing `POSTED` postings — no new persistence, no schema change, and therefore
+no new `*SchemaDriftTest`. `IncomeStatementDto`/`BalanceSheetDto`/`AnnualFinancialStatementDto`/
+`StatementLineDto` (`lapis-shared/.../domain/FinancialStatements.kt`) are non-persisted reporting
+DTOs, exactly like the existing `GeneralLedgerDto`/`GeneralLedgerLineDto`. Three new read-only
+`IAccountingService`/`AccountingService` methods expose them, gated by the same TREASURER/BOARD/
+ADMIN roles as `getGeneralLedgerAccount`.
+
+* **Gewinn- und Verlustrechnung (GuV / `getIncomeStatement`)** — the flow of `INCOME`/`EXPENSE`
+  postings over `[from, to]` (`from == null` means "since inception"). `result` = `totalIncome` −
+  `totalExpense`; negative is a Jahresfehlbetrag.
+* **Bilanz (`getBalanceSheet`)** — the *cumulative* stock of postings since inception through a
+  single `asOf` cutoff, deliberately **not** windowed to a fiscal year. This is the load-bearing
+  design decision: `GeneralLedgerDto.openingBalance` is always `0` (no Saldenvortrag/carryforward
+  support yet — see that DTO's KDoc), so there is nothing to seed a fiscal-year-windowed Bilanz
+  with. Because `INCOME`/`EXPENSE` are never closed to `EQUITY` (no closing entries generated in
+  this wave), the Bilanz only balances (Aktiva == Passiva) if the accumulated result
+  (Σ`INCOME` − Σ`EXPENSE` through `asOf`) is shown as its own derived equity line
+  (`BalanceSheetDto.accumulatedResult`) — this is guaranteed to reconcile by the
+  server-enforced Σdebit = Σcredit invariant, and `balanced` is asserted `true` as a regression
+  guard in `FinancialStatementCalculatorTest`/`AccountingServiceTest`.
+* **Jahresabschluss (`getAnnualFinancialStatement`)** — assumes Geschäftsjahr = Kalenderjahr
+  (calendar year) and bundles the GuV of `[Jan 1, Dec 31]` of the given year with the Bilanz as of
+  that year's Dec 31. It reports two honest, distinct figures rather than conflating them:
+  `periodResult` (that year's GuV flow) and `accumulatedResult` (the inception-cumulative Bilanz
+  equity result) — these coincide in the very first fiscal year and legitimately diverge from the
+  second year on, since nothing is closed/carried forward between years.
+
+Line lists (`StatementLineDto`) omit accounts with a zero net balance in the requested scope — they
+are a derived-from-journal view, not a complete chart-of-accounts listing. Still explicitly out of
+scope (unchanged from V0.3.1's list above, plus the four-sphere Gemeinnützigkeit split which
+remains V0.3.3): fiscal-year close/Saldenvortrag, Mittelverwendungsrechnung/Rücklagen (V0.3.4),
+Kassenbuch (V0.3.5), Kostenstellen (V0.3.6), non-calendar fiscal years.

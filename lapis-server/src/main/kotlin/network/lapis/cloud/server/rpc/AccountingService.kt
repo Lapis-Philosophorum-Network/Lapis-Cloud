@@ -12,7 +12,10 @@ import network.lapis.cloud.server.db.generated.PostingTable
 import network.lapis.cloud.server.security.requireRole
 import network.lapis.cloud.server.security.resolveCurrentMember
 import network.lapis.cloud.shared.domain.AccountRole
+import network.lapis.cloud.shared.domain.AnnualFinancialStatementDto
+import network.lapis.cloud.shared.domain.BalanceSheetDto
 import network.lapis.cloud.shared.domain.GeneralLedgerDto
+import network.lapis.cloud.shared.domain.IncomeStatementDto
 import network.lapis.cloud.shared.domain.JournalEntryDto
 import network.lapis.cloud.shared.domain.JournalEntryInput
 import network.lapis.cloud.shared.domain.JournalEntryStatus
@@ -248,6 +251,96 @@ class AccountingService(
                 lines = ledgerLines,
             )
         }
+    }
+
+    override suspend fun getIncomeStatement(
+        from: LocalDate?,
+        to: LocalDate,
+    ): IncomeStatementDto {
+        val current = resolveCurrentMember(call)
+        current.requireRole(*ACCOUNTING_READ_ROLES)
+        return transaction {
+            FinancialStatementCalculator.incomeStatement(loadAccountBalances(from, to), from, to)
+        }
+    }
+
+    override suspend fun getBalanceSheet(asOf: LocalDate): BalanceSheetDto {
+        val current = resolveCurrentMember(call)
+        current.requireRole(*ACCOUNTING_READ_ROLES)
+        return transaction {
+            // Cumulative from inception (from = null) -- see BalanceSheetDto KDoc for why the
+            // Bilanz is never windowed to a fiscal-year `from`.
+            FinancialStatementCalculator.balanceSheet(loadAccountBalances(from = null, to = asOf), asOf)
+        }
+    }
+
+    override suspend fun getAnnualFinancialStatement(fiscalYear: Int): AnnualFinancialStatementDto {
+        val current = resolveCurrentMember(call)
+        current.requireRole(*ACCOUNTING_READ_ROLES)
+        val periodStart = LocalDate(fiscalYear, 1, 1)
+        val periodEnd = LocalDate(fiscalYear, 12, 31)
+        return transaction {
+            val incomeStatement =
+                FinancialStatementCalculator.incomeStatement(loadAccountBalances(periodStart, periodEnd), periodStart, periodEnd)
+            val balanceSheet =
+                FinancialStatementCalculator.balanceSheet(loadAccountBalances(from = null, to = periodEnd), periodEnd)
+            AnnualFinancialStatementDto(
+                fiscalYear = fiscalYear,
+                periodStart = periodStart,
+                periodEnd = periodEnd,
+                incomeStatement = incomeStatement,
+                balanceSheet = balanceSheet,
+                periodResult = incomeStatement.result,
+                accumulatedResult = balanceSheet.accumulatedResult,
+            )
+        }
+    }
+
+    /**
+     * Loads one net balance per [LedgerAccountTable] with at least one in-scope posting, signed by
+     * that account's normal-balance side (see [GeneralLedgerCalculator.normalBalanceSideOf]).
+     * Same POSTED-only + optional date-range filter as [getGeneralLedgerAccount] -- a
+     * [JournalEntryStatus.DRAFT] entry's postings are provisional and must never contribute to a
+     * statement. Accounts with no in-scope postings are simply absent from the result (see
+     * [FinancialStatementCalculator] KDoc).
+     */
+    private fun loadAccountBalances(
+        from: LocalDate?,
+        to: LocalDate?,
+    ): List<FinancialStatementCalculator.AccountBalance> {
+        val conditions =
+            mutableListOf<Op<Boolean>>(
+                JournalEntryTable.status eq JournalEntryStatus.POSTED,
+            )
+        if (from != null) conditions += (JournalEntryTable.entryDate greaterEq from)
+        if (to != null) conditions += (JournalEntryTable.entryDate lessEq to)
+
+        val rows =
+            (PostingTable innerJoin JournalEntryTable innerJoin LedgerAccountTable)
+                .selectAll()
+                .where { conditions.reduce { a, b -> a and b } }
+                .toList()
+
+        return rows
+            .groupBy { it[PostingTable.ledgerAccountId] }
+            .map { (accountId, group) ->
+                val type = group.first()[LedgerAccountTable.type]
+                val normalSide = GeneralLedgerCalculator.normalBalanceSideOf(type)
+                val netBalance =
+                    group.fold(BigDecimal.ZERO) { acc, row ->
+                        val amount = row[PostingTable.amount]
+                        val signed = if (row[PostingTable.side] == normalSide) amount else amount.negate()
+                        acc + signed
+                    }
+                FinancialStatementCalculator.AccountBalance(
+                    id = accountId.toString(),
+                    accountNumber = group.first()[LedgerAccountTable.accountNumber],
+                    name = group.first()[LedgerAccountTable.name],
+                    type = type,
+                    accountClass = group.first()[LedgerAccountTable.accountClass],
+                    netBalance = netBalance,
+                )
+            }
     }
 
     /** Inserts a new [JournalEntryTable] row plus its [PostingTable] rows in the caller's transaction. */

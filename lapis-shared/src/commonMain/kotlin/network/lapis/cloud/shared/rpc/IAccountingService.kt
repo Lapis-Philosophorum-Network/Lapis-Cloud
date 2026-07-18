@@ -2,7 +2,10 @@ package network.lapis.cloud.shared.rpc
 
 import dev.kilua.rpc.annotations.RpcService
 import kotlinx.datetime.LocalDate
+import network.lapis.cloud.shared.domain.AnnualFinancialStatementDto
+import network.lapis.cloud.shared.domain.BalanceSheetDto
 import network.lapis.cloud.shared.domain.GeneralLedgerDto
+import network.lapis.cloud.shared.domain.IncomeStatementDto
 import network.lapis.cloud.shared.domain.JournalEntryDto
 import network.lapis.cloud.shared.domain.JournalEntryInput
 import network.lapis.cloud.shared.domain.JournalEntryStatus
@@ -75,4 +78,31 @@ interface IAccountingService {
         from: LocalDate? = null,
         to: LocalDate? = null,
     ): GeneralLedgerDto
+
+    /**
+     * Role: TREASURER/BOARD/ADMIN. Gewinn- und Verlustrechnung (GuV / income statement): the flow
+     * of `INCOME`/`EXPENSE` postings over `[from, to]` (both inclusive; `from == null` means "since
+     * inception"). Only [JournalEntryStatus.POSTED] postings contribute -- same
+     * "DRAFT is provisional" rule as [getGeneralLedgerAccount].
+     */
+    suspend fun getIncomeStatement(
+        from: LocalDate? = null,
+        to: LocalDate,
+    ): IncomeStatementDto
+
+    /**
+     * Role: TREASURER/BOARD/ADMIN. Bilanz (balance sheet) as of [asOf], computed as the
+     * *cumulative* stock of [JournalEntryStatus.POSTED] postings since inception through [asOf] --
+     * deliberately not windowed to a fiscal year, see [BalanceSheetDto] KDoc for why.
+     */
+    suspend fun getBalanceSheet(asOf: LocalDate): BalanceSheetDto
+
+    /**
+     * Role: TREASURER/BOARD/ADMIN. Jahresabschluss (annual financial statement) for [fiscalYear],
+     * assuming Geschäftsjahr = Kalenderjahr (calendar year) -- bundles [getIncomeStatement] over
+     * that year with [getBalanceSheet] as of the year's end. See [AnnualFinancialStatementDto] KDoc
+     * for why [AnnualFinancialStatementDto.periodResult] and
+     * [AnnualFinancialStatementDto.accumulatedResult] are reported as two distinct figures.
+     */
+    suspend fun getAnnualFinancialStatement(fiscalYear: Int): AnnualFinancialStatementDto
 }
