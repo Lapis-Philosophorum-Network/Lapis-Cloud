@@ -15,12 +15,12 @@
 // the remaining operating expenses (e.g. 6000 Löhne und Gehälter, 6310 Miete), and class 7 is the
 // Finanzergebnis (e.g. 7110 Zinserträge, 7300 Zinsaufwand) -- covering both income and expense
 // sub-accounts. None of classes 4-7 are sphere-partitioned; the same account can be booked to any
-// of the four spheres. Sphere is assigned per booking via a cost center (DATEV KOST1:
-// 1 = ideeller Bereich, 2 = Vermögensverwaltung, 3 = Zweckbetrieb, 4 = wirtschaftlicher
-// Geschäftsbetrieb, 9 = Sammelposten), *not* derived from `account_class`. This wave still ships
-// only `account_class` (Int, 0-9) as a reporting/grouping field -- a later wave (V0.3.3) adds the
-// real per-posting cost-center/sphere attribute as a purely additive nullable column -- see
-// "Explicit non-goals" below.
+// of the four spheres. Sphere is assigned per booking via a cost center (DATEV KOST1: 1 = ideeller
+// Bereich, 2 = Vermögensverwaltung, 3 = Zweckbetrieb, 4 = wirtschaftlicher Geschäftsbetrieb; DATEV
+// itself additionally defines 9 = Sammelposten, which this model deliberately does NOT offer -- see
+// the dedicated comment ahead of the `posting` classOf below), *not* derived from `account_class`.
+// `account_class` (Int, 0-9) remains a reporting/grouping field only; the real per-posting
+// cost-center/sphere attribute is `posting.sphere` (V0.3.3, mandatory NOT NULL) -- see below.
 //
 // This is the versioned source-of-truth *model* for the schema shape (ADR-0016), verified against
 // both the real Flyway-migrated H2 schema and the generated Exposed Table objects
@@ -79,16 +79,31 @@
 // transaction that writes journal_entry + its postings, so an unbalanced post rolls back
 // atomically. See that helper's KDoc for the BigDecimal-compareTo-not-equals pitfall.
 //
+// Four-sphere Gemeinnützigkeit separation (V0.3.3, §§ 51-68 AO): posting.sphere is a mandatory
+// (NOT NULL) enum column -- see gemeinnuetzigkeitSphere below and the dedicated comment ahead of
+// the `posting` classOf. Placement rationale: per-POSTING (not journal_entry, not ledger_account),
+// because (a) the file header above already establishes that sphere is NOT derivable from the
+// SKR42 account/Kontenklasse -- it is assigned per booking via DATEV KOST1, which is a per-line
+// cost center, and (b) a per-line attribute is the only placement that lets a single balanced
+// journal entry legitimately record an inter-sphere transfer (Umbuchung): debit line sphere X,
+// credit line sphere Y. NOT NULL, no default value at the Kotlin/RPC layer either
+// (PostingInput.sphere) -- this is the highest-legal-risk wave in the backlog ("no room for a
+// posting to be silently unassigned or defaulted to the wrong sphere"), so the guarantee is
+// structural at three layers (Kotlin type / kotlinx.serialization enum decode at the RPC boundary
+// / DB NOT NULL+CHECK), not merely a service-layer check like the balance invariant is. This
+// deliberately also forces a sphere onto Bestandskonten lines (Kasse/Bank), which are conceptually
+// sphere-neutral -- accepted tradeoff, and the four-sphere report only aggregates
+// INCOME/EXPENSE-typed accounts, so a cash line's sphere is informational only. No Sammelposten/
+// KOST9 "unassigned" literal exists on purpose -- that would be a way to NOT assign, which
+// contradicts strict separation; a collective-bucket/Kostenstellen mechanism is later V0.3.6 scope.
+// A single journal entry MAY span multiple spheres (no single-sphere-per-entry invariant is
+// enforced) -- sphere is per-line, so a cross-sphere Umbuchung is fully transparent because each
+// line names its own sphere; inter-sphere transfers are representable this way but are not
+// specially validated, tracked, or reported this wave (§58 AO Mittelweitergabe is V0.3.4 scope).
+//
 // Explicit non-goals for this wave (see 02 Projekte/Lapis Cloud V0.3.md for the full wave plan):
 //  - P&L (GuV) / balance sheet (Bilanz) derivation -> V0.3.2. LedgerAccountType is shipped now so
 //    that wave can classify normal-balance sides, but no statement is computed here.
-//  - Four-sphere Gemeinnützigkeit tagging/separation -> V0.3.3. Only account_class (0-9) ships,
-//    and under SKR42 it is NOT a proxy for sphere (unlike the retired SKR49) -- see file header.
-//    The seam for the real per-posting attribute is a documented-but-not-built additive nullable
-//    «Column» enum on posting representing the DATEV KOST1 cost center (e.g. "costCenter" or
-//    "sphere": ideeller Bereich/Vermögensverwaltung/Zweckbetrieb/wirtschaftlicher
-//    Geschäftsbetrieb) -- purely additive against this wave's shape, no rewrite needed later
-//    (pre-1.0, one regenerated baseline, no production data to migrate).
 //  - §55 AO Mittelverwendungsrechnung (use-of-funds/timely-use tracking) -> V0.3.4.
 //  - Not in scope at all this wave: Kassenbuch, Kostenstellen, fiscal-year close/Saldenvortrag
 //    (class 9 carryforward), opening balances beyond the dev seed, USt/VAT handling,
@@ -139,6 +154,19 @@ classDiagram(name = "Accounting") {
         literal(name = "POSTED")
     }
 
+    // The four strictly-separated Gemeinnützigkeit spheres (§§ 51-68 AO), assigned per posting
+    // (DATEV KOST1 cost center 1/2/3/4) -- see the file header and the dedicated comment ahead of
+    // `posting` below for the full placement/NOT-NULL rationale. Literal order is load-bearing:
+    // AccountingSchemaDriftTest asserts ErmDataType.Enum.values in exactly this order, matching
+    // network.lapis.cloud.shared.domain.GemeinnuetzigkeitSphere. Deliberately no fifth
+    // "Sammelposten"/unassigned literal -- see comment ahead of `posting` classOf.
+    val gemeinnuetzigkeitSphere = enumOf(name = "GemeinnuetzigkeitSphere") {
+        literal(name = "IDEELLER_BEREICH") // DATEV KOST1 = 1
+        literal(name = "VERMOEGENSVERWALTUNG") // KOST1 = 2
+        literal(name = "ZWECKBETRIEB") // KOST1 = 3
+        literal(name = "WIRTSCHAFTLICHER_GESCHAEFTSBETRIEB") // KOST1 = 4
+    }
+
     val ledgerAccount = classOf(name = "LedgerAccount") {
         stereotype("Entity") { "tableName" to "ledger_account"; "kotlinObjectName" to "LedgerAccountTable" }
         stereotype("Index") {
@@ -162,7 +190,7 @@ classDiagram(name = "Accounting") {
         }
         // SKR42 Kontenklasse, 0-9 -- reference/reporting field only. See file header: unlike
         // SKR49, the Gemeinnützigkeit sphere is NOT derivable from this class under SKR42 -- it is
-        // assigned per posting via a cost center (KOST1), which is V0.3.3 scope.
+        // assigned per posting via a cost center (KOST1) -- see `posting.sphere` below (V0.3.3).
         attribute(name = "accountClass", type = "Int") {
             stereotype("Column") { "columnName" to "account_class" }
         }
@@ -235,6 +263,18 @@ classDiagram(name = "Accounting") {
         // ... not emitted" comment).
         attribute(name = "amount", type = "BigDecimal") {
             stereotype("Column") { "columnName" to "amount"; "sqlType" to "DECIMAL(15,2)" }
+        }
+        // V0.3.3: mandatory (NOT NULL) Gemeinnützigkeit sphere -- see the dedicated file-header
+        // comment above for the full per-posting-placement / no-default rationale. Deliberately NOT
+        // `multiplicity = Multiplicity(0, 1)` (the nullable idiom used e.g. by
+        // journal_entry.voucherReference/postedAt) -- omitting multiplicity yields a NOT NULL
+        // column, matching `side`/`amount` above. Deliberately no `sqlType` override either -- the
+        // generator auto-sizes the VARCHAR to the longest literal
+        // ("WIRTSCHAFTLICHER_GESCHAEFTSBETRIEB" = 34 chars), exactly as `side` -> VARCHAR(6) and
+        // `type`/`status` above do; an explicit sqlType would fight that auto-sizing and can
+        // suppress the enum-fallback path that emits the CHECK constraint.
+        attribute(name = "sphere", type = gemeinnuetzigkeitSphere) {
+            stereotype("Column") { "columnName" to "sphere"; "enumType" to "network.lapis.cloud.shared.domain.GemeinnuetzigkeitSphere" }
         }
     }
 

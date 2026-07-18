@@ -16,6 +16,7 @@ import network.lapis.cloud.server.security.resolveCurrentMember
 import network.lapis.cloud.shared.domain.AccountRole
 import network.lapis.cloud.shared.domain.AnnualFinancialStatementDto
 import network.lapis.cloud.shared.domain.BalanceSheetDto
+import network.lapis.cloud.shared.domain.FourSphereIncomeStatementDto
 import network.lapis.cloud.shared.domain.GeneralLedgerDto
 import network.lapis.cloud.shared.domain.IncomeStatementDto
 import network.lapis.cloud.shared.domain.JournalEntryDto
@@ -167,6 +168,9 @@ class AccountingService(
                             ledgerAccountId = row[PostingTable.ledgerAccountId].toString(),
                             side = row[PostingTable.side],
                             amount = row[PostingTable.amount],
+                            // JournalEntryBalance ignores sphere, but PostingInput now requires it
+                            // -- see class KDoc for the no-silent-default rationale.
+                            sphere = row[PostingTable.sphere],
                         )
                     }
             requireBalanced(postings)
@@ -284,6 +288,17 @@ class AccountingService(
         }
     }
 
+    override suspend fun getFourSphereIncomeStatement(
+        from: LocalDate?,
+        to: LocalDate,
+    ): FourSphereIncomeStatementDto {
+        val current = resolveCurrentMember(call)
+        current.requireRole(*ACCOUNTING_READ_ROLES)
+        return transaction {
+            FinancialStatementCalculator.fourSphereIncomeStatement(loadSphereAccountBalances(from, to), from, to)
+        }
+    }
+
     override suspend fun getAnnualFinancialStatement(fiscalYear: Int): AnnualFinancialStatementDto {
         val current = resolveCurrentMember(call)
         current.requireRole(*ACCOUNTING_READ_ROLES)
@@ -356,6 +371,57 @@ class AccountingService(
             }
     }
 
+    /**
+     * Same POSTED-only + optional date-range join as [loadAccountBalances], but grouped by
+     * (sphere, ledgerAccountId) instead of ledgerAccountId alone -- feeds
+     * [FinancialStatementCalculator.fourSphereIncomeStatement]. No sphere validation is needed
+     * here: [PostingTable.sphere] is NOT NULL at the DB layer, so non-null is structural, not
+     * something this loader must re-check.
+     */
+    private fun loadSphereAccountBalances(
+        from: LocalDate?,
+        to: LocalDate?,
+    ): List<FinancialStatementCalculator.SphereAccountBalance> {
+        val conditions =
+            mutableListOf<Op<Boolean>>(
+                JournalEntryTable.status eq JournalEntryStatus.POSTED,
+            )
+        if (from != null) conditions += (JournalEntryTable.entryDate greaterEq from)
+        if (to != null) conditions += (JournalEntryTable.entryDate lessEq to)
+
+        val rows =
+            (PostingTable innerJoin JournalEntryTable innerJoin LedgerAccountTable)
+                .selectAll()
+                .where { conditions.reduce { a, b -> a and b } }
+                .toList()
+
+        return rows
+            .groupBy { it[PostingTable.sphere] to it[PostingTable.ledgerAccountId] }
+            .map { (key, group) ->
+                val (sphere, accountId) = key
+                val type = group.first()[LedgerAccountTable.type]
+                val normalSide = GeneralLedgerCalculator.normalBalanceSideOf(type)
+                val netBalance =
+                    group.fold(BigDecimal.ZERO) { acc, row ->
+                        val amount = row[PostingTable.amount]
+                        val signed = if (row[PostingTable.side] == normalSide) amount else amount.negate()
+                        acc + signed
+                    }
+                FinancialStatementCalculator.SphereAccountBalance(
+                    sphere = sphere,
+                    account =
+                        FinancialStatementCalculator.AccountBalance(
+                            id = accountId.toString(),
+                            accountNumber = group.first()[LedgerAccountTable.accountNumber],
+                            name = group.first()[LedgerAccountTable.name],
+                            type = type,
+                            accountClass = group.first()[LedgerAccountTable.accountClass],
+                            netBalance = netBalance,
+                        ),
+                )
+            }
+    }
+
     /** Inserts a new [JournalEntryTable] row plus its [PostingTable] rows in the caller's transaction. */
     private fun insertJournalEntry(
         input: JournalEntryInput,
@@ -381,6 +447,7 @@ class AccountingService(
                 it[ledgerAccountId] = posting.ledgerAccountId.toAccountingUuid("LedgerAccount")
                 it[side] = posting.side
                 it[amount] = posting.amount
+                it[sphere] = posting.sphere
             }
         }
         return loadJournalEntry(id)
@@ -456,6 +523,7 @@ class AccountingService(
             ledgerAccountName = this[LedgerAccountTable.name],
             side = this[PostingTable.side],
             amount = this[PostingTable.amount],
+            sphere = this[PostingTable.sphere],
         )
 
     private fun ResultRow.toJournalEntryDto(postings: List<PostingDto>): JournalEntryDto {

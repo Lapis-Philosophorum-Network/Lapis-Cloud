@@ -3,6 +3,7 @@ package network.lapis.cloud.server.rpc
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import kotlinx.datetime.LocalDate
+import network.lapis.cloud.shared.domain.GemeinnuetzigkeitSphere
 import network.lapis.cloud.shared.domain.LedgerAccountType
 import java.math.BigDecimal
 
@@ -152,5 +153,118 @@ class FinancialStatementCalculatorTest :
             sheet.accumulatedResult.compareTo(BigDecimal.ZERO) shouldBe 0
             sheet.totalEquityAndLiabilities.compareTo(BigDecimal.ZERO) shouldBe 0
             sheet.balanced shouldBe true
+        }
+
+        // ---- FourSphereIncomeStatement (Vier-Sphaeren-Ergebnisrechnung, V0.3.3) ----------------
+
+        fun sphereBalance(
+            sphere: GemeinnuetzigkeitSphere,
+            accountNumber: String,
+            type: LedgerAccountType,
+            amount: String,
+            accountClass: Int = 0,
+            id: String = "id-$sphere-$accountNumber",
+        ) = FinancialStatementCalculator.SphereAccountBalance(
+            sphere = sphere,
+            account =
+                FinancialStatementCalculator.AccountBalance(
+                    id = id,
+                    accountNumber = accountNumber,
+                    name = "Konto $accountNumber",
+                    type = type,
+                    accountClass = accountClass,
+                    netBalance = BigDecimal(amount),
+                ),
+        )
+
+        test("Vier-Sphaeren: result splits correctly across spheres, and each sphere's income-expense=result") {
+            val balances =
+                listOf(
+                    sphereBalance(GemeinnuetzigkeitSphere.IDEELLER_BEREICH, "4000", LedgerAccountType.INCOME, "500.00"),
+                    sphereBalance(GemeinnuetzigkeitSphere.IDEELLER_BEREICH, "6000", LedgerAccountType.EXPENSE, "100.00"),
+                    sphereBalance(GemeinnuetzigkeitSphere.ZWECKBETRIEB, "4200", LedgerAccountType.INCOME, "300.00"),
+                    sphereBalance(GemeinnuetzigkeitSphere.ZWECKBETRIEB, "6310", LedgerAccountType.EXPENSE, "50.00"),
+                )
+            val result = FinancialStatementCalculator.fourSphereIncomeStatement(balances, from, to)
+
+            val ideeller = result.spheres.single { it.sphere == GemeinnuetzigkeitSphere.IDEELLER_BEREICH }
+            ideeller.totalIncome.compareTo(BigDecimal("500.00")) shouldBe 0
+            ideeller.totalExpense.compareTo(BigDecimal("100.00")) shouldBe 0
+            ideeller.result.compareTo(BigDecimal("400.00")) shouldBe 0
+
+            val zweckbetrieb = result.spheres.single { it.sphere == GemeinnuetzigkeitSphere.ZWECKBETRIEB }
+            zweckbetrieb.totalIncome.compareTo(BigDecimal("300.00")) shouldBe 0
+            zweckbetrieb.totalExpense.compareTo(BigDecimal("50.00")) shouldBe 0
+            zweckbetrieb.result.compareTo(BigDecimal("250.00")) shouldBe 0
+
+            // Overall == sum of the four per-sphere results == the plain incomeStatement result
+            // over the same balances (sphere is an orthogonal re-aggregation, not a new scope).
+            result.totalIncome.compareTo(BigDecimal("800.00")) shouldBe 0
+            result.totalExpense.compareTo(BigDecimal("150.00")) shouldBe 0
+            result.result.compareTo(BigDecimal("650.00")) shouldBe 0
+
+            val plainIncomeStatement = FinancialStatementCalculator.incomeStatement(balances.map { it.account }, from, to)
+            result.result.compareTo(plainIncomeStatement.result) shouldBe 0
+        }
+
+        test("Vier-Sphaeren: always exactly 4 SphereResultDto in enum order, zero-filled when empty") {
+            val balances =
+                listOf(
+                    sphereBalance(GemeinnuetzigkeitSphere.ZWECKBETRIEB, "4200", LedgerAccountType.INCOME, "10.00"),
+                )
+            val result = FinancialStatementCalculator.fourSphereIncomeStatement(balances, from, to)
+
+            result.spheres.map { it.sphere } shouldBe
+                listOf(
+                    GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                    GemeinnuetzigkeitSphere.VERMOEGENSVERWALTUNG,
+                    GemeinnuetzigkeitSphere.ZWECKBETRIEB,
+                    GemeinnuetzigkeitSphere.WIRTSCHAFTLICHER_GESCHAEFTSBETRIEB,
+                )
+
+            val empty = result.spheres.single { it.sphere == GemeinnuetzigkeitSphere.IDEELLER_BEREICH }
+            empty.incomeLines shouldBe emptyList()
+            empty.expenseLines shouldBe emptyList()
+            empty.totalIncome.compareTo(BigDecimal.ZERO) shouldBe 0
+            empty.totalExpense.compareTo(BigDecimal.ZERO) shouldBe 0
+            empty.result.compareTo(BigDecimal.ZERO) shouldBe 0
+        }
+
+        test("Vier-Sphaeren: zero-net accounts are omitted from a sphere's line lists; scale/compareTo guard within a sphere") {
+            val balances =
+                listOf(
+                    sphereBalance(GemeinnuetzigkeitSphere.VERMOEGENSVERWALTUNG, "4000", LedgerAccountType.INCOME, "0.00"),
+                    sphereBalance(GemeinnuetzigkeitSphere.VERMOEGENSVERWALTUNG, "4001", LedgerAccountType.INCOME, "100.00"),
+                    sphereBalance(GemeinnuetzigkeitSphere.VERMOEGENSVERWALTUNG, "4002", LedgerAccountType.INCOME, "100.0"),
+                )
+            val result = FinancialStatementCalculator.fourSphereIncomeStatement(balances, from, to)
+            val vermoegensverwaltung = result.spheres.single { it.sphere == GemeinnuetzigkeitSphere.VERMOEGENSVERWALTUNG }
+            vermoegensverwaltung.incomeLines.map { it.accountNumber } shouldBe listOf("4001", "4002")
+            // 100.00 + 100.0 must sum via compareTo-safe BigDecimal arithmetic, not equals-sensitive.
+            vermoegensverwaltung.totalIncome.compareTo(BigDecimal("200.00")) shouldBe 0
+        }
+
+        test("Vier-Sphaeren: the same account appearing in two spheres is aggregated per sphere, not merged") {
+            val balances =
+                listOf(
+                    sphereBalance(GemeinnuetzigkeitSphere.IDEELLER_BEREICH, "0920", LedgerAccountType.INCOME, "50.00", id = "same-account"),
+                    sphereBalance(
+                        GemeinnuetzigkeitSphere.WIRTSCHAFTLICHER_GESCHAEFTSBETRIEB,
+                        "0920",
+                        LedgerAccountType.INCOME,
+                        "70.00",
+                        id = "same-account",
+                    ),
+                )
+            val result = FinancialStatementCalculator.fourSphereIncomeStatement(balances, from, to)
+            result.spheres
+                .single { it.sphere == GemeinnuetzigkeitSphere.IDEELLER_BEREICH }
+                .totalIncome
+                .compareTo(BigDecimal("50.00")) shouldBe 0
+            result.spheres
+                .single { it.sphere == GemeinnuetzigkeitSphere.WIRTSCHAFTLICHER_GESCHAEFTSBETRIEB }
+                .totalIncome
+                .compareTo(BigDecimal("70.00")) shouldBe 0
+            result.totalIncome.compareTo(BigDecimal("120.00")) shouldBe 0
         }
     })

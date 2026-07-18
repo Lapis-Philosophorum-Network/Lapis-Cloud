@@ -2,6 +2,7 @@ package network.lapis.cloud.server.rpc
 
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
+import network.lapis.cloud.shared.domain.GemeinnuetzigkeitSphere
 import network.lapis.cloud.shared.domain.PostingInput
 import network.lapis.cloud.shared.domain.PostingSide
 import java.math.BigDecimal
@@ -21,7 +22,8 @@ class JournalEntryBalanceTest :
             side: PostingSide,
             amount: String,
             accountId: String = accountA,
-        ) = PostingInput(ledgerAccountId = accountId, side = side, amount = BigDecimal(amount))
+            sphere: GemeinnuetzigkeitSphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+        ) = PostingInput(ledgerAccountId = accountId, side = side, amount = BigDecimal(amount), sphere = sphere)
 
         test("a simple balanced two-line entry (100 debit / 100 credit) is balanced") {
             val result =
@@ -127,8 +129,29 @@ class JournalEntryBalanceTest :
             val result =
                 JournalEntryBalance.validateBalanced(
                     listOf(
-                        PostingInput(ledgerAccountId = accountA, side = PostingSide.DEBIT, amount = debit),
-                        PostingInput(ledgerAccountId = accountB, side = PostingSide.CREDIT, amount = credit),
+                        PostingInput(
+                            ledgerAccountId = accountA,
+                            side = PostingSide.DEBIT,
+                            amount = debit,
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
+                        PostingInput(
+                            ledgerAccountId = accountB,
+                            side = PostingSide.CREDIT,
+                            amount = credit,
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
+                    ),
+                )
+            result.balanced shouldBe true
+        }
+
+        test("validateBalanced is sphere-agnostic -- a mixed-sphere balanced set still validates (balance and sphere are orthogonal)") {
+            val result =
+                JournalEntryBalance.validateBalanced(
+                    listOf(
+                        posting(PostingSide.DEBIT, "40.00", accountA, sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH),
+                        posting(PostingSide.CREDIT, "40.00", accountB, sphere = GemeinnuetzigkeitSphere.ZWECKBETRIEB),
                     ),
                 )
             result.balanced shouldBe true

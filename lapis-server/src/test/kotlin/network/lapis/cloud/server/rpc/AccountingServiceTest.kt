@@ -29,6 +29,7 @@ import network.lapis.cloud.server.db.generated.PostingTable
 import network.lapis.cloud.server.security.ForbiddenException
 import network.lapis.cloud.server.security.UnauthenticatedException
 import network.lapis.cloud.shared.domain.AccountRole
+import network.lapis.cloud.shared.domain.GemeinnuetzigkeitSphere
 import network.lapis.cloud.shared.domain.JournalEntryInput
 import network.lapis.cloud.shared.domain.JournalEntryStatus
 import network.lapis.cloud.shared.domain.LedgerAccountInput
@@ -110,7 +111,7 @@ class AccountingServiceTest :
         }
 
         fun postingsParam(postings: List<PostingInput>): String =
-            postings.joinToString(",") { "${it.ledgerAccountId}:${it.side}:${it.amount}" }
+            postings.joinToString(",") { "${it.ledgerAccountId}:${it.side}:${it.amount}:${it.sphere}" }
 
         fun entryParams(
             date: LocalDate,
@@ -186,8 +187,18 @@ class AccountingServiceTest :
 
                 val postings =
                     listOf(
-                        PostingInput(kasse.toString(), PostingSide.DEBIT, BigDecimal("50.00")),
-                        PostingInput(beitraege.toString(), PostingSide.CREDIT, BigDecimal("50.00")),
+                        PostingInput(
+                            kasse.toString(),
+                            PostingSide.DEBIT,
+                            BigDecimal("50.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
+                        PostingInput(
+                            beitraege.toString(),
+                            PostingSide.CREDIT,
+                            BigDecimal("50.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
                     )
                 val response =
                     client.post("/test/post-entry?${entryParams(LocalDate(2026, 3, 1), "Mitgliedsbeitrag", postings)}") {
@@ -214,8 +225,18 @@ class AccountingServiceTest :
 
                 val postings =
                     listOf(
-                        PostingInput(kasse.toString(), PostingSide.DEBIT, BigDecimal("100.00")),
-                        PostingInput(beitraege.toString(), PostingSide.CREDIT, BigDecimal("90.00")),
+                        PostingInput(
+                            kasse.toString(),
+                            PostingSide.DEBIT,
+                            BigDecimal("100.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
+                        PostingInput(
+                            beitraege.toString(),
+                            PostingSide.CREDIT,
+                            BigDecimal("90.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
                     )
                 val response =
                     client.post("/test/post-entry?${entryParams(LocalDate(2026, 3, 1), "Unbalanced", postings)}") {
@@ -241,8 +262,18 @@ class AccountingServiceTest :
 
                 val postings =
                     listOf(
-                        PostingInput(kasse.toString(), PostingSide.DEBIT, BigDecimal("10.00")),
-                        PostingInput(inactive.toString(), PostingSide.CREDIT, BigDecimal("10.00")),
+                        PostingInput(
+                            kasse.toString(),
+                            PostingSide.DEBIT,
+                            BigDecimal("10.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
+                        PostingInput(
+                            inactive.toString(),
+                            PostingSide.CREDIT,
+                            BigDecimal("10.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
                     )
                 val response =
                     client.post("/test/post-entry?${entryParams(LocalDate(2026, 3, 1), "Inaktiv", postings)}") {
@@ -252,8 +283,18 @@ class AccountingServiceTest :
 
                 val nonexistentPostings =
                     listOf(
-                        PostingInput(kasse.toString(), PostingSide.DEBIT, BigDecimal("10.00")),
-                        PostingInput(Uuid.random().toString(), PostingSide.CREDIT, BigDecimal("10.00")),
+                        PostingInput(
+                            kasse.toString(),
+                            PostingSide.DEBIT,
+                            BigDecimal("10.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
+                        PostingInput(
+                            Uuid.random().toString(),
+                            PostingSide.CREDIT,
+                            BigDecimal("10.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
                     )
                 val notFoundResponse =
                     client.post("/test/post-entry?${entryParams(LocalDate(2026, 3, 1), "Unbekannt", nonexistentPostings)}") {
@@ -273,7 +314,15 @@ class AccountingServiceTest :
                 val kasse = createLedgerAccount("0925", LedgerAccountType.ASSET)
                 val beitraege = createLedgerAccount("2113", LedgerAccountType.INCOME, accountClass = 2)
 
-                val unbalancedPostings = listOf(PostingInput(kasse.toString(), PostingSide.DEBIT, BigDecimal("75.00")))
+                val unbalancedPostings =
+                    listOf(
+                        PostingInput(
+                            kasse.toString(),
+                            PostingSide.DEBIT,
+                            BigDecimal("75.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
+                    )
                 val draftResponse =
                     client.post("/test/save-draft?${entryParams(LocalDate(2026, 4, 1), "Entwurf", unbalancedPostings)}") {
                         header("X-Member-Id", treasurer.toString())
@@ -295,6 +344,7 @@ class AccountingServiceTest :
                         it[ledgerAccountId] = beitraege
                         it[side] = PostingSide.CREDIT
                         it[amount] = BigDecimal("75.00")
+                        it[sphere] = GemeinnuetzigkeitSphere.IDEELLER_BEREICH
                     }
                 }
                 val postedResponse = client.post("/test/post-draft/$entryId") { header("X-Member-Id", treasurer.toString()) }
@@ -320,8 +370,18 @@ class AccountingServiceTest :
                 suspend fun postBalanced(date: LocalDate) {
                     val postings =
                         listOf(
-                            PostingInput(kasse.toString(), PostingSide.DEBIT, BigDecimal("10.00")),
-                            PostingInput(beitraege.toString(), PostingSide.CREDIT, BigDecimal("10.00")),
+                            PostingInput(
+                                kasse.toString(),
+                                PostingSide.DEBIT,
+                                BigDecimal("10.00"),
+                                sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                            ),
+                            PostingInput(
+                                beitraege.toString(),
+                                PostingSide.CREDIT,
+                                BigDecimal("10.00"),
+                                sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                            ),
                         )
                     client.post("/test/post-entry?${entryParams(date, "Buchung-$date", postings)}") {
                         header("X-Member-Id", treasurer.toString())
@@ -391,16 +451,36 @@ class AccountingServiceTest :
                     LocalDate(2030, 3, 1),
                     "Beitrag",
                     listOf(
-                        PostingInput(kasse.toString(), PostingSide.DEBIT, BigDecimal("100.00")),
-                        PostingInput(beitraege.toString(), PostingSide.CREDIT, BigDecimal("100.00")),
+                        PostingInput(
+                            kasse.toString(),
+                            PostingSide.DEBIT,
+                            BigDecimal("100.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
+                        PostingInput(
+                            beitraege.toString(),
+                            PostingSide.CREDIT,
+                            BigDecimal("100.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
                     ),
                 )
                 post(
                     LocalDate(2030, 3, 15),
                     "Miete",
                     listOf(
-                        PostingInput(miete.toString(), PostingSide.DEBIT, BigDecimal("40.00")),
-                        PostingInput(kasse.toString(), PostingSide.CREDIT, BigDecimal("40.00")),
+                        PostingInput(
+                            miete.toString(),
+                            PostingSide.DEBIT,
+                            BigDecimal("40.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
+                        PostingInput(
+                            kasse.toString(),
+                            PostingSide.CREDIT,
+                            BigDecimal("40.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
                     ),
                 )
                 // Out of range -- must not contribute.
@@ -408,8 +488,18 @@ class AccountingServiceTest :
                     LocalDate(2030, 4, 1),
                     "Spaeter",
                     listOf(
-                        PostingInput(kasse.toString(), PostingSide.DEBIT, BigDecimal("500.00")),
-                        PostingInput(beitraege.toString(), PostingSide.CREDIT, BigDecimal("500.00")),
+                        PostingInput(
+                            kasse.toString(),
+                            PostingSide.DEBIT,
+                            BigDecimal("500.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
+                        PostingInput(
+                            beitraege.toString(),
+                            PostingSide.CREDIT,
+                            BigDecimal("500.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
                     ),
                 )
                 // DRAFT in range -- must not contribute.
@@ -418,7 +508,14 @@ class AccountingServiceTest :
                         entryParams(
                             LocalDate(2030, 3, 10),
                             "Entwurf-GuV",
-                            listOf(PostingInput(beitraege.toString(), PostingSide.CREDIT, BigDecimal("999.00"))),
+                            listOf(
+                                PostingInput(
+                                    beitraege.toString(),
+                                    PostingSide.CREDIT,
+                                    BigDecimal("999.00"),
+                                    sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                                ),
+                            ),
                         )
                     }",
                 ) { header("X-Member-Id", treasurer.toString()) }
@@ -485,8 +582,18 @@ class AccountingServiceTest :
                             LocalDate(2026, 2, 1),
                             "Beitrag",
                             listOf(
-                                PostingInput(kasse.toString(), PostingSide.DEBIT, BigDecimal("300.00")),
-                                PostingInput(beitraege.toString(), PostingSide.CREDIT, BigDecimal("300.00")),
+                                PostingInput(
+                                    kasse.toString(),
+                                    PostingSide.DEBIT,
+                                    BigDecimal("300.00"),
+                                    sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                                ),
+                                PostingInput(
+                                    beitraege.toString(),
+                                    PostingSide.CREDIT,
+                                    BigDecimal("300.00"),
+                                    sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                                ),
                             ),
                         )
                     }",
@@ -497,8 +604,18 @@ class AccountingServiceTest :
                             LocalDate(2026, 2, 15),
                             "Miete",
                             listOf(
-                                PostingInput(miete.toString(), PostingSide.DEBIT, BigDecimal("120.00")),
-                                PostingInput(kasse.toString(), PostingSide.CREDIT, BigDecimal("120.00")),
+                                PostingInput(
+                                    miete.toString(),
+                                    PostingSide.DEBIT,
+                                    BigDecimal("120.00"),
+                                    sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                                ),
+                                PostingInput(
+                                    kasse.toString(),
+                                    PostingSide.CREDIT,
+                                    BigDecimal("120.00"),
+                                    sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                                ),
                             ),
                         )
                     }",
@@ -509,7 +626,14 @@ class AccountingServiceTest :
                         entryParams(
                             LocalDate(2026, 2, 20),
                             "Entwurf-Bilanz",
-                            listOf(PostingInput(kasse.toString(), PostingSide.DEBIT, BigDecimal("999.00"))),
+                            listOf(
+                                PostingInput(
+                                    kasse.toString(),
+                                    PostingSide.DEBIT,
+                                    BigDecimal("999.00"),
+                                    sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                                ),
+                            ),
                         )
                     }",
                 ) { header("X-Member-Id", treasurer.toString()) }
@@ -560,8 +684,18 @@ class AccountingServiceTest :
                             LocalDate(2040, 6, 1),
                             "Beitrag-2040",
                             listOf(
-                                PostingInput(kasse.toString(), PostingSide.DEBIT, BigDecimal("200.00")),
-                                PostingInput(beitraege.toString(), PostingSide.CREDIT, BigDecimal("200.00")),
+                                PostingInput(
+                                    kasse.toString(),
+                                    PostingSide.DEBIT,
+                                    BigDecimal("200.00"),
+                                    sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                                ),
+                                PostingInput(
+                                    beitraege.toString(),
+                                    PostingSide.CREDIT,
+                                    BigDecimal("200.00"),
+                                    sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                                ),
                             ),
                         )
                     }",
@@ -573,8 +707,18 @@ class AccountingServiceTest :
                             LocalDate(2041, 6, 1),
                             "Beitrag-2041",
                             listOf(
-                                PostingInput(kasse.toString(), PostingSide.DEBIT, BigDecimal("50.00")),
-                                PostingInput(beitraege.toString(), PostingSide.CREDIT, BigDecimal("50.00")),
+                                PostingInput(
+                                    kasse.toString(),
+                                    PostingSide.DEBIT,
+                                    BigDecimal("50.00"),
+                                    sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                                ),
+                                PostingInput(
+                                    beitraege.toString(),
+                                    PostingSide.CREDIT,
+                                    BigDecimal("50.00"),
+                                    sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                                ),
                             ),
                         )
                     }",
@@ -635,8 +779,18 @@ class AccountingServiceTest :
                     val beitraegeSide = if (kasseSide == PostingSide.DEBIT) PostingSide.CREDIT else PostingSide.DEBIT
                     val postings =
                         listOf(
-                            PostingInput(kasse.toString(), kasseSide, BigDecimal(amount)),
-                            PostingInput(beitraege.toString(), beitraegeSide, BigDecimal(amount)),
+                            PostingInput(
+                                kasse.toString(),
+                                kasseSide,
+                                BigDecimal(amount),
+                                sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                            ),
+                            PostingInput(
+                                beitraege.toString(),
+                                beitraegeSide,
+                                BigDecimal(amount),
+                                sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                            ),
                         )
                     client.post("/test/post-entry?${entryParams(date, "GL-$date", postings)}") {
                         header("X-Member-Id", treasurer.toString())
@@ -654,6 +808,243 @@ class AccountingServiceTest :
                     client.get("/test/general-ledger/$beitraege") { header("X-Member-Id", treasurer.toString()) }.bodyAsText()
                 // INCOME is credit-normal -- two CREDIT postings of 100 and 20 both increase the balance.
                 beitraegeLedger.split(":")[2] shouldBe "120.00"
+            }
+        }
+
+        test("posting.sphere round-trips exactly as sent -- postJournalEntry then getJournalEntry") {
+            testApplication {
+                application {
+                    install(StatusPages) { installAccountingExceptionHandlers() }
+                    routing { registerAccountingTestRoutes() }
+                }
+                val treasurer = createTestMember("acct-treasurer-sphere-roundtrip@example.org", AccountRole.TREASURER)
+                val kasse = createLedgerAccount("0934", LedgerAccountType.ASSET)
+                val beitraege = createLedgerAccount("4003", LedgerAccountType.INCOME, accountClass = 4)
+
+                val postings =
+                    listOf(
+                        PostingInput(
+                            kasse.toString(),
+                            PostingSide.DEBIT,
+                            BigDecimal("30.00"),
+                            sphere = GemeinnuetzigkeitSphere.ZWECKBETRIEB,
+                        ),
+                        PostingInput(
+                            beitraege.toString(),
+                            PostingSide.CREDIT,
+                            BigDecimal("30.00"),
+                            sphere = GemeinnuetzigkeitSphere.WIRTSCHAFTLICHER_GESCHAEFTSBETRIEB,
+                        ),
+                    )
+                val posted =
+                    client.post("/test/post-entry?${entryParams(LocalDate(2026, 7, 1), "Sphaere-Roundtrip", postings)}") {
+                        header("X-Member-Id", treasurer.toString())
+                    }
+                posted.status shouldBe HttpStatusCode.OK
+                val entryId = posted.bodyAsText().split(":")[0]
+
+                val fetched =
+                    client.get("/test/get-entry/$entryId") { header("X-Member-Id", treasurer.toString()) }.bodyAsText()
+                val postingSpheres = fetched.split(":", limit = 4)[3].split("|").toSet()
+                postingSpheres shouldBe
+                    setOf(
+                        "DEBIT:${GemeinnuetzigkeitSphere.ZWECKBETRIEB}",
+                        "CREDIT:${GemeinnuetzigkeitSphere.WIRTSCHAFTLICHER_GESCHAEFTSBETRIEB}",
+                    )
+            }
+        }
+
+        test("a single journal entry whose debit and credit lines carry different spheres posts successfully (inter-sphere transfer)") {
+            testApplication {
+                application {
+                    install(StatusPages) { installAccountingExceptionHandlers() }
+                    routing { registerAccountingTestRoutes() }
+                }
+                val treasurer = createTestMember("acct-treasurer-cross-sphere@example.org", AccountRole.TREASURER)
+                val kasse = createLedgerAccount("0935", LedgerAccountType.ASSET)
+                val bank = createLedgerAccount("0936", LedgerAccountType.ASSET)
+
+                val postings =
+                    listOf(
+                        PostingInput(
+                            bank.toString(),
+                            PostingSide.DEBIT,
+                            BigDecimal("25.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
+                        PostingInput(
+                            kasse.toString(),
+                            PostingSide.CREDIT,
+                            BigDecimal("25.00"),
+                            sphere = GemeinnuetzigkeitSphere.VERMOEGENSVERWALTUNG,
+                        ),
+                    )
+                val response =
+                    client.post("/test/post-entry?${entryParams(LocalDate(2026, 7, 2), "Umbuchung", postings)}") {
+                        header("X-Member-Id", treasurer.toString())
+                    }
+                response.status shouldBe HttpStatusCode.OK
+                response.bodyAsText().split(":")[1] shouldBe "POSTED"
+            }
+        }
+
+        test("getFourSphereIncomeStatement splits income/expense by sphere, all-four-present, excludes DRAFT and out-of-range") {
+            testApplication {
+                application {
+                    install(StatusPages) { installAccountingExceptionHandlers() }
+                    routing { registerAccountingTestRoutes() }
+                }
+                val treasurer = createTestMember("acct-treasurer-vier-sphaeren@example.org", AccountRole.TREASURER)
+                val board = createTestMember("acct-board-vier-sphaeren@example.org", AccountRole.BOARD)
+                val plainMember = createTestMember("acct-plain-vier-sphaeren@example.org", AccountRole.MEMBER)
+                val kasse = createLedgerAccount("0937", LedgerAccountType.ASSET)
+                val beitraege = createLedgerAccount("4004", LedgerAccountType.INCOME, accountClass = 4)
+                val miete = createLedgerAccount("6312", LedgerAccountType.EXPENSE, accountClass = 6)
+
+                suspend fun post(
+                    date: LocalDate,
+                    description: String,
+                    postings: List<PostingInput>,
+                ) {
+                    client.post("/test/post-entry?${entryParams(date, description, postings)}") {
+                        header("X-Member-Id", treasurer.toString())
+                    }
+                }
+                // Distinct far-future year, same date-range-isolation idiom as the GuV test (2030) above.
+                // IDEELLER_BEREICH: 200 income.
+                post(
+                    LocalDate(2035, 3, 1),
+                    "Spende",
+                    listOf(
+                        PostingInput(
+                            kasse.toString(),
+                            PostingSide.DEBIT,
+                            BigDecimal("200.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
+                        PostingInput(
+                            beitraege.toString(),
+                            PostingSide.CREDIT,
+                            BigDecimal("200.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
+                    ),
+                )
+                // ZWECKBETRIEB: 80 income, 30 expense.
+                post(
+                    LocalDate(2035, 3, 5),
+                    "Zweckbetrieb-Erloes",
+                    listOf(
+                        PostingInput(
+                            kasse.toString(),
+                            PostingSide.DEBIT,
+                            BigDecimal("80.00"),
+                            sphere = GemeinnuetzigkeitSphere.ZWECKBETRIEB,
+                        ),
+                        PostingInput(
+                            beitraege.toString(),
+                            PostingSide.CREDIT,
+                            BigDecimal("80.00"),
+                            sphere = GemeinnuetzigkeitSphere.ZWECKBETRIEB,
+                        ),
+                    ),
+                )
+                post(
+                    LocalDate(2035, 3, 6),
+                    "Zweckbetrieb-Miete",
+                    listOf(
+                        PostingInput(
+                            miete.toString(),
+                            PostingSide.DEBIT,
+                            BigDecimal("30.00"),
+                            sphere = GemeinnuetzigkeitSphere.ZWECKBETRIEB,
+                        ),
+                        PostingInput(
+                            kasse.toString(),
+                            PostingSide.CREDIT,
+                            BigDecimal("30.00"),
+                            sphere = GemeinnuetzigkeitSphere.ZWECKBETRIEB,
+                        ),
+                    ),
+                )
+                // Out of range -- must not contribute.
+                post(
+                    LocalDate(2035, 4, 1),
+                    "Spaeter",
+                    listOf(
+                        PostingInput(
+                            kasse.toString(),
+                            PostingSide.DEBIT,
+                            BigDecimal("999.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
+                        PostingInput(
+                            beitraege.toString(),
+                            PostingSide.CREDIT,
+                            BigDecimal("999.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
+                    ),
+                )
+                // DRAFT in range -- must not contribute.
+                client.post(
+                    "/test/save-draft?${
+                        entryParams(
+                            LocalDate(2035, 3, 10),
+                            "Entwurf-VierSphaeren",
+                            listOf(
+                                PostingInput(
+                                    beitraege.toString(),
+                                    PostingSide.CREDIT,
+                                    BigDecimal("777.00"),
+                                    sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                                ),
+                            ),
+                        )
+                    }",
+                ) { header("X-Member-Id", treasurer.toString()) }
+
+                val response =
+                    client
+                        .get("/test/four-sphere-income-statement?from=2035-03-01&to=2035-03-31") {
+                            header("X-Member-Id", treasurer.toString())
+                        }.bodyAsText()
+                val (perSphereRaw, overallRaw) = response.split("#")
+                val perSphere =
+                    perSphereRaw.split(";").associate {
+                        val parts = it.split(":")
+                        parts[0] to Triple(parts[1], parts[2], parts[3])
+                    }
+                // All four spheres present (zero-filled where no activity).
+                perSphere.keys shouldBe
+                    setOf(
+                        "${GemeinnuetzigkeitSphere.IDEELLER_BEREICH}",
+                        "${GemeinnuetzigkeitSphere.VERMOEGENSVERWALTUNG}",
+                        "${GemeinnuetzigkeitSphere.ZWECKBETRIEB}",
+                        "${GemeinnuetzigkeitSphere.WIRTSCHAFTLICHER_GESCHAEFTSBETRIEB}",
+                    )
+                perSphere.getValue("${GemeinnuetzigkeitSphere.IDEELLER_BEREICH}") shouldBe Triple("200.00", "0", "200.00")
+                perSphere.getValue("${GemeinnuetzigkeitSphere.ZWECKBETRIEB}") shouldBe Triple("80.00", "30.00", "50.00")
+                perSphere.getValue("${GemeinnuetzigkeitSphere.VERMOEGENSVERWALTUNG}") shouldBe Triple("0", "0", "0")
+                perSphere.getValue("${GemeinnuetzigkeitSphere.WIRTSCHAFTLICHER_GESCHAEFTSBETRIEB}") shouldBe Triple("0", "0", "0")
+
+                val overallParts = overallRaw.split(":")
+                overallParts[0] shouldBe "280.00" // 200 + 80
+                overallParts[1] shouldBe "30.00"
+                overallParts[2] shouldBe "250.00"
+
+                // Authorization: BOARD may read, plain MEMBER is forbidden, unauthenticated is unauthorized.
+                client
+                    .get("/test/four-sphere-income-statement?from=2035-03-01&to=2035-03-31") {
+                        header("X-Member-Id", board.toString())
+                    }.status shouldBe HttpStatusCode.OK
+                client
+                    .get("/test/four-sphere-income-statement?from=2035-03-01&to=2035-03-31") {
+                        header("X-Member-Id", plainMember.toString())
+                    }.status shouldBe HttpStatusCode.Forbidden
+                client
+                    .get("/test/four-sphere-income-statement?from=2035-03-01&to=2035-03-31")
+                    .status shouldBe HttpStatusCode.Unauthorized
             }
         }
     })
@@ -716,7 +1107,10 @@ private fun Route.registerAccountingTestRoutes() {
     get("/test/get-entry/{id}") {
         val service = AccountingService(call)
         val dto = service.getJournalEntry(call.parameters["id"]!!)
-        call.respondText("${dto.id}:${dto.status}:${dto.postings.size}")
+        // Trailing 4th field lists each posting's "side:sphere" pair, pipe-separated, in the
+        // order returned -- used by the sphere round-trip test.
+        val postingSpheres = dto.postings.joinToString("|") { "${it.side}:${it.sphere}" }
+        call.respondText("${dto.id}:${dto.status}:${dto.postings.size}:$postingSpheres")
     }
     get("/test/list-journal") {
         val service = AccountingService(call)
@@ -752,6 +1146,17 @@ private fun Route.registerAccountingTestRoutes() {
         val dto = service.getAnnualFinancialStatement(year)
         call.respondText("${dto.periodEnd}:${dto.periodResult}:${dto.accumulatedResult}")
     }
+    get("/test/four-sphere-income-statement") {
+        val service = AccountingService(call)
+        val q = call.request.queryParameters
+        val dto =
+            service.getFourSphereIncomeStatement(
+                from = q["from"]?.let { LocalDate.parse(it) },
+                to = LocalDate.parse(q["to"]!!),
+            )
+        val perSphere = dto.spheres.joinToString(";") { "${it.sphere}:${it.totalIncome}:${it.totalExpense}:${it.result}" }
+        call.respondText("$perSphere#${dto.totalIncome}:${dto.totalExpense}:${dto.result}")
+    }
 }
 
 private suspend fun readJournalEntryInput(call: ApplicationCall): JournalEntryInput {
@@ -762,7 +1167,12 @@ private suspend fun readJournalEntryInput(call: ApplicationCall): JournalEntryIn
             .filter { it.isNotBlank() }
             .map { entry ->
                 val parts = entry.split(":")
-                PostingInput(ledgerAccountId = parts[0], side = PostingSide.valueOf(parts[1]), amount = BigDecimal(parts[2]))
+                PostingInput(
+                    ledgerAccountId = parts[0],
+                    side = PostingSide.valueOf(parts[1]),
+                    amount = BigDecimal(parts[2]),
+                    sphere = GemeinnuetzigkeitSphere.valueOf(parts[3]),
+                )
             }
     return JournalEntryInput(
         entryDate = LocalDate.parse(q["date"]!!),

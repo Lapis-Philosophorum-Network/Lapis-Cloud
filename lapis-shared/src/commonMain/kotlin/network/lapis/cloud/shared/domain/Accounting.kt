@@ -34,6 +34,28 @@ enum class PostingSide { DEBIT, CREDIT }
 enum class JournalEntryStatus { DRAFT, POSTED }
 
 /**
+ * The four strictly-separated Gemeinnützigkeit spheres (§§ 51-68 AO): [IDEELLER_BEREICH]
+ * (ideeller Bereich), [VERMOEGENSVERWALTUNG] (Vermögensverwaltung), [ZWECKBETRIEB] (Zweckbetrieb),
+ * [WIRTSCHAFTLICHER_GESCHAEFTSBETRIEB] (wirtschaftlicher Geschäftsbetrieb). Assigned per posting
+ * (DATEV KOST1 cost center), NOT derivable from the SKR42 account/Kontenklasse -- see the
+ * `10-accounting.kuml.kts` file header for why. There is deliberately no "Sammelposten"/unassigned
+ * literal (DATEV's own KOST1 = 9): every posting must name exactly one real sphere -- this is the
+ * highest-legal-risk wave in the backlog (losing Gemeinnützigkeit status), so [PostingInput.sphere]
+ * is non-nullable with no default, and this enum offers no escape-hatch literal to default to.
+ * [kost1Code] is the DATEV KOST1 number, carried for later DATEV export -- kotlinx.serialization
+ * still serializes the enum by its literal name, not this constructor property.
+ */
+@Serializable
+enum class GemeinnuetzigkeitSphere(
+    val kost1Code: Int,
+) {
+    IDEELLER_BEREICH(1),
+    VERMOEGENSVERWALTUNG(2),
+    ZWECKBETRIEB(3),
+    WIRTSCHAFTLICHER_GESCHAEFTSBETRIEB(4),
+}
+
+/**
  * One SKR42 Konto. [accountNumber] is the five-digit (or shorter, some system accounts are
  * shorter) SKR42 number whose leading digit is the Kontenklasse (0-9) -- see the `.kuml.kts` file
  * header for why the Gemeinnützigkeit sphere is NOT derivable from that class under SKR42.
@@ -59,7 +81,11 @@ data class LedgerAccountInput(
     val active: Boolean = true,
 )
 
-/** One Soll/Haben line of a [JournalEntryDto] -- always references an active [LedgerAccountDto]. */
+/**
+ * One Soll/Haben line of a [JournalEntryDto] -- always references an active [LedgerAccountDto].
+ * [sphere] is the mandatory (never null) Gemeinnützigkeit sphere this line is booked to -- see
+ * [GemeinnuetzigkeitSphere] KDoc.
+ */
 @Serializable
 data class PostingDto(
     val id: String,
@@ -68,13 +94,19 @@ data class PostingDto(
     val ledgerAccountName: String,
     val side: PostingSide,
     val amount: Decimal,
+    val sphere: GemeinnuetzigkeitSphere,
 )
 
+/**
+ * [sphere] deliberately has NO default value -- see [GemeinnuetzigkeitSphere] KDoc for why every
+ * posting must be assigned to a sphere explicitly, with no silent fallback.
+ */
 @Serializable
 data class PostingInput(
     val ledgerAccountId: String,
     val side: PostingSide,
     val amount: Decimal,
+    val sphere: GemeinnuetzigkeitSphere,
 )
 
 @Serializable

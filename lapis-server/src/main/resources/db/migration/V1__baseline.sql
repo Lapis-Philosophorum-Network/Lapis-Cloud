@@ -216,9 +216,11 @@ CREATE TABLE posting (
     id UUID NOT NULL PRIMARY KEY,
     side VARCHAR(6) NOT NULL,
     amount DECIMAL(15, 2) NOT NULL,
+    sphere VARCHAR(34) NOT NULL,
     journal_entry_id UUID NOT NULL,
     ledger_account_id UUID NOT NULL,
-    CHECK (side IN ('DEBIT', 'CREDIT'))
+    CHECK (side IN ('DEBIT', 'CREDIT')),
+    CHECK (sphere IN ('IDEELLER_BEREICH', 'VERMOEGENSVERWALTUNG', 'ZWECKBETRIEB', 'WIRTSCHAFTLICHER_GESCHAEFTSBETRIEB'))
 );
 
 CREATE TABLE agenda_item (

@@ -118,6 +118,14 @@ class AccountingSchemaDriftTest :
             entity.attributeByName("amount")?.type shouldBe ErmDataType.Decimal(15, 2)
         }
 
+        test("posting.sphere is NOT NULL -- no posting may be silently unassigned to a Gemeinnuetzigkeit sphere") {
+            val entity = model.entities.single { it.name == "posting" }
+            entity.attributeByName("sphere")?.nullable shouldBe false
+
+            val real = transaction { introspectAccountingTable("posting") }
+            real.columns.getValue("sphere").nullable shouldBe false
+        }
+
         // ── (2) Model vs. generated Exposed Table objects ────────────────────
 
         test("ledger_account entity column-name set matches the generated LedgerAccountTable 1:1") {
@@ -141,10 +149,11 @@ class AccountingSchemaDriftTest :
                 .map { it.name } shouldContainExactlyInAnyOrder PostingTable.columns.map { it.name }
         }
 
-        test("ledger_account.type/journal_entry.status/posting.side are modelled as real ErmDataType.Enum columns") {
+        test("ledger_account.type/journal_entry.status/posting.side/posting.sphere are modelled as real ErmDataType.Enum columns") {
             val type = model.entities.single { it.name == "ledger_account" }.attributeByName("type")
             val status = model.entities.single { it.name == "journal_entry" }.attributeByName("status")
             val side = model.entities.single { it.name == "posting" }.attributeByName("side")
+            val sphere = model.entities.single { it.name == "posting" }.attributeByName("sphere")
 
             type?.type shouldBe
                 ErmDataType.Enum(
@@ -163,6 +172,18 @@ class AccountingSchemaDriftTest :
                     name = "PostingSide",
                     values = listOf("DEBIT", "CREDIT"),
                     externalFqName = "network.lapis.cloud.shared.domain.PostingSide",
+                )
+            sphere?.type shouldBe
+                ErmDataType.Enum(
+                    name = "GemeinnuetzigkeitSphere",
+                    values =
+                        listOf(
+                            "IDEELLER_BEREICH",
+                            "VERMOEGENSVERWALTUNG",
+                            "ZWECKBETRIEB",
+                            "WIRTSCHAFTLICHER_GESCHAEFTSBETRIEB",
+                        ),
+                    externalFqName = "network.lapis.cloud.shared.domain.GemeinnuetzigkeitSphere",
                 )
         }
     })

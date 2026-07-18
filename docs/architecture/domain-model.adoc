@@ -316,9 +316,9 @@ Wareneingang), class 6 covers the remaining operating expenses (e.g. 6000 Löhne
 Miete), and class 7 is the Finanzergebnis (e.g. 7110 Zinserträge, 7300 Zinsaufwand) — covering both
 income and expense sub-accounts. None of classes 4-7 are sphere-partitioned; the same account can
 be booked to any of the four spheres. Sphere is assigned per booking via a cost center (DATEV
-KOST1), not derived from the account. This wave ships only `accountClass` as a reporting/grouping
-field; the real per-posting cost-center/sphere attribute and the actual four-sphere separation
-follow in a later wave (V0.3.3), purely additively.
+KOST1), not derived from the account. `accountClass` remains a reporting/grouping field only; the
+real per-posting cost-center/sphere attribute is `Posting.sphere` -- see
+<<four-sphere-separation,Four-sphere Gemeinnützigkeit separation (V0.3.3)>> below.
 
 `JournalEntry.status` is `DRAFT` (incomplete/unbalanced postings allowed, freely editable) or
 `POSTED` (immutable, validated balanced at the moment of transition). The balance invariant
@@ -379,12 +379,20 @@ classDiagram(name = "Lapis Cloud Domain Model — Accounting (V0.3.1)") {
         attribute(name = "createdAt", type = "LocalDateTime")
     }
 
+    val gemeinnuetzigkeitSphere = enumOf(name = "GemeinnuetzigkeitSphere") {
+        literal(name = "IDEELLER_BEREICH")
+        literal(name = "VERMOEGENSVERWALTUNG")
+        literal(name = "ZWECKBETRIEB")
+        literal(name = "WIRTSCHAFTLICHER_GESCHAEFTSBETRIEB")
+    }
+
     val posting = classOf(name = "Posting") {
         attribute(name = "id", type = "UUID")
         attribute(name = "journalEntryId", type = "UUID")
         attribute(name = "ledgerAccountId", type = "UUID")
         attribute(name = "side", type = postingSide)
         attribute(name = "amount", type = "Decimal")
+        attribute(name = "sphere", type = gemeinnuetzigkeitSphere)
     }
 
     association(source = journalEntry, target = posting) {
@@ -403,10 +411,11 @@ classDiagram(name = "Lapis Cloud Domain Model — Accounting (V0.3.1)") {
 ----
 
 Explicit non-goals for V0.3.1 (see `lapis-server/src/main/kuml/10-accounting.kuml.kts`'s header
-comment for the full list): P&L/balance-sheet derivation, the four-sphere Gemeinnützigkeit
-separation, §55 AO Mittelverwendungsrechnung, Kassenbuch, Kostenstellen, fiscal-year close,
-USt/VAT handling, Storno/reversal postings, multi-currency, Beleg/attachment storage, automatic
-`Contribution`↔`JournalEntry` reconciliation, bank import, DATEV/ELSTER export.
+comment for the full list): P&L/balance-sheet derivation, §55 AO Mittelverwendungsrechnung,
+Kassenbuch, Kostenstellen, fiscal-year close, USt/VAT handling, Storno/reversal postings,
+multi-currency, Beleg/attachment storage, automatic `Contribution`↔`JournalEntry` reconciliation,
+bank import, DATEV/ELSTER export. (The four-sphere Gemeinnützigkeit separation, originally listed
+here as a V0.3.1 non-goal, shipped in V0.3.3 -- see below.)
 
 === Financial statements (V0.3.2)
 
@@ -440,6 +449,60 @@ ADMIN roles as `getGeneralLedgerAccount`.
 
 Line lists (`StatementLineDto`) omit accounts with a zero net balance in the requested scope — they
 are a derived-from-journal view, not a complete chart-of-accounts listing. Still explicitly out of
-scope (unchanged from V0.3.1's list above, plus the four-sphere Gemeinnützigkeit split which
-remains V0.3.3): fiscal-year close/Saldenvortrag, Mittelverwendungsrechnung/Rücklagen (V0.3.4),
-Kassenbuch (V0.3.5), Kostenstellen (V0.3.6), non-calendar fiscal years.
+scope (unchanged from V0.3.1's list above): fiscal-year close/Saldenvortrag,
+Mittelverwendungsrechnung/Rücklagen (V0.3.4), Kassenbuch (V0.3.5), Kostenstellen (V0.3.6),
+non-calendar fiscal years.
+
+[#four-sphere-separation]
+=== Four-sphere Gemeinnützigkeit separation (V0.3.3)
+
+`Posting.sphere` (`network.lapis.cloud.shared.domain.GemeinnuetzigkeitSphere`) is a mandatory
+(`NOT NULL`) per-posting enum column added to `lapis-server/src/main/kuml/10-accounting.kuml.kts`,
+tagging every booking line with exactly one of the four legally-mandated Gemeinnützigkeit spheres
+(§§ 51-68 AO): `IDEELLER_BEREICH`, `VERMOEGENSVERWALTUNG`, `ZWECKBETRIEB`,
+`WIRTSCHAFTLICHER_GESCHAEFTSBETRIEB` (DATEV KOST1 codes 1-4). This is the highest-legal-risk wave
+in the accounting backlog: losing the strict separation between these spheres risks the
+organization's tax-exempt status, so the guarantee that every posting names exactly one sphere is
+enforced structurally at three layers rather than by a single service-layer check —
+
+* the Kotlin type: `PostingInput.sphere`/`PostingDto.sphere` are non-nullable with **no default
+  value**, so every call site must supply one explicitly;
+* the RPC wire format: `kotlinx.serialization` enum decoding rejects any payload that omits or
+  mis-names the field;
+* the database: the generated `sphere` column is `NOT NULL` with a `CHECK` constraint restricting
+  it to the four real literals.
+
+**Placement**: per-`Posting` (booking line), not `JournalEntry` and not `LedgerAccount`. As the
+SKR42 discussion above establishes, sphere is *not* derivable from the account/Kontenklasse — it is
+assigned per booking via DATEV KOST1, which is inherently a per-line cost center. A per-line
+attribute is also the only placement that lets one balanced `JournalEntry` legitimately record an
+inter-sphere transfer (Umbuchung): a debit line in one sphere, a credit line in another. This
+deliberately also forces a sphere onto Bestandskonten lines (Kasse/Bank), which are conceptually
+sphere-neutral — accepted tradeoff, since the four-sphere report below only aggregates
+`INCOME`/`EXPENSE`-typed accounts, so a cash line's sphere is informational only.
+
+**No Sammelposten/KOST9 escape bucket**: `GemeinnuetzigkeitSphere` has exactly the four real
+spheres, on purpose — a fifth "unassigned"/collective literal would be a way to *not* assign a
+sphere, which contradicts strict separation. A general cost-center/Kostenstellen allocation
+mechanism remains V0.3.6 scope.
+
+**A single `JournalEntry` may span multiple spheres**: no single-sphere-per-entry invariant is
+enforced, because sphere is per-line — a cross-sphere Umbuchung is fully transparent since each
+line names its own sphere. Inter-sphere transfers are representable this way but are not specially
+validated, tracked, or reported this wave; a dedicated §58 AO Mittelweitergabe workflow is deferred
+to V0.3.4 (Mittelverwendungsrechnung).
+
+**Reporting payoff** — `getFourSphereIncomeStatement` (`FourSphereIncomeStatementDto`,
+`SphereResultDto`, both in `lapis-shared/.../domain/FinancialStatements.kt`; derivation in
+`FinancialStatementCalculator.fourSphereIncomeStatement`): the same `INCOME`/`EXPENSE` flow over
+`[from, to]` as `getIncomeStatement`, re-aggregated per sphere instead of collapsed across all
+four. `spheres` always contains exactly four entries in `GemeinnuetzigkeitSphere` enum order,
+zero-filled if a sphere had no activity — so a UI can always render a fixed four-row layout. The
+overall `result` equals both the sum of the four per-sphere results and the plain
+`getIncomeStatement` result for the identical window: sphere is purely an orthogonal
+re-aggregation of the same postings, not a different scope. Gated by the same
+TREASURER/BOARD/ADMIN roles as the other statement methods.
+
+Explicitly out of scope for V0.3.3: a four-sphere balance sheet, §64 Abs.3 AO
+Freigrenze/taxability evaluation of the wirtschaftlicher Geschäftsbetrieb surplus, and any
+dedicated inter-sphere-transfer tracking workflow — all deferred to later waves.

@@ -4,6 +4,7 @@ package network.lapis.cloud.server.db.generated
 
 import java.math.BigDecimal
 import kotlin.uuid.Uuid
+import network.lapis.cloud.shared.domain.GemeinnuetzigkeitSphere
 import network.lapis.cloud.shared.domain.PostingSide
 import org.jetbrains.exposed.v1.core.Column
 import org.jetbrains.exposed.v1.core.Table
@@ -12,6 +13,7 @@ public object PostingTable : Table("posting") {
     public val id: Column<Uuid> = uuid("id")
     public val side: Column<PostingSide> = enumerationByName<PostingSide>("side", 6)
     public val amount: Column<BigDecimal> = decimal("amount", 15, 2)
+    public val sphere: Column<GemeinnuetzigkeitSphere> = enumerationByName<GemeinnuetzigkeitSphere>("sphere", 34)
     public val journalEntryId: Column<Uuid> = reference("journal_entry_id", JournalEntryTable.id)
     public val ledgerAccountId: Column<Uuid> = reference("ledger_account_id", LedgerAccountTable.id)
 
@@ -20,6 +22,6 @@ public object PostingTable : Table("posting") {
     // Note: 2 index(es) declared on this entity are not emitted —
     // Exposed's index {} DSL needs typed column references, not wired up in this wave.
 
-    // Note: 1 check constraint(s) declared on this entity are not
+    // Note: 2 check constraint(s) declared on this entity are not
     // emitted — Exposed's check {} DSL needs a typed Op<Boolean>, not a raw SQL string.
 }

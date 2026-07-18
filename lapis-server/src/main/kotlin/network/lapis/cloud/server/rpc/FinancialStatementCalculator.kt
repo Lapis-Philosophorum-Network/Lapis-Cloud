@@ -2,8 +2,11 @@ package network.lapis.cloud.server.rpc
 
 import kotlinx.datetime.LocalDate
 import network.lapis.cloud.shared.domain.BalanceSheetDto
+import network.lapis.cloud.shared.domain.FourSphereIncomeStatementDto
+import network.lapis.cloud.shared.domain.GemeinnuetzigkeitSphere
 import network.lapis.cloud.shared.domain.IncomeStatementDto
 import network.lapis.cloud.shared.domain.LedgerAccountType
+import network.lapis.cloud.shared.domain.SphereResultDto
 import network.lapis.cloud.shared.domain.StatementLineDto
 import java.math.BigDecimal
 
@@ -98,6 +101,59 @@ internal object FinancialStatementCalculator {
             accumulatedResult = accumulatedResult,
             totalEquityAndLiabilities = totalEquityAndLiabilities,
             balanced = totalAssets.compareTo(totalEquityAndLiabilities) == 0,
+        )
+    }
+
+    /**
+     * One ledger account's net balance within one [sphere], carrying the same already-signed
+     * [account] shape [loadAccountBalances]/[incomeStatement] use -- the caller
+     * (`AccountingService.loadSphereAccountBalances`) groups summed `PostingTable` rows by
+     * (sphere, ledgerAccountId) instead of by ledgerAccountId alone.
+     */
+    data class SphereAccountBalance(
+        val sphere: GemeinnuetzigkeitSphere,
+        val account: AccountBalance,
+    )
+
+    /**
+     * Vier-Sphären-Ergebnisrechnung over `[from, to]`: for each of the four
+     * [GemeinnuetzigkeitSphere] literals (fixed enum order), filters [balances] to that sphere and
+     * derives an [SphereResultDto] with the same [linesOf]/sum discipline [incomeStatement] uses --
+     * zero-filled (never omitted) if a sphere has no in-scope activity, so [FourSphereIncomeStatementDto.spheres]
+     * always has exactly four entries. Overall totals are the sum across the four per-sphere
+     * results, which reconciles with the plain, sphere-agnostic [incomeStatement] result for the
+     * identical `[from, to]` window over the same postings.
+     */
+    fun fourSphereIncomeStatement(
+        balances: List<SphereAccountBalance>,
+        from: LocalDate?,
+        to: LocalDate,
+    ): FourSphereIncomeStatementDto {
+        val spheres =
+            GemeinnuetzigkeitSphere.entries.map { sphere ->
+                val sphereBalances = balances.filter { it.sphere == sphere }.map { it.account }
+                val incomeLines = linesOf(sphereBalances, LedgerAccountType.INCOME)
+                val expenseLines = linesOf(sphereBalances, LedgerAccountType.EXPENSE)
+                val totalIncome = incomeLines.sumBalances()
+                val totalExpense = expenseLines.sumBalances()
+                SphereResultDto(
+                    sphere = sphere,
+                    incomeLines = incomeLines,
+                    expenseLines = expenseLines,
+                    totalIncome = totalIncome,
+                    totalExpense = totalExpense,
+                    result = totalIncome - totalExpense,
+                )
+            }
+        val totalIncome = spheres.fold(ZERO) { acc, sphereResult -> acc + sphereResult.totalIncome }
+        val totalExpense = spheres.fold(ZERO) { acc, sphereResult -> acc + sphereResult.totalExpense }
+        return FourSphereIncomeStatementDto(
+            from = from,
+            to = to,
+            spheres = spheres,
+            totalIncome = totalIncome,
+            totalExpense = totalExpense,
+            result = totalIncome - totalExpense,
         )
     }
 

@@ -4,6 +4,7 @@ import dev.kilua.rpc.annotations.RpcService
 import kotlinx.datetime.LocalDate
 import network.lapis.cloud.shared.domain.AnnualFinancialStatementDto
 import network.lapis.cloud.shared.domain.BalanceSheetDto
+import network.lapis.cloud.shared.domain.FourSphereIncomeStatementDto
 import network.lapis.cloud.shared.domain.GeneralLedgerDto
 import network.lapis.cloud.shared.domain.IncomeStatementDto
 import network.lapis.cloud.shared.domain.JournalEntryDto
@@ -105,4 +106,18 @@ interface IAccountingService {
      * [AnnualFinancialStatementDto.accumulatedResult] are reported as two distinct figures.
      */
     suspend fun getAnnualFinancialStatement(fiscalYear: Int): AnnualFinancialStatementDto
+
+    /**
+     * Role: TREASURER/BOARD/ADMIN. Vier-Sphären-Ergebnisrechnung (V0.3.3): the same
+     * `INCOME`/`EXPENSE` flow over `[from, to]` as [getIncomeStatement] (`from == null` means
+     * "since inception"), re-aggregated by [network.lapis.cloud.shared.domain
+     * .GemeinnuetzigkeitSphere] instead of collapsed across all four -- see
+     * [FourSphereIncomeStatementDto] KDoc. Always returns all four spheres (zero-filled if a
+     * sphere had no activity). Only [JournalEntryStatus.POSTED] postings contribute -- same
+     * "DRAFT is provisional" rule as [getIncomeStatement].
+     */
+    suspend fun getFourSphereIncomeStatement(
+        from: LocalDate? = null,
+        to: LocalDate,
+    ): FourSphereIncomeStatementDto
 }

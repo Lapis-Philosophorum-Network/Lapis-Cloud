@@ -77,6 +77,52 @@ data class BalanceSheetDto(
 )
 
 /**
+ * One [GemeinnuetzigkeitSphere]'s slice of a [FourSphereIncomeStatementDto] -- same
+ * income/expense/result shape as [IncomeStatementDto], but scoped to postings booked to [sphere]
+ * only. Zero-filled (all lines/totals empty/zero) if [sphere] had no in-scope activity -- see
+ * [FourSphereIncomeStatementDto.spheres] KDoc for why zero-fill (not omission) is required here.
+ */
+@Serializable
+data class SphereResultDto(
+    val sphere: GemeinnuetzigkeitSphere,
+    val incomeLines: List<StatementLineDto>,
+    val expenseLines: List<StatementLineDto>,
+    val totalIncome: Decimal,
+    val totalExpense: Decimal,
+    val result: Decimal,
+)
+
+/**
+ * Vier-Sphären-Ergebnisrechnung (V0.3.3): the same `INCOME`/`EXPENSE` flow over `[from, to]` as
+ * [IncomeStatementDto], re-aggregated by [network.lapis.cloud.shared.domain.GemeinnuetzigkeitSphere]
+ * instead of collapsed across all four. This is the payoff of the mandatory per-posting
+ * `Posting.sphere` column -- see `10-accounting.kuml.kts`'s file header and
+ * [network.lapis.cloud.shared.domain.GemeinnuetzigkeitSphere] KDoc for the legal background
+ * (§§ 51-68 AO strict-separation requirement).
+ *
+ * [spheres] ALWAYS contains exactly four [SphereResultDto] entries, one per
+ * [network.lapis.cloud.shared.domain.GemeinnuetzigkeitSphere] literal, in that enum's declaration
+ * order -- zero-filled (not omitted) if a sphere had no activity in `[from, to]`, so callers/UI can
+ * always render a fixed four-row layout without a presence check. [result] equals the sum of the
+ * four [SphereResultDto.result] values, and also equals the plain [IncomeStatementDto.result] for
+ * the identical `[from, to]` window over the same postings -- sphere is purely an orthogonal
+ * re-aggregation, not a different scope.
+ *
+ * Deliberately NOT a balance sheet split, and NOT a §64 Abs.3 AO Freigrenze/taxability evaluation
+ * of the wirtschaftlicher Geschäftsbetrieb surplus -- both are out of scope for V0.3.3 (see the
+ * wave plan) and deferred to later waves.
+ */
+@Serializable
+data class FourSphereIncomeStatementDto(
+    val from: LocalDate?,
+    val to: LocalDate,
+    val spheres: List<SphereResultDto>,
+    val totalIncome: Decimal,
+    val totalExpense: Decimal,
+    val result: Decimal,
+)
+
+/**
  * Jahresabschluss (annual financial statement) for [fiscalYear], assuming Geschäftsjahr =
  * Kalenderjahr (a non-calendar fiscal year would need a period-range overload later). Bundles the
  * GuV of `[periodStart, periodEnd]` with the Bilanz as of [periodEnd]. Exposes two deliberately
