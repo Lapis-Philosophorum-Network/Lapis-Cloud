@@ -14,11 +14,10 @@ plugins {
 kotlin {
     // Kilua RPC's published jars (kilua-rpc-ktor, kilua-rpc-ksp-processor)
     // are compiled for JVM 25 bytecode (class file version 69). The
-    // runtime loading them therefore needs to be JVM 25+; this machine has
-    // JDK 26 installed (no local JDK 25), so we target that rather than
-    // request an exact "25" toolchain Gradle would otherwise try to
-    // auto-provision/download.
-    jvmToolchain(26)
+    // runtime loading them therefore needs to be JVM 25+; target that
+    // directly rather than a newer toolchain Gradle might otherwise have
+    // to auto-provision/download.
+    jvmToolchain(25)
 
     jvm()
 

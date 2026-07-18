@@ -6,7 +6,7 @@ plugins {
 kotlin {
     // Kept in lockstep with lapis-shared — see the comment there. Needed
     // to load Kilua RPC's JVM-25-compiled classes at runtime.
-    jvmToolchain(26)
+    jvmToolchain(25)
 }
 
 application {
