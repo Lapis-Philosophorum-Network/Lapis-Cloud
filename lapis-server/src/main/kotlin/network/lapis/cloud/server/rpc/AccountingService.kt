@@ -1,5 +1,7 @@
 package network.lapis.cloud.server.rpc
 
+import dev.kilua.rpc.AbstractServiceException
+import dev.kilua.rpc.annotations.RpcServiceException
 import io.ktor.server.application.ApplicationCall
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.LocalDateTime
@@ -42,6 +44,14 @@ import kotlin.uuid.Uuid
 
 private val TREASURY_ROLES = arrayOf(AccountRole.TREASURER, AccountRole.ADMIN)
 private val ACCOUNTING_READ_ROLES = arrayOf(AccountRole.TREASURER, AccountRole.BOARD, AccountRole.ADMIN)
+
+/** Smallest/largest calendar year [getAnnualFinancialStatement] accepts as a `fiscalYear`. */
+private val FISCAL_YEAR_RANGE = 1000..9999
+
+@RpcServiceException
+class BadRequestException(
+    override val message: String,
+) : AbstractServiceException()
 
 /**
  * SKR42 chart of accounts + double-entry bookkeeping (V0.3.1, chart swapped from SKR49 in
@@ -277,6 +287,9 @@ class AccountingService(
     override suspend fun getAnnualFinancialStatement(fiscalYear: Int): AnnualFinancialStatementDto {
         val current = resolveCurrentMember(call)
         current.requireRole(*ACCOUNTING_READ_ROLES)
+        if (fiscalYear !in FISCAL_YEAR_RANGE) {
+            throw BadRequestException("fiscalYear must be a 4-digit calendar year in $FISCAL_YEAR_RANGE, got $fiscalYear")
+        }
         val periodStart = LocalDate(fiscalYear, 1, 1)
         val periodEnd = LocalDate(fiscalYear, 12, 31)
         return transaction {

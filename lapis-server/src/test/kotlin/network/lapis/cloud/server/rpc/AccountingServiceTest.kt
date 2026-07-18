@@ -600,6 +600,23 @@ class AccountingServiceTest :
             }
         }
 
+        test("getAnnualFinancialStatement rejects an out-of-range fiscalYear with 400 instead of crashing") {
+            testApplication {
+                application {
+                    install(StatusPages) { installAccountingExceptionHandlers() }
+                    routing { registerAccountingTestRoutes() }
+                }
+                val treasurer = createTestMember("acct-treasurer-fiscalyear@example.org", AccountRole.TREASURER)
+
+                client
+                    .get("/test/annual-statement?year=${Int.MAX_VALUE}") { header("X-Member-Id", treasurer.toString()) }
+                    .status shouldBe HttpStatusCode.BadRequest
+                client
+                    .get("/test/annual-statement?year=0") { header("X-Member-Id", treasurer.toString()) }
+                    .status shouldBe HttpStatusCode.BadRequest
+            }
+        }
+
         test("getGeneralLedgerAccount computes correct running balances for both normal-balance sides") {
             testApplication {
                 application {
@@ -653,6 +670,9 @@ private fun StatusPagesConfig.installAccountingExceptionHandlers() {
     }
     exception<ConflictException> { call, cause ->
         call.respondText(cause.message, status = HttpStatusCode.Conflict)
+    }
+    exception<BadRequestException> { call, cause ->
+        call.respondText(cause.message, status = HttpStatusCode.BadRequest)
     }
 }
 
