@@ -28,6 +28,16 @@ CREATE TABLE committee (
     CHECK (type IN ('EXECUTIVE_BOARD', 'WORKING_GROUP', 'COMMISSION', 'OTHER', 'GENERAL_ASSEMBLY'))
 );
 
+CREATE TABLE ledger_account (
+    id UUID NOT NULL PRIMARY KEY,
+    account_number VARCHAR(10) NOT NULL,
+    name VARCHAR(200) NOT NULL,
+    account_class INTEGER NOT NULL,
+    type VARCHAR(9) NOT NULL,
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    CHECK (type IN ('ASSET', 'LIABILITY', 'EQUITY', 'INCOME', 'EXPENSE'))
+);
+
 CREATE TABLE member (
     id UUID NOT NULL PRIMARY KEY,
     display_name VARCHAR(200) NOT NULL,
@@ -125,6 +135,18 @@ CREATE TABLE ltr_balance (
     updated_at TIMESTAMP NOT NULL
 );
 
+CREATE TABLE journal_entry (
+    id UUID NOT NULL PRIMARY KEY,
+    entry_date DATE NOT NULL,
+    description VARCHAR(500) NOT NULL,
+    voucher_reference VARCHAR(100) NULL,
+    created_by UUID NOT NULL,
+    status VARCHAR(6) NOT NULL,
+    posted_at TIMESTAMP NULL,
+    created_at TIMESTAMP NOT NULL,
+    CHECK (status IN ('DRAFT', 'POSTED'))
+);
+
 CREATE TABLE document_version (
     id UUID NOT NULL PRIMARY KEY,
     version_number INTEGER NOT NULL,
@@ -188,6 +210,15 @@ CREATE TABLE dsgvo_audit_log (
     legal_basis VARCHAR(500) NULL,
     CHECK (actor_role IN ('MEMBER', 'BOARD', 'TREASURER', 'ADMIN')),
     CHECK (action IN ('EXPORT', 'ERASURE_REQUESTED', 'ERASURE_APPROVED', 'ERASURE_REJECTED', 'ERASURE_EXECUTED'))
+);
+
+CREATE TABLE posting (
+    id UUID NOT NULL PRIMARY KEY,
+    side VARCHAR(6) NOT NULL,
+    amount DECIMAL(15, 2) NOT NULL,
+    journal_entry_id UUID NOT NULL,
+    ledger_account_id UUID NOT NULL,
+    CHECK (side IN ('DEBIT', 'CREDIT'))
 );
 
 CREATE TABLE agenda_item (
@@ -534,6 +565,9 @@ ALTER TABLE systemic_consensus_ballot ADD CONSTRAINT fk_systemic_consensus_ballo
 ALTER TABLE systemic_consensus_ballot ADD CONSTRAINT fk_systemic_consensus_ballot_member_id FOREIGN KEY (member_id) REFERENCES member(id);
 ALTER TABLE systemic_consensus_resistance ADD CONSTRAINT fk_systemic_consensus_resistance_ballot_id FOREIGN KEY (ballot_id) REFERENCES systemic_consensus_ballot(id);
 ALTER TABLE systemic_consensus_resistance ADD CONSTRAINT fk_systemic_consensus_resistance_option_id FOREIGN KEY (option_id) REFERENCES systemic_consensus_option(id);
+ALTER TABLE journal_entry ADD CONSTRAINT fk_journal_entry_created_by FOREIGN KEY (created_by) REFERENCES member(id);
+ALTER TABLE posting ADD CONSTRAINT fk_posting_journal_entry_id FOREIGN KEY (journal_entry_id) REFERENCES journal_entry(id);
+ALTER TABLE posting ADD CONSTRAINT fk_posting_ledger_account_id FOREIGN KEY (ledger_account_id) REFERENCES ledger_account(id);
 
 -- Indexes
 
@@ -601,4 +635,9 @@ CREATE UNIQUE INDEX uq_systemic_consensus_ballot_member_round ON systemic_consen
 CREATE INDEX idx_systemic_consensus_ballot_systemic_consensus ON systemic_consensus_ballot (systemic_consensus_id);
 CREATE INDEX idx_systemic_consensus_resistance_ballot ON systemic_consensus_resistance (ballot_id);
 CREATE INDEX idx_systemic_consensus_resistance_option ON systemic_consensus_resistance (option_id);
+CREATE UNIQUE INDEX uq_ledger_account_number ON ledger_account (account_number);
+CREATE INDEX idx_journal_entry_date ON journal_entry (entry_date);
+CREATE INDEX idx_journal_entry_status ON journal_entry (status);
+CREATE INDEX idx_posting_journal_entry ON posting (journal_entry_id);
+CREATE INDEX idx_posting_ledger_account ON posting (ledger_account_id);
 

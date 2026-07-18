@@ -286,3 +286,117 @@ classDiagram(name = "Lapis Cloud Domain Model — V0.1.5") {
     )
 }
 ----
+
+[NOTE]
+====
+This document was written for V0.1.5 and was not kept in sync with the six domain waves that
+followed (`dsgvo`, `governance`, `vote`, `election`, `ltr-balance`, `systemic-consensus`) — none of
+those appear above. The "Accounting" section below documents only the V0.3.1 wave; it does not
+attempt to retrofit the missing waves. See `lapis-server/src/main/kuml/*.kuml.kts` for the
+authoritative, per-domain, always-current model files (each verified by its own
+`*SchemaDriftTest`).
+====
+
+== Accounting (SKR49 + double-entry, V0.3.1)
+
+`LedgerAccount`/`JournalEntry`/`Posting` (`lapis-server/src/main/kuml/10-accounting.kuml.kts`,
+verified by `AccountingSchemaDriftTest`) implement double-entry bookkeeping on a representative
+SKR49 chart of accounts (DATEV's Kontenrahmen for non-profit associations, foundations and
+gGmbHs). `LedgerAccount` is deliberately not named `Account` — that name is already taken by the
+Foundation domain's user-login `Account`/`AccountRole`.
+
+A SKR49 account number's leading digit (`LedgerAccount.accountClass`, 0-9) is the Kontenklasse and
+pre-partitions the four Gemeinnützigkeit spheres: class 2 = Ideeller Bereich, class 4 =
+Vermögensverwaltung, classes 5-6 = Zweckbetrieb, classes 7-8 = Wirtschaftlicher Geschäftsbetrieb
+(class 0 = Anlagevermögen + liquid funds, class 1 = Umlaufvermögen/USt, class 9 =
+Vortrags-/statistische Konten). This wave ships only `accountClass` — the sphere is derivable from
+it for the common case; a per-posting sphere override and the actual four-sphere separation follow
+in a later wave (V0.3.3), purely additively.
+
+`JournalEntry.status` is `DRAFT` (incomplete/unbalanced postings allowed, freely editable) or
+`POSTED` (immutable, validated balanced at the moment of transition). The balance invariant
+(Σdebit = Σcredit per `JournalEntry`) is a cross-row aggregate that no CHECK constraint or index
+can express — it is enforced exclusively at the service layer
+(`network.lapis.cloud.server.rpc.AccountingService`, backed by the pure
+`network.lapis.cloud.server.rpc.JournalEntryBalance` helper) inside the same transaction that
+writes the entry and its postings, so an unbalanced attempt never leaves a partial write behind.
+`network.lapis.cloud.server.rpc.GeneralLedgerCalculator` computes the Hauptbuch (general ledger)
+running balance per `LedgerAccount`, signed by that account's `LedgerAccountType` normal-balance
+side (`ASSET`/`EXPENSE` debit-normal, `LIABILITY`/`EQUITY`/`INCOME` credit-normal).
+
+[kuml, domain-model-accounting, svg]
+----
+classDiagram(name = "Lapis Cloud Domain Model — Accounting (V0.3.1)") {
+
+    // Foundation stub, purely so the createdBy dependency below has a target -- see this
+    // diagram's own note above and 10-accounting.kuml.kts's header comment.
+    val member = classOf(name = "Member") {
+        attribute(name = "id", type = "UUID")
+    }
+
+    val ledgerAccountType = enumOf(name = "LedgerAccountType") {
+        literal(name = "ASSET")
+        literal(name = "LIABILITY")
+        literal(name = "EQUITY")
+        literal(name = "INCOME")
+        literal(name = "EXPENSE")
+    }
+
+    val postingSide = enumOf(name = "PostingSide") {
+        literal(name = "DEBIT")
+        literal(name = "CREDIT")
+    }
+
+    val journalEntryStatus = enumOf(name = "JournalEntryStatus") {
+        literal(name = "DRAFT")
+        literal(name = "POSTED")
+    }
+
+    val ledgerAccount = classOf(name = "LedgerAccount") {
+        attribute(name = "id", type = "UUID")
+        attribute(name = "accountNumber", type = "String")
+        attribute(name = "name", type = "String")
+        attribute(name = "accountClass", type = "Int")
+        attribute(name = "type", type = ledgerAccountType)
+        attribute(name = "active", type = "Boolean", defaultValue = "true")
+    }
+
+    val journalEntry = classOf(name = "JournalEntry") {
+        attribute(name = "id", type = "UUID")
+        attribute(name = "entryDate", type = "LocalDate")
+        attribute(name = "description", type = "String")
+        attribute(name = "voucherReference", type = "String")
+        attribute(name = "createdBy", type = "UUID")
+        attribute(name = "status", type = journalEntryStatus, defaultValue = "DRAFT")
+        attribute(name = "postedAt", type = "LocalDateTime")
+        attribute(name = "createdAt", type = "LocalDateTime")
+    }
+
+    val posting = classOf(name = "Posting") {
+        attribute(name = "id", type = "UUID")
+        attribute(name = "journalEntryId", type = "UUID")
+        attribute(name = "ledgerAccountId", type = "UUID")
+        attribute(name = "side", type = postingSide)
+        attribute(name = "amount", type = "Decimal")
+    }
+
+    association(source = journalEntry, target = posting) {
+        aggregation = AggregationKind.COMPOSITE
+        source { multiplicity(spec = "1") }
+        target { multiplicity(spec = "0..*"); role = "postings" }
+    }
+
+    association(source = ledgerAccount, target = posting) {
+        source { multiplicity(spec = "1"); navigable = false }
+        target { multiplicity(spec = "0..*"); role = "postings" }
+    }
+
+    dependency(client = journalEntry, supplier = member, name = "createdBy")
+}
+----
+
+Explicit non-goals for V0.3.1 (see `lapis-server/src/main/kuml/10-accounting.kuml.kts`'s header
+comment for the full list): P&L/balance-sheet derivation, the four-sphere Gemeinnützigkeit
+separation, §55 AO Mittelverwendungsrechnung, Kassenbuch, Kostenstellen, fiscal-year close,
+USt/VAT handling, Storno/reversal postings, multi-currency, Beleg/attachment storage, automatic
+`Contribution`↔`JournalEntry` reconciliation, bank import, DATEV/ELSTER export.

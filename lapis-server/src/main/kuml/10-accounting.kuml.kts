@@ -1,0 +1,239 @@
+// Accounting domain (SKR49, V0.3.1) — ledger_account/journal_entry/posting, the double-entry
+// bookkeeping core for the Gemeinnützigkeit accounting stack. Generated into V1__baseline.sql
+// alongside every other domain (see 87563ff, which replaced the per-domain hand-written
+// migrations with one generated baseline).
+//
+// SKR49 (DATEV's special Kontenrahmen for non-profit associations/foundations/gGmbHs) uses a
+// four-digit account number whose first digit is the Kontenklasse (0-9). The income/expense
+// classes are pre-partitioned by the four Gemeinnützigkeit spheres: class 2 = Ideeller Bereich,
+// class 4 = Vermögensverwaltung, classes 5-6 = Zweckbetrieb, classes 7-8 = Wirtschaftlicher
+// Geschäftsbetrieb (class 0 = Anlagevermögen + liquid funds, class 1 = Umlaufvermögen/USt,
+// class 9 = Vortrags-/statistische Konten). That pre-partitioning is *this wave's* justification
+// for shipping only `account_class` (Int, 0-9) rather than a dedicated sphere column: the sphere
+// is derivable from the class for the common case, and a later wave (V0.3.3) can add a
+// per-posting override as a purely additive nullable column -- see "Explicit non-goals" below.
+//
+// This is the versioned source-of-truth *model* for the schema shape (ADR-0016), verified against
+// both the real Flyway-migrated H2 schema and the generated Exposed Table objects
+// (network.lapis.cloud.server.db.generated.{LedgerAccount,JournalEntry,Posting}Table.kt) by
+// AccountingSchemaDriftTest. The generated `db/generated/*.kt` files ARE the compiled/imported-by-
+// N-files source since 4756e69 ("swap production persistence to kUML-generated Exposed tables") --
+// this model is the versioned source of truth for schema *shape*, not a verification-only artifact
+// pointing at a hand-written Table object (that framing is stale; it belonged to the pre-4756e69
+// era and must not be copied into new domain files).
+//
+// Naming collision avoided on purpose: `Account`/`account`/`AccountTable` are already taken by the
+// foundation domain's user-login account (00-foundation.kuml.kts: Account/AccountRole
+// MEMBER/BOARD/TREASURER/ADMIN). The accounting "Konto" is therefore named `LedgerAccount` /
+// `ledger_account` / `LedgerAccountTable` throughout -- and the service class is
+// `AccountingService`, not `AccountService`.
+//
+// Cross-domain stub: minimal id-only Member (foundation-owned), same pattern as every prior
+// domain's own Member stub -- purely so UmlToErmTransformer can resolve journal_entry.created_by's
+// association target within this single-file evaluation.
+//
+// FK-column-naming-mismatch fallback (same gap class already discovered in every prior domain --
+// association-derived default name snake_case(singular(targetClass))+"_id" doesn't match the real
+// column name), modelled as a plain «Column» UUID attribute instead of a UML association:
+// - journal_entry.created_by -> member (id), NOT NULL: default would be "member_id" (mirrors
+//   election.opened_by / systemic_consensus.opened_by).
+// Its real FK existence/target/nullability is still independently pinned via
+// AccountingSchemaDriftTest's information_schema introspection against the real migrated schema.
+//
+// FKs that DO match the association-derived default and are modelled as real UML associations:
+// posting.journal_entry_id -> journal_entry (id), posting.ledger_account_id -> ledger_account (id).
+// Neither entity has more than one competing FK to the same target, so the
+// first-declared-association-claims-the-bare-default mechanism never causes a collision problem
+// here.
+//
+// Reserved-SQL-keyword pitfalls avoided (DDL is unquoted, postgres dialect; "value"/"date" are
+// reserved -- same gap class as 09-systemic-consensus.kuml.kts's "value" -> "resistance_value" and
+// election's own dedicated attribute names): journal_entry.entryDate is mapped to column
+// "entry_date", NOT "date"; journal_entry.voucherReference is mapped to column
+// "voucher_reference", NOT "reference" (also reserved). "description"/"name"/"type"/"status"/
+// "amount"/"side"/"position" are all safe in postgres and used as-is.
+//
+// ledger_account.account_number's UNIQUE constraint: Exposed's association-to-FK/«Column» plumbing
+// only expresses single-column `unique` on plain, non-association attributes -- and this IS a
+// plain attribute (no association involved), so the more direct route would be
+// «Column».unique -- but for consistency with every other domain's UNIQUE pattern (composite or
+// single-column: account.member_id, member.email, contribution's composite, election's composite
+// uniques) this is pinned via a class-level «Index» (single-column, unique=true) instead, which
+// renders as a named CREATE UNIQUE INDEX rather than an inline column constraint -- semantically
+// identical, and keeps every UNIQUE constraint in this codebase discoverable via the same
+// «Index» mechanism.
+//
+// Balance invariant (Σdebit = Σcredit per journal_entry) is NOT modelled here at all -- it is a
+// cross-row aggregate, which no CHECK constraint (single-row) nor «Index» can express. It is
+// enforced exclusively at the service layer (network.lapis.cloud.server.rpc.AccountingService,
+// backed by the pure network.lapis.cloud.server.rpc.JournalEntryBalance helper) inside the same
+// transaction that writes journal_entry + its postings, so an unbalanced post rolls back
+// atomically. See that helper's KDoc for the BigDecimal-compareTo-not-equals pitfall.
+//
+// Explicit non-goals for this wave (see 02 Projekte/Lapis Cloud V0.3.md for the full wave plan):
+//  - P&L (GuV) / balance sheet (Bilanz) derivation -> V0.3.2. LedgerAccountType is shipped now so
+//    that wave can classify normal-balance sides, but no statement is computed here.
+//  - Four-sphere Gemeinnützigkeit tagging/separation -> V0.3.3. Only account_class (0-9) ships;
+//    the sphere is derivable from it for the common case. The seam for a per-posting override is a
+//    documented-but-not-built additive nullable «Column» enum on posting (e.g. "sphere") -- purely
+//    additive against this wave's shape, no rewrite needed later (pre-1.0, one regenerated
+//    baseline, no production data to migrate).
+//  - §55 AO Mittelverwendungsrechnung (use-of-funds/timely-use tracking) -> V0.3.4.
+//  - Not in scope at all this wave: Kassenbuch, Kostenstellen, fiscal-year close/Saldenvortrag
+//    (class 9 carryforward), opening balances beyond the dev seed, USt/VAT handling,
+//    Storno/reversal postings (JournalEntryStatus is enum-extensible with e.g. REVERSED later),
+//    multi-currency, Beleg/attachment storage, automatic Contribution<->journal reconciliation
+//    (seam: a nullable journal_entry.contribution_id later), bank import (MT940/CAMT), DATEV/
+//    ELSTER export.
+import dev.kuml.profile.erm.ermMappingProfile
+import dev.kuml.uml.Multiplicity
+import dev.kuml.uml.dsl.applyProfile
+import dev.kuml.uml.dsl.stereotype
+
+classDiagram(name = "Accounting") {
+    applyProfile(ermMappingProfile)
+
+    // Foundation-owned stub — id-only, mirrors the cross-domain-stub pattern established by every
+    // prior domain's own Member stub. Only exists here so UmlToErmTransformer can resolve
+    // journal_entry.created_by's FK target within this single-file evaluation.
+    val member = classOf(name = "Member") {
+        stereotype("Entity") { "tableName" to "member"; "kotlinObjectName" to "MemberTable" }
+        attribute(name = "id", type = "UUID") {
+            stereotype("Id")
+            stereotype("Column") { "columnName" to "id" }
+        }
+    }
+
+    // Normal-balance semantic (ASSET/EXPENSE = debit-normal; LIABILITY/EQUITY/INCOME =
+    // credit-normal) -- drives GeneralLedgerCalculator's running-balance sign and, in a later
+    // wave (V0.3.2), the P&L-vs-balance-sheet split.
+    val ledgerAccountType = enumOf(name = "LedgerAccountType") {
+        literal(name = "ASSET")
+        literal(name = "LIABILITY")
+        literal(name = "EQUITY")
+        literal(name = "INCOME")
+        literal(name = "EXPENSE")
+    }
+
+    // Soll/Haben.
+    val postingSide = enumOf(name = "PostingSide") {
+        literal(name = "DEBIT")
+        literal(name = "CREDIT")
+    }
+
+    // Extend with e.g. REVERSED in a later Storno wave -- additive, cheap (see file header
+    // "Explicit non-goals").
+    val journalEntryStatus = enumOf(name = "JournalEntryStatus") {
+        literal(name = "DRAFT")
+        literal(name = "POSTED")
+    }
+
+    val ledgerAccount = classOf(name = "LedgerAccount") {
+        stereotype("Entity") { "tableName" to "ledger_account"; "kotlinObjectName" to "LedgerAccountTable" }
+        stereotype("Index") {
+            "columns" to listOf("account_number")
+            "unique" to true
+            "name" to "uq_ledger_account_number"
+        }
+
+        attribute(name = "id", type = "UUID") {
+            stereotype("Id")
+            stereotype("Column") { "columnName" to "id" }
+        }
+        // SKR49 account number, e.g. "0945" (Bank). String, not Int -- some SKR49 accounts carry
+        // leading zeros that are semantically significant (Kontenklasse is the leading digit).
+        attribute(name = "accountNumber", type = "String") {
+            stereotype("Column") { "columnName" to "account_number"; "sqlType" to "VARCHAR(10)" }
+        }
+        attribute(name = "name", type = "String") {
+            stereotype("Column") { "columnName" to "name"; "sqlType" to "VARCHAR(200)" }
+        }
+        // SKR49 Kontenklasse, 0-9 -- reference/reporting field. See file header for the
+        // class-to-Gemeinnützigkeit-sphere mapping this enables in a later wave.
+        attribute(name = "accountClass", type = "Int") {
+            stereotype("Column") { "columnName" to "account_class" }
+        }
+        attribute(name = "type", type = ledgerAccountType) {
+            stereotype("Column") { "columnName" to "type"; "enumType" to "network.lapis.cloud.shared.domain.LedgerAccountType" }
+        }
+        // Deactivate instead of delete -- an account with existing postings must never be removed.
+        attribute(name = "active", type = "Boolean") {
+            defaultValue = "TRUE"
+            stereotype("Column") { "columnName" to "active" }
+        }
+    }
+
+    val journalEntry = classOf(name = "JournalEntry") {
+        stereotype("Entity") { "tableName" to "journal_entry"; "kotlinObjectName" to "JournalEntryTable" }
+        stereotype("Index") { "columns" to listOf("entry_date"); "name" to "idx_journal_entry_date" }
+        stereotype("Index") { "columns" to listOf("status"); "name" to "idx_journal_entry_status" }
+
+        attribute(name = "id", type = "UUID") {
+            stereotype("Id")
+            stereotype("Column") { "columnName" to "id" }
+        }
+        // NOT "date" -- reserved SQL keyword, see file header.
+        attribute(name = "entryDate", type = "LocalDate") {
+            stereotype("Column") { "columnName" to "entry_date" }
+        }
+        attribute(name = "description", type = "String") {
+            stereotype("Column") { "columnName" to "description"; "sqlType" to "VARCHAR(500)" }
+        }
+        // Belegnummer. NOT "reference" -- reserved SQL keyword, see file header.
+        attribute(name = "voucherReference", type = "String") {
+            multiplicity = Multiplicity(0, 1)
+            stereotype("Column") { "columnName" to "voucher_reference"; "sqlType" to "VARCHAR(100)" }
+        }
+        // Real FK -> member (id), NOT NULL. Plain «Column» UUID attribute — association-to-FK
+        // naming would derive "member_id", not the real schema's "created_by".
+        attribute(name = "createdBy", type = "UUID") {
+            stereotype("Column") { "columnName" to "created_by"; "fkEntity" to "Member" }
+        }
+        attribute(name = "status", type = journalEntryStatus) {
+            stereotype("Column") { "columnName" to "status"; "enumType" to "network.lapis.cloud.shared.domain.JournalEntryStatus" }
+        }
+        // Set on DRAFT -> POSTED.
+        attribute(name = "postedAt", type = "LocalDateTime") {
+            multiplicity = Multiplicity(0, 1)
+            stereotype("Column") { "columnName" to "posted_at" }
+        }
+        attribute(name = "createdAt", type = "LocalDateTime") {
+            stereotype("Column") { "columnName" to "created_at" }
+        }
+    }
+
+    val posting = classOf(name = "Posting") {
+        stereotype("Entity") { "tableName" to "posting"; "kotlinObjectName" to "PostingTable" }
+        stereotype("Index") { "columns" to listOf("journal_entry_id"); "name" to "idx_posting_journal_entry" }
+        stereotype("Index") { "columns" to listOf("ledger_account_id"); "name" to "idx_posting_ledger_account" }
+
+        attribute(name = "id", type = "UUID") {
+            stereotype("Id")
+            stereotype("Column") { "columnName" to "id" }
+        }
+        attribute(name = "side", type = postingSide) {
+            stereotype("Column") { "columnName" to "side"; "enumType" to "network.lapis.cloud.shared.domain.PostingSide" }
+        }
+        // Explicit sqlType override -- kUML's bare BigDecimal default is DECIMAL(19,2); pinned to
+        // DECIMAL(15,2) here (same mechanism as contribution.amountDue -> DECIMAL(12,2),
+        // ltr_balance.balance_ltr -> DECIMAL(18,2)). Always > 0 -- enforced at the service layer
+        // (JournalEntryBalance), not via CHECK (Exposed emits no CHECK constraints for generated
+        // Table objects in this wave, see every prior domain's own "Note: N check constraint(s)
+        // ... not emitted" comment).
+        attribute(name = "amount", type = "BigDecimal") {
+            stereotype("Column") { "columnName" to "amount"; "sqlType" to "DECIMAL(15,2)" }
+        }
+    }
+
+    // posting.journal_entry_id -> journal_entry (id): association-derived default matches.
+    association(source = journalEntry, target = posting, id = "assoc-journal-entry-posting") {
+        source { multiplicity("1") }
+        target { multiplicity("0..*"); role = "journalEntryId" }
+    }
+
+    // posting.ledger_account_id -> ledger_account (id): association-derived default matches.
+    association(source = ledgerAccount, target = posting, id = "assoc-ledger-account-posting") {
+        source { multiplicity("1") }
+        target { multiplicity("0..*"); role = "ledgerAccountId" }
+    }
+}

@@ -35,28 +35,30 @@ class DomainModelMergerTest :
         // ── Test 1: merging the real 9 domain scripts ───────────────────────────────────
 
         test(
-            "merging the real 10 domain scripts succeeds and the uml-to-erm -> erm-to-exposed chain " +
+            "merging the real 11 domain scripts succeeds and the uml-to-erm -> erm-to-exposed chain " +
                 "produces exactly one Table file per distinct table name",
         ) {
             val scriptFiles =
                 requireNotNull(KumlModelLoader.kumlSourceDir.listFiles { f -> f.name.endsWith(".kuml.kts") }) {
                     "kUML source dir not found or not a directory: ${KumlModelLoader.kumlSourceDir.absolutePath}"
                 }.sortedBy { it.name }
-            scriptFiles shouldHaveSize 10
+            scriptFiles shouldHaveSize 11
 
             val diagrams = scriptFiles.map { KumlModelLoader.loadUmlDiagram(it) }
 
             val merged = DomainModelMerger.merge(diagrams)
 
-            // 40 distinct `"tableName" to "..."` values across the 10 .kuml.kts files (verified by
+            // 43 distinct `"tableName" to "..."` values across the 11 .kuml.kts files (verified by
             // grepping `grep -oh '"tableName" to "[a-z_]*"' lapis-server/src/main/kuml/*.kuml.kts |
-            // sort -u | wc -l`; 58 total «Entity» declarations minus 18 cross-domain-stub
-            // duplicates: member appears in 7 files (6 dropped), motion/meeting/resolution each
-            // appear in 4 files (3 dropped each), committee appears in 3 files (2 dropped),
-            // membership_tier appears in 2 files (1 dropped) -> 6+3+3+3+2+1 = 18 dropped.
-            // 09-systemic-consensus.kuml.kts (V0.2.5) is what pushed member/motion/meeting/resolution/
-            // committee's counts up by one file each versus the pre-V0.2.5 13-dropped baseline.
-            val distinctTableNames = 40
+            // sort -u | wc -l`; 66 total «Entity» declarations minus 23 cross-domain-stub
+            // duplicates: member appears in 11 files (10 dropped, every domain stubs it),
+            // motion/meeting/resolution each appear in 4 files (3 dropped each), committee appears
+            // in 3 files (2 dropped), document and membership_tier each appear in 2 files (1
+            // dropped each) -> 10+3+3+3+2+1+1 = 23 dropped. 10-accounting.kuml.kts (V0.3.1) is what
+            // pushed member's count up by one file (its own Member stub) versus the pre-V0.3.1
+            // 22-dropped baseline; it adds 3 new real tables (ledger_account/journal_entry/
+            // posting) and does not touch motion/meeting/resolution/committee/document at all.
+            val distinctTableNames = 43
 
             val result =
                 UmlToExposedViaErmScriptTransformer().transform(
@@ -119,6 +121,9 @@ class DomainModelMergerTest :
                     "SystemicConsensusParticipationTable.kt",
                     "SystemicConsensusBallotTable.kt",
                     "SystemicConsensusResistanceTable.kt",
+                    "LedgerAccountTable.kt",
+                    "JournalEntryTable.kt",
+                    "PostingTable.kt",
                 )
         }
 

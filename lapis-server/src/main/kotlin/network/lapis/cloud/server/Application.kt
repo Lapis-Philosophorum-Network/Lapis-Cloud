@@ -19,6 +19,7 @@ import network.lapis.cloud.server.db.DatabaseConfig
 import network.lapis.cloud.server.db.DevSeedData
 import network.lapis.cloud.server.routes.registerDocumentRoutes
 import network.lapis.cloud.server.routes.registerDsgvoRoutes
+import network.lapis.cloud.server.rpc.AccountingService
 import network.lapis.cloud.server.rpc.ContributionService
 import network.lapis.cloud.server.rpc.DirectMessageService
 import network.lapis.cloud.server.rpc.DocumentService
@@ -32,6 +33,7 @@ import network.lapis.cloud.server.rpc.SystemicConsensusService
 import network.lapis.cloud.server.security.ForbiddenException
 import network.lapis.cloud.server.security.UnauthenticatedException
 import network.lapis.cloud.shared.Greeting
+import network.lapis.cloud.shared.rpc.IAccountingService
 import network.lapis.cloud.shared.rpc.IContributionService
 import network.lapis.cloud.shared.rpc.IDirectMessageService
 import network.lapis.cloud.shared.rpc.IDocumentService
@@ -86,6 +88,7 @@ fun Application.module() {
         registerService(IGovernanceService::class) { call -> GovernanceService(call) }
         registerService(IElectionService::class) { call -> ElectionService(call) }
         registerService(ISystemicConsensusService::class) { call -> SystemicConsensusService(call) }
+        registerService(IAccountingService::class) { call -> AccountingService(call) }
     }
 
     routing {

@@ -28,6 +28,7 @@ object PersonalDataRegistry {
             LtrPersonalData,
             ElectionPersonalData,
             SystemicConsensusPersonalData,
+            AccountingPersonalData,
         )
 
     /**
