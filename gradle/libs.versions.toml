@@ -1,11 +1,11 @@
 [versions]
-kotlin                  = "2.4.0"
+kotlin                  = "2.4.10"
 kvision                 = "9.6.0"
 ktor                    = "3.5.1"
 logback                 = "1.5.38"
 kotest                  = "6.2.2"
 ktlint-plugin           = "14.2.0"
-ksp                     = "2.3.9"
+ksp                     = "2.3.10"
 kilua-rpc               = "0.0.45"
 kotlinx-serialization   = "1.11.0"
 kotlinx-datetime        = "0.8.0"
@@ -14,7 +14,7 @@ flyway                  = "12.11.0"
 postgresql              = "42.7.13"
 h2                      = "2.4.240"
 hikaricp                = "7.1.0"
-kuml                    = "0.35.0"
+kuml                    = "0.36.1"
 
 [plugins]
 kotlin-multiplatform    = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
