@@ -13,7 +13,8 @@ import org.jetbrains.exposed.v1.jdbc.transactions.transaction
 import java.io.File
 
 /**
- * ADR-0016 (MDA persistence pipeline) — accounting domain (SKR49 + double-entry, V0.3.1).
+ * ADR-0016 (MDA persistence pipeline) — accounting domain (SKR42 + double-entry, V0.3.1, chart
+ * swapped from SKR49 in V0.3.1.1).
  *
  * Verifies that `lapis-server/src/main/kuml/10-accounting.kuml.kts` is a faithful model of both
  * (a) the real, Flyway-migrated H2 schema (`ledger_account`/`journal_entry`/`posting`), and (b)

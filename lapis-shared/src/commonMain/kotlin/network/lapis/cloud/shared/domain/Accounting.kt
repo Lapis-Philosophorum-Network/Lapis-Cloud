@@ -6,10 +6,10 @@ import kotlinx.datetime.LocalDateTime
 import kotlinx.serialization.Serializable
 
 /**
- * SKR49 chart of accounts + double-entry bookkeeping (V0.3.1) -- see
- * `network.lapis.cloud.server.rpc.AccountingService` KDoc for the full lifecycle and
- * `lapis-server/src/main/kuml/10-accounting.kuml.kts`'s file header for the SKR49
- * Kontenklasse/Gemeinnützigkeit-sphere background this domain builds on.
+ * SKR42 chart of accounts + double-entry bookkeeping (V0.3.1, chart swapped from SKR49 in
+ * V0.3.1.1) -- see `network.lapis.cloud.server.rpc.AccountingService` KDoc for the full lifecycle
+ * and `lapis-server/src/main/kuml/10-accounting.kuml.kts`'s file header for the SKR42
+ * Kontenklasse background and why the Gemeinnützigkeit sphere is NOT derivable from it.
  *
  * Normal-balance semantic: [ASSET]/[EXPENSE] accounts are debit-normal (a debit increases the
  * balance), [LIABILITY]/[EQUITY]/[INCOME] accounts are credit-normal (a credit increases the
@@ -34,11 +34,11 @@ enum class PostingSide { DEBIT, CREDIT }
 enum class JournalEntryStatus { DRAFT, POSTED }
 
 /**
- * One SKR49 Konto. [accountNumber] is the four-digit (or shorter, some system accounts are
- * shorter) SKR49 number whose leading digit is the Kontenklasse (0-9) -- see the `.kuml.kts` file
- * header for the class-to-Gemeinnützigkeit-sphere mapping. [accountClass] is that leading digit,
- * carried as its own field for reporting/future-sphere-derivation rather than re-parsed from
- * [accountNumber] on every read.
+ * One SKR42 Konto. [accountNumber] is the five-digit (or shorter, some system accounts are
+ * shorter) SKR42 number whose leading digit is the Kontenklasse (0-9) -- see the `.kuml.kts` file
+ * header for why the Gemeinnützigkeit sphere is NOT derivable from that class under SKR42.
+ * [accountClass] is that leading digit, carried as its own field for reporting purposes rather
+ * than re-parsed from [accountNumber] on every read.
  */
 @Serializable
 data class LedgerAccountDto(

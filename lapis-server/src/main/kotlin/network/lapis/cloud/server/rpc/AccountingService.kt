@@ -41,7 +41,8 @@ private val TREASURY_ROLES = arrayOf(AccountRole.TREASURER, AccountRole.ADMIN)
 private val ACCOUNTING_READ_ROLES = arrayOf(AccountRole.TREASURER, AccountRole.BOARD, AccountRole.ADMIN)
 
 /**
- * SKR49 chart of accounts + double-entry bookkeeping (V0.3.1). Implements [IAccountingService] --
+ * SKR42 chart of accounts + double-entry bookkeeping (V0.3.1, chart swapped from SKR49 in
+ * V0.3.1.1). Implements [IAccountingService] --
  * see that interface's KDoc for the full lifecycle. Bookkeeping is treasury-only, not
  * member-public: every method requires at least [ACCOUNTING_READ_ROLES] (TREASURER/BOARD/ADMIN),
  * every write requires [TREASURY_ROLES] (TREASURER/ADMIN) -- same "TREASURY_ROLES + requireRole"

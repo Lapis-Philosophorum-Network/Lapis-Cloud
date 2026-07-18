@@ -1,17 +1,26 @@
-// Accounting domain (SKR49, V0.3.1) — ledger_account/journal_entry/posting, the double-entry
-// bookkeeping core for the Gemeinnützigkeit accounting stack. Generated into V1__baseline.sql
-// alongside every other domain (see 87563ff, which replaced the per-domain hand-written
-// migrations with one generated baseline).
+// Accounting domain (SKR42, V0.3.1, swapped from SKR49 in V0.3.1.1 -- see that wave's research
+// notes) — ledger_account/journal_entry/posting, the double-entry bookkeeping core for the
+// Gemeinnützigkeit accounting stack. Generated into V1__baseline.sql alongside every other domain
+// (see 87563ff, which replaced the per-domain hand-written migrations with one generated
+// baseline).
 //
-// SKR49 (DATEV's special Kontenrahmen for non-profit associations/foundations/gGmbHs) uses a
-// four-digit account number whose first digit is the Kontenklasse (0-9). The income/expense
-// classes are pre-partitioned by the four Gemeinnützigkeit spheres: class 2 = Ideeller Bereich,
-// class 4 = Vermögensverwaltung, classes 5-6 = Zweckbetrieb, classes 7-8 = Wirtschaftlicher
-// Geschäftsbetrieb (class 0 = Anlagevermögen + liquid funds, class 1 = Umlaufvermögen/USt,
-// class 9 = Vortrags-/statistische Konten). That pre-partitioning is *this wave's* justification
-// for shipping only `account_class` (Int, 0-9) rather than a dedicated sphere column: the sphere
-// is derivable from the class for the common case, and a later wave (V0.3.3) can add a
-// per-posting override as a purely additive nullable column -- see "Explicit non-goals" below.
+// SKR42 (DATEV's current Kontenrahmen for Vereine/Stiftungen/gGmbHs, based on SKR04; it replaced
+// SKR49, which DATEV has maintained no further since 01.01.2025) uses a five-digit account number
+// whose first digit is the Kontenklasse (0-9). Unlike SKR49, SKR42 deliberately does *not*
+// pre-partition the four Gemeinnützigkeit spheres into account-number ranges, and the
+// Kontenklassen do not separate income from expense the way a naive reading might suggest: class 4
+// holds *all* Erträge/Umsatzerlöse across all four spheres (e.g. 4000 Mitgliedsbeiträge, 4045
+// Spenden, 4200/4201 Erlöse/Eintrittsgelder), class 5 is itself an *expense* class (Wareneingang /
+// Aufwendungen für Roh-, Hilfs- und Betriebsstoffe, e.g. 5000/5200 Wareneingang), class 6 covers
+// the remaining operating expenses (e.g. 6000 Löhne und Gehälter, 6310 Miete), and class 7 is the
+// Finanzergebnis (e.g. 7110 Zinserträge, 7300 Zinsaufwand) -- covering both income and expense
+// sub-accounts. None of classes 4-7 are sphere-partitioned; the same account can be booked to any
+// of the four spheres. Sphere is assigned per booking via a cost center (DATEV KOST1:
+// 1 = ideeller Bereich, 2 = Vermögensverwaltung, 3 = Zweckbetrieb, 4 = wirtschaftlicher
+// Geschäftsbetrieb, 9 = Sammelposten), *not* derived from `account_class`. This wave still ships
+// only `account_class` (Int, 0-9) as a reporting/grouping field -- a later wave (V0.3.3) adds the
+// real per-posting cost-center/sphere attribute as a purely additive nullable column -- see
+// "Explicit non-goals" below.
 //
 // This is the versioned source-of-truth *model* for the schema shape (ADR-0016), verified against
 // both the real Flyway-migrated H2 schema and the generated Exposed Table objects
@@ -73,11 +82,13 @@
 // Explicit non-goals for this wave (see 02 Projekte/Lapis Cloud V0.3.md for the full wave plan):
 //  - P&L (GuV) / balance sheet (Bilanz) derivation -> V0.3.2. LedgerAccountType is shipped now so
 //    that wave can classify normal-balance sides, but no statement is computed here.
-//  - Four-sphere Gemeinnützigkeit tagging/separation -> V0.3.3. Only account_class (0-9) ships;
-//    the sphere is derivable from it for the common case. The seam for a per-posting override is a
-//    documented-but-not-built additive nullable «Column» enum on posting (e.g. "sphere") -- purely
-//    additive against this wave's shape, no rewrite needed later (pre-1.0, one regenerated
-//    baseline, no production data to migrate).
+//  - Four-sphere Gemeinnützigkeit tagging/separation -> V0.3.3. Only account_class (0-9) ships,
+//    and under SKR42 it is NOT a proxy for sphere (unlike the retired SKR49) -- see file header.
+//    The seam for the real per-posting attribute is a documented-but-not-built additive nullable
+//    «Column» enum on posting representing the DATEV KOST1 cost center (e.g. "costCenter" or
+//    "sphere": ideeller Bereich/Vermögensverwaltung/Zweckbetrieb/wirtschaftlicher
+//    Geschäftsbetrieb) -- purely additive against this wave's shape, no rewrite needed later
+//    (pre-1.0, one regenerated baseline, no production data to migrate).
 //  - §55 AO Mittelverwendungsrechnung (use-of-funds/timely-use tracking) -> V0.3.4.
 //  - Not in scope at all this wave: Kassenbuch, Kostenstellen, fiscal-year close/Saldenvortrag
 //    (class 9 carryforward), opening balances beyond the dev seed, USt/VAT handling,
@@ -140,16 +151,18 @@ classDiagram(name = "Accounting") {
             stereotype("Id")
             stereotype("Column") { "columnName" to "id" }
         }
-        // SKR49 account number, e.g. "0945" (Bank). String, not Int -- some SKR49 accounts carry
-        // leading zeros that are semantically significant (Kontenklasse is the leading digit).
+        // SKR42 account number, e.g. "18000" (Bank). String, not Int -- some SKR42 accounts carry
+        // leading zeros that are semantically significant (Kontenklasse is the leading digit),
+        // e.g. "06500".
         attribute(name = "accountNumber", type = "String") {
             stereotype("Column") { "columnName" to "account_number"; "sqlType" to "VARCHAR(10)" }
         }
         attribute(name = "name", type = "String") {
             stereotype("Column") { "columnName" to "name"; "sqlType" to "VARCHAR(200)" }
         }
-        // SKR49 Kontenklasse, 0-9 -- reference/reporting field. See file header for the
-        // class-to-Gemeinnützigkeit-sphere mapping this enables in a later wave.
+        // SKR42 Kontenklasse, 0-9 -- reference/reporting field only. See file header: unlike
+        // SKR49, the Gemeinnützigkeit sphere is NOT derivable from this class under SKR42 -- it is
+        // assigned per posting via a cost center (KOST1), which is V0.3.3 scope.
         attribute(name = "accountClass", type = "Int") {
             stereotype("Column") { "columnName" to "account_class" }
         }

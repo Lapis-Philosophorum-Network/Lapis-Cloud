@@ -70,13 +70,22 @@ object DevSeedData {
     val standardTierId: Uuid = Uuid.parse("00000000-0000-0000-0000-0000000000f1")
 
     /**
-     * A representative SKR49 (DATEV's Kontenrahmen for non-profit associations) chart of
-     * accounts, spanning every Kontenklasse this codebase's `10-accounting.kuml.kts` documents
-     * (0/1/2/3/4/5/7/9) -- see that file's header for the full class-to-Gemeinnützigkeit-sphere
-     * background. This is a *reference-data candidate*: a real deployment would likely want the
-     * complete SKR49 (hundreds of accounts) seeded via a dedicated import rather than this
-     * hand-picked subset, but this set is enough to exercise `AccountingService` end to end and
-     * gives a treasurer a plausible starting point in dev/demo environments.
+     * A representative SKR42 (DATEV's current Kontenrahmen for Vereine/Stiftungen/gGmbHs, based on
+     * SKR04, 5-digit account numbers; it replaced SKR49, which DATEV has maintained no further
+     * since 01.01.2025) chart of accounts, spanning every Kontenklasse this codebase's
+     * `10-accounting.kuml.kts` documents (0/1/2/3/4/5/6/7/9) -- see that file's header for why the
+     * four Gemeinnützigkeit spheres are *not* derivable from these classes under SKR42, and for why
+     * class 4 holds all income, class 5 is itself an expense class (Wareneingang), class 6 holds
+     * the remaining operating expenses, and class 7 is the Finanzergebnis. This is a
+     * *reference-data candidate*: a real deployment would likely want the complete SKR42 (hundreds
+     * of accounts) seeded via a dedicated import rather than this hand-picked subset, but this set
+     * is enough to exercise `AccountingService` end to end and gives a treasurer a plausible
+     * starting point in dev/demo environments.
+     *
+     * Account numbers below carry a confidence note: HIGH = independently confirmed by 2+ sources
+     * (clubdesk.de, commu-core.com, vibss.de), MED/LOW = SKR04-consistent candidates that should be
+     * verified against the official DATEV SKR42 Kontenplan before a real deployment relies on them
+     * (see V0.3.1.1 research notes).
      */
     data class SeedLedgerAccount(
         val accountNumber: String,
@@ -87,31 +96,38 @@ object DevSeedData {
 
     val demoLedgerAccounts =
         listOf(
-            // Klasse 0 -- Anlagevermögen + liquid funds (SKR49 idiosyncratically puts Kasse/Bank here).
-            SeedLedgerAccount("0400", "Büroausstattung", 0, LedgerAccountType.ASSET),
-            SeedLedgerAccount("0920", "Kasse", 0, LedgerAccountType.ASSET),
-            SeedLedgerAccount("0945", "Bank", 0, LedgerAccountType.ASSET),
-            // Klasse 1 -- Umlaufvermögen/Forderungen/Verbindlichkeiten/USt.
-            SeedLedgerAccount("1200", "Forderungen aus Lieferungen und Leistungen", 1, LedgerAccountType.ASSET),
-            SeedLedgerAccount("1600", "Verbindlichkeiten aus Lieferungen und Leistungen", 1, LedgerAccountType.LIABILITY),
-            SeedLedgerAccount("1776", "Umsatzsteuer", 1, LedgerAccountType.LIABILITY),
-            // Klasse 2 -- Ideeller Bereich.
-            SeedLedgerAccount("2110", "Mitgliederbeiträge", 2, LedgerAccountType.INCOME),
-            SeedLedgerAccount("2300", "Verwaltungsaufwand", 2, LedgerAccountType.EXPENSE),
-            // Klasse 3 -- steuerneutrale Vorgänge / durchlaufende Posten (Spenden).
-            SeedLedgerAccount("3221", "Geldzuwendungen", 3, LedgerAccountType.INCOME),
-            // Klasse 4 -- Vermögensverwaltung.
-            SeedLedgerAccount("4150", "Zinserträge", 4, LedgerAccountType.INCOME),
-            SeedLedgerAccount("4200", "Aufwendungen Vermögensverwaltung", 4, LedgerAccountType.EXPENSE),
-            // Klassen 5-6 -- Zweckbetrieb.
-            SeedLedgerAccount("5010", "Eintrittsgelder", 5, LedgerAccountType.INCOME),
-            SeedLedgerAccount("5400", "Aufwendungen Zweckbetrieb", 5, LedgerAccountType.EXPENSE),
-            // Klassen 7-8 -- Wirtschaftlicher Geschäftsbetrieb.
-            SeedLedgerAccount("7000", "Erlöse wirtschaftlicher Geschäftsbetrieb", 7, LedgerAccountType.INCOME),
-            SeedLedgerAccount("7600", "Wareneinsatz", 7, LedgerAccountType.EXPENSE),
-            // Klasse 9 -- Vortrags-/statistische Konten.
-            SeedLedgerAccount("9000", "Eröffnungsbilanzkonto", 9, LedgerAccountType.EQUITY),
-            SeedLedgerAccount("9008", "Gewinn-/Verlustvortrag", 9, LedgerAccountType.EQUITY),
+            // Klasse 0 -- Anlagevermögen. (LOW confidence -- SKR04-consistent candidate.)
+            SeedLedgerAccount("06500", "Betriebs- und Geschäftsausstattung", 0, LedgerAccountType.ASSET),
+            // Klasse 1 -- liquide Mittel. (HIGH confidence.)
+            SeedLedgerAccount("16000", "Kasse", 1, LedgerAccountType.ASSET),
+            SeedLedgerAccount("18000", "Bank (Girokonto)", 1, LedgerAccountType.ASSET),
+            // Klasse 1 -- Forderungen. (MED confidence.)
+            SeedLedgerAccount("12000", "Forderungen aus Lieferungen und Leistungen", 1, LedgerAccountType.ASSET),
+            // Klasse 3 -- Verbindlichkeiten/USt. (LOW/MED confidence.)
+            SeedLedgerAccount("34000", "Verbindlichkeiten aus Lieferungen und Leistungen", 3, LedgerAccountType.LIABILITY),
+            SeedLedgerAccount("37500", "Umsatzsteuer", 3, LedgerAccountType.LIABILITY),
+            // Klasse 4 -- Erträge/Umsatzerlöse. Covers all four Gemeinnützigkeit spheres' income
+            // (ideeller Bereich, Vermögensverwaltung, Zweckbetrieb, wirtschaftlicher
+            // Geschäftsbetrieb) -- SKR42 does not partition income by account-number range; sphere
+            // is assigned per posting via cost center (KOST1). (HIGH confidence.)
+            SeedLedgerAccount("40000", "Echte Mitgliedsbeiträge", 4, LedgerAccountType.INCOME),
+            SeedLedgerAccount("40450", "Geldzuwendungen (Spenden) gegen Zuwendungsbestätigung", 4, LedgerAccountType.INCOME),
+            SeedLedgerAccount("42010", "Erlöse aus Eintrittsgeldern (Zweckbetrieb)", 4, LedgerAccountType.INCOME),
+            SeedLedgerAccount("44000", "Erlöse wirtschaftlicher Geschäftsbetrieb", 4, LedgerAccountType.INCOME),
+            // Klasse 5 -- Wareneingang / Aufwendungen für Roh-, Hilfs- und Betriebsstoffe. This is
+            // itself an EXPENSE class under SKR42, not an income class. (MED confidence.)
+            SeedLedgerAccount("50000", "Wareneinsatz / Materialaufwand", 5, LedgerAccountType.EXPENSE),
+            // Klasse 6 -- sonstige betriebliche Aufwendungen. Sphere-neutral by design under SKR42
+            // -- which sphere a booking to one of these belongs to is assigned per posting via cost
+            // center (KOST1), not derivable from the account itself. (MED/LOW confidence.)
+            SeedLedgerAccount("63000", "Aufwand (z.B. Miete) -- Sphäre via KOST1", 6, LedgerAccountType.EXPENSE),
+            SeedLedgerAccount("64000", "Bürobedarf / Verwaltungsaufwand", 6, LedgerAccountType.EXPENSE),
+            SeedLedgerAccount("64200", "Sonstiger Aufwand -- Sphäre via KOST1", 6, LedgerAccountType.EXPENSE),
+            // Klasse 7 -- Finanzergebnis. (MED confidence.)
+            SeedLedgerAccount("71100", "Zinserträge Bankguthaben (Vermögensverwaltung)", 7, LedgerAccountType.INCOME),
+            // Klasse 2/9 -- Eigenkapital/Vortrags-/statistische Konten. (LOW/MED confidence.)
+            SeedLedgerAccount("20000", "Vereinsvermögen / Ergebnisvortrag", 2, LedgerAccountType.EQUITY),
+            SeedLedgerAccount("90000", "Saldenvorträge Sachkonten / Eröffnungsbilanz", 9, LedgerAccountType.EQUITY),
         )
 
     /**

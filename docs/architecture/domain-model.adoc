@@ -297,21 +297,28 @@ authoritative, per-domain, always-current model files (each verified by its own
 `*SchemaDriftTest`).
 ====
 
-== Accounting (SKR49 + double-entry, V0.3.1)
+== Accounting (SKR42 + double-entry, V0.3.1, chart swapped from SKR49 in V0.3.1.1)
 
 `LedgerAccount`/`JournalEntry`/`Posting` (`lapis-server/src/main/kuml/10-accounting.kuml.kts`,
 verified by `AccountingSchemaDriftTest`) implement double-entry bookkeeping on a representative
-SKR49 chart of accounts (DATEV's Kontenrahmen for non-profit associations, foundations and
-gGmbHs). `LedgerAccount` is deliberately not named `Account` — that name is already taken by the
-Foundation domain's user-login `Account`/`AccountRole`.
+SKR42 chart of accounts (DATEV's current Kontenrahmen for Vereine, Stiftungen und gGmbHs, based on
+SKR04; it replaced SKR49, which DATEV has maintained no further since 01.01.2025). `LedgerAccount`
+is deliberately not named `Account` — that name is already taken by the Foundation domain's
+user-login `Account`/`AccountRole`.
 
-A SKR49 account number's leading digit (`LedgerAccount.accountClass`, 0-9) is the Kontenklasse and
-pre-partitions the four Gemeinnützigkeit spheres: class 2 = Ideeller Bereich, class 4 =
-Vermögensverwaltung, classes 5-6 = Zweckbetrieb, classes 7-8 = Wirtschaftlicher Geschäftsbetrieb
-(class 0 = Anlagevermögen + liquid funds, class 1 = Umlaufvermögen/USt, class 9 =
-Vortrags-/statistische Konten). This wave ships only `accountClass` — the sphere is derivable from
-it for the common case; a per-posting sphere override and the actual four-sphere separation follow
-in a later wave (V0.3.3), purely additively.
+A SKR42 account number's leading digit (`LedgerAccount.accountClass`, 0-9) is the Kontenklasse.
+Unlike the retired SKR49, SKR42 does *not* pre-partition the four Gemeinnützigkeit spheres into
+account-number ranges, and the Kontenklassen do not separate income from expense the way a naive
+reading might suggest: class 4 holds *all* Erträge/Umsatzerlöse across all four spheres (e.g. 4000
+Mitgliedsbeiträge, 4045 Spenden, 4200/4201 Erlöse/Eintrittsgelder), class 5 is itself an *expense*
+class (Wareneingang / Aufwendungen für Roh-, Hilfs- und Betriebsstoffe, e.g. 5000/5200
+Wareneingang), class 6 covers the remaining operating expenses (e.g. 6000 Löhne und Gehälter, 6310
+Miete), and class 7 is the Finanzergebnis (e.g. 7110 Zinserträge, 7300 Zinsaufwand) — covering both
+income and expense sub-accounts. None of classes 4-7 are sphere-partitioned; the same account can
+be booked to any of the four spheres. Sphere is assigned per booking via a cost center (DATEV
+KOST1), not derived from the account. This wave ships only `accountClass` as a reporting/grouping
+field; the real per-posting cost-center/sphere attribute and the actual four-sphere separation
+follow in a later wave (V0.3.3), purely additively.
 
 `JournalEntry.status` is `DRAFT` (incomplete/unbalanced postings allowed, freely editable) or
 `POSTED` (immutable, validated balanced at the moment of transition). The balance invariant

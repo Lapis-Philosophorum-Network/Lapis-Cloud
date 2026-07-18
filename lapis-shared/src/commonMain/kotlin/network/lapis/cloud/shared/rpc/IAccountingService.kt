@@ -10,8 +10,8 @@ import network.lapis.cloud.shared.domain.LedgerAccountDto
 import network.lapis.cloud.shared.domain.LedgerAccountInput
 
 /**
- * SKR49 chart of accounts + double-entry bookkeeping (V0.3.1) -- see
- * `network.lapis.cloud.server.rpc.AccountingService` for the implementation and
+ * SKR42 chart of accounts + double-entry bookkeeping (V0.3.1, chart swapped from SKR49 in
+ * V0.3.1.1) -- see `network.lapis.cloud.server.rpc.AccountingService` for the implementation and
  * `lapis-server/src/main/kuml/10-accounting.kuml.kts` for the schema-shape rationale.
  *
  * Bookkeeping is treasury-only, not member-public (unlike e.g. [IContributionService]'s own-data
