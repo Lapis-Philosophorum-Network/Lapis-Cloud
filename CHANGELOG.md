@@ -4,6 +4,22 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] — 2026-07-19
+
+### Added
+
+**Mail-merge/PDF engine** — Beitragsrechnung (membership dues invoice), a §50 EStDV Spendenbescheinigung (donation receipt, following the official BMF Muster pattern, distinguishing §10b EStG association donations from §34g EStG political-party donations), and an Einladung (invitation letter), all rendered with Apache PDFBox and delivered as raw PDF bytes over plain Ktor HTTP routes rather than Kilua RPC, mirroring the existing document-download idiom. Guessed or simplified legal wording in the donation receipt is explicitly flagged in code for human/tax-advisor review before real-world use. To make the templates fillable, this release also adds: a minimal nullable postal address on `Member` (with a new `updateMemberAddress` endpoint), a single-row admin-editable `OrganizationSettings` entity (letterhead, bank details, Gemeinnützigkeit tax-exemption reference), and an optional `donorMemberId` bridge on `JournalEntry` so a posted donation can be traced back to its donor for receipt generation. Beitragsrechnung and Spendenbescheinigung PDFs are additionally archived into the existing document store for retention.
+
+**Letterxpress postal-mail dispatch** — an explicit, human-triggered path to mail a generated Beitragsrechnung, Spendenbescheinigung, or Einladung to members without email, via a new `PostalMailProvider` abstraction with a Letterxpress implementation. Gated behind a new `OrganizationSettings.postalMailEnabled` opt-in (default off), since enabling it in real operation requires a Data Processing Agreement (Auftragsverarbeitungsvertrag/AVV) with Letterxpress; defaults to Letterxpress's sandbox/non-live mode until explicitly switched to live dispatch. A new `PostalDeliveryLog` records every dispatch attempt (status, provider reference, a sanitized error message — never a raw exception or provider response body). Dispatch requires the same authorization tier as PDF generation and a bounded, explicit recipient list (no unbounded batch sends). The Letterxpress wire format could not be verified against live documentation in the build environment and is explicitly flagged in code as needing a human check before production use.
+
+### Known limitations (tracked for later versions)
+
+- The Letterxpress integration's exact API wire format (endpoints, field names, auth flow) is implemented from general knowledge, not verified against live/current Letterxpress documentation — verify before enabling live dispatch.
+- Spendenbescheinigung is issued per single donation entry, not aggregated into an official BMF-style Sammelbestätigung across a period — aggregation rules need a human/tax-advisor check.
+- No compliance bundle yet (§25 PartG donation-acceptance check, §20 GwG transparency-register reporting, full GoBD audit-log/tamper-evidence/retention/TSE, backup/restore guarantee, full GDPR build-out) — planned for V0.5.
+- No LTR economy yet (internal crowdfunding, auction, direct transfer, politician profiles/ranking) — planned for V0.6.
+- Contribution management still has no SEPA direct-debit or dunning automation (tracked since 0.1.0).
+
 ## [0.3.0] — 2026-07-19
 
 ### Added
