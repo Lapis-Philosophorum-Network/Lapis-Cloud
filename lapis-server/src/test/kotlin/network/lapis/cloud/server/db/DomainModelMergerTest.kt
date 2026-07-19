@@ -48,9 +48,9 @@ class DomainModelMergerTest :
 
             val merged = DomainModelMerger.merge(diagrams)
 
-            // 46 distinct `"tableName" to "..."` values across the 13 .kuml.kts files (verified by
+            // 47 distinct `"tableName" to "..."` values across the 13 .kuml.kts files (verified by
             // grepping `grep -oh '"tableName" to "[a-z_]*"' lapis-server/src/main/kuml/*.kuml.kts |
-            // sort -u | wc -l`; 70 total «Entity» declarations minus 24 cross-domain-stub
+            // sort -u | wc -l`; 71 total «Entity» declarations minus 24 cross-domain-stub
             // duplicates: member appears in 12 files (11 dropped, every domain stubs it),
             // motion/meeting/resolution each appear in 4 files (3 dropped each), committee appears
             // in 3 files (2 dropped), document and membership_tier each appear in 2 files (1
@@ -68,7 +68,10 @@ class DomainModelMergerTest :
             // member) -- so it contributes +2 «Entity» declarations (the stub + the real table)
             // and +1 drop (the stub merges into the existing member entity) versus the V0.4.1
             // baseline above (45 -> 46).
-            val distinctTableNames = 46
+            // 10-accounting.kuml.kts (V0.5.1 §25 PartG) adds exactly one more real table
+            // (external_donor) on top of its own already-counted Member stub -- so it contributes
+            // +1 «Entity» declaration and +0 drops versus the V0.4.2 baseline above (46 -> 47).
+            val distinctTableNames = 47
 
             val result =
                 UmlToExposedViaErmScriptTransformer().transform(
@@ -135,6 +138,7 @@ class DomainModelMergerTest :
                     "JournalEntryTable.kt",
                     "PostingTable.kt",
                     "CostCenterTable.kt",
+                    "ExternalDonorTable.kt",
                     "OrganizationSettingsTable.kt",
                     "PostalDeliveryLogTable.kt",
                 )

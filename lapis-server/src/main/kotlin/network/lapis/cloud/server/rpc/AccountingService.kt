@@ -8,18 +8,28 @@ import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import network.lapis.cloud.server.db.generated.CostCenterTable
+import network.lapis.cloud.server.db.generated.ExternalDonorTable
 import network.lapis.cloud.server.db.generated.JournalEntryTable
 import network.lapis.cloud.server.db.generated.LedgerAccountTable
 import network.lapis.cloud.server.db.generated.MemberTable
+import network.lapis.cloud.server.db.generated.OrganizationSettingsTable
 import network.lapis.cloud.server.db.generated.PostingTable
 import network.lapis.cloud.server.security.requireRole
 import network.lapis.cloud.server.security.resolveCurrentMember
 import network.lapis.cloud.shared.domain.AccountRole
 import network.lapis.cloud.shared.domain.AnnualFinancialStatementDto
+import network.lapis.cloud.shared.domain.AnonymousDonationDutyDto
 import network.lapis.cloud.shared.domain.BalanceSheetDto
 import network.lapis.cloud.shared.domain.CostCenterDto
 import network.lapis.cloud.shared.domain.CostCenterInput
 import network.lapis.cloud.shared.domain.CostCenterReportDto
+import network.lapis.cloud.shared.domain.DonationDuty
+import network.lapis.cloud.shared.domain.DonationDutyReportDto
+import network.lapis.cloud.shared.domain.DonorCategory
+import network.lapis.cloud.shared.domain.DonorDutyDto
+import network.lapis.cloud.shared.domain.DonorType
+import network.lapis.cloud.shared.domain.ExternalDonorDto
+import network.lapis.cloud.shared.domain.ExternalDonorInput
 import network.lapis.cloud.shared.domain.FourSphereIncomeStatementDto
 import network.lapis.cloud.shared.domain.GemeinnuetzigkeitSphere
 import network.lapis.cloud.shared.domain.GeneralLedgerDto
@@ -44,7 +54,9 @@ import org.jetbrains.exposed.v1.core.and
 import org.jetbrains.exposed.v1.core.eq
 import org.jetbrains.exposed.v1.core.greaterEq
 import org.jetbrains.exposed.v1.core.inList
+import org.jetbrains.exposed.v1.core.isNotNull
 import org.jetbrains.exposed.v1.core.lessEq
+import org.jetbrains.exposed.v1.core.neq
 import org.jetbrains.exposed.v1.exceptions.ExposedSQLException
 import org.jetbrains.exposed.v1.jdbc.insert
 import org.jetbrains.exposed.v1.jdbc.selectAll
@@ -203,13 +215,76 @@ class AccountingService(
         }
     }
 
+    override suspend fun createExternalDonor(input: ExternalDonorInput): ExternalDonorDto {
+        val current = resolveCurrentMember(call)
+        current.requireRole(*TREASURY_ROLES)
+        requireNonBlankDisplayName(input.displayName)
+        return transaction {
+            val id = Uuid.random()
+            ExternalDonorTable.insert {
+                it[ExternalDonorTable.id] = id
+                it[displayName] = input.displayName
+                it[donorCategory] = input.donorCategory
+                it[street] = input.street
+                it[postalCode] = input.postalCode
+                it[city] = input.city
+                it[country] = input.country
+                it[active] = input.active
+            }
+            loadExternalDonor(id)
+        }
+    }
+
+    override suspend fun deactivateExternalDonor(id: String): ExternalDonorDto {
+        val current = resolveCurrentMember(call)
+        current.requireRole(*TREASURY_ROLES)
+        val donorId = id.toAccountingUuid("ExternalDonor")
+        return transaction {
+            val updated =
+                ExternalDonorTable.update({ ExternalDonorTable.id eq donorId }) {
+                    it[active] = false
+                }
+            if (updated == 0) throw NotFoundException("ExternalDonor $id not found")
+            loadExternalDonor(donorId)
+        }
+    }
+
+    override suspend fun listExternalDonors(activeOnly: Boolean): List<ExternalDonorDto> {
+        val current = resolveCurrentMember(call)
+        current.requireRole(*ACCOUNTING_READ_ROLES)
+        return transaction {
+            val baseQuery = ExternalDonorTable.selectAll()
+            val query = if (activeOnly) baseQuery.where { ExternalDonorTable.active eq true } else baseQuery
+            query.orderBy(ExternalDonorTable.displayName, SortOrder.ASC).map { it.toExternalDonorDto() }
+        }
+    }
+
+    override suspend fun getExternalDonor(id: String): ExternalDonorDto {
+        val current = resolveCurrentMember(call)
+        current.requireRole(*ACCOUNTING_READ_ROLES)
+        val donorId = id.toAccountingUuid("ExternalDonor")
+        return transaction { loadExternalDonor(donorId) }
+    }
+
     override suspend fun saveDraftEntry(input: JournalEntryInput): JournalEntryDto {
         val current = resolveCurrentMember(call)
         current.requireRole(*TREASURY_ROLES)
         return transaction {
             val donorMemberId = input.donorMemberId?.toAccountingUuid("Member")
+            val externalDonorId = input.externalDonorId?.toAccountingUuid("ExternalDonor")
             if (donorMemberId != null) requireExistingMember(donorMemberId)
-            insertJournalEntry(input, current.memberId, JournalEntryStatus.DRAFT, postedAt = null, donorMemberId = donorMemberId)
+            val externalDonorCategory = externalDonorId?.let { loadExternalDonorCategory(it) }
+            val effectiveDonorCategory =
+                requireDonorMutualExclusionAndCategory(donorMemberId, externalDonorId, input.donorCategory, externalDonorCategory)
+            insertJournalEntry(
+                input,
+                current.memberId,
+                JournalEntryStatus.DRAFT,
+                postedAt = null,
+                donorMemberId = donorMemberId,
+                externalDonorId = externalDonorId,
+                donorCategory = effectiveDonorCategory,
+            )
         }
     }
 
@@ -225,14 +300,26 @@ class AccountingService(
             requireVoucherForCashPostings(input.voucherReference, cashAccountIds)
             requireNonNegativeCashBalances(input.postings, cashAccountIds)
             val donorMemberId = input.donorMemberId?.toAccountingUuid("Member")
+            val externalDonorId = input.externalDonorId?.toAccountingUuid("ExternalDonor")
             if (donorMemberId != null) requireExistingMember(donorMemberId)
-            requireDonationIncomePosting(input.postings, donorMemberId)
+            val externalDonorCategory = externalDonorId?.let { loadExternalDonorCategory(it) }
+            val effectiveDonorCategory =
+                requireDonorMutualExclusionAndCategory(donorMemberId, externalDonorId, input.donorCategory, externalDonorCategory)
+            requireDonationIncomePosting(input.postings, effectiveDonorCategory)
+            if (effectiveDonorCategory != null && isPoliticalParty()) {
+                val donationAmount = donationIncomeAmount(input.postings)
+                val priorTotal =
+                    priorPostedDonationTotalThisYear(donorMemberId, externalDonorId, input.entryDate.year, excludeEntryId = null)
+                requirePartyDonationAllowed(effectiveDonorCategory, donationAmount, priorTotal)
+            }
             insertJournalEntry(
                 input,
                 current.memberId,
                 JournalEntryStatus.POSTED,
                 postedAt = nowLocalDateTime(),
                 donorMemberId = donorMemberId,
+                externalDonorId = externalDonorId,
+                donorCategory = effectiveDonorCategory,
             )
         }
     }
@@ -267,7 +354,19 @@ class AccountingService(
             val cashAccountIds = loadCashRegisterAccountIds(postings.map { it.ledgerAccountId.toAccountingUuid("LedgerAccount") })
             requireVoucherForCashPostings(entryRow[JournalEntryTable.voucherReference], cashAccountIds)
             requireNonNegativeCashBalances(postings, cashAccountIds)
-            requireDonationIncomePosting(postings, entryRow[JournalEntryTable.donorMemberId])
+            val donorCategory = entryRow[JournalEntryTable.donorCategory]
+            requireDonationIncomePosting(postings, donorCategory)
+            if (donorCategory != null && isPoliticalParty()) {
+                val donationAmount = donationIncomeAmount(postings)
+                val priorTotal =
+                    priorPostedDonationTotalThisYear(
+                        entryRow[JournalEntryTable.donorMemberId],
+                        entryRow[JournalEntryTable.externalDonorId],
+                        entryRow[JournalEntryTable.entryDate].year,
+                        excludeEntryId = entryId,
+                    )
+                requirePartyDonationAllowed(donorCategory, donationAmount, priorTotal)
+            }
             JournalEntryTable.update({ JournalEntryTable.id eq entryId }) {
                 it[status] = JournalEntryStatus.POSTED
                 it[postedAt] = nowLocalDateTime()
@@ -403,6 +502,64 @@ class AccountingService(
         current.requireRole(*ACCOUNTING_READ_ROLES)
         return transaction {
             FinancialStatementCalculator.costCenterReport(loadCostCenterAccountBalances(from, to), from, to)
+        }
+    }
+
+    override suspend fun getDonationDutyReport(calendarYear: Int): DonationDutyReportDto {
+        val current = resolveCurrentMember(call)
+        current.requireRole(*ACCOUNTING_READ_ROLES)
+        return transaction {
+            if (!isPoliticalParty()) {
+                return@transaction DonationDutyReportDto(
+                    calendarYear = calendarYear,
+                    partyRulesApply = false,
+                    donorDuties = emptyList(),
+                    anonymousForwarding = emptyList(),
+                )
+            }
+
+            val yearEntries = loadDonationYearEntries(calendarYear)
+
+            val anonymousForwarding =
+                yearEntries
+                    .filter { it.donorCategory == DonorCategory.ANONYMOUS }
+                    .filter { it.amount.compareTo(PartyDonationComplianceCalculator.ANONYMOUS_FORWARDING_THRESHOLD_EUR) > 0 }
+                    .map { AnonymousDonationDutyDto(journalEntryId = it.id.toString(), entryDate = it.entryDate, amount = it.amount) }
+
+            val donorDuties =
+                yearEntries
+                    .filter { it.donorCategory != DonorCategory.ANONYMOUS }
+                    .groupBy { it.donorMemberId to it.externalDonorId }
+                    .mapNotNull { (donorKey, entries) ->
+                        val (donorMemberId, externalDonorId) = donorKey
+                        val annualTotal = entries.fold(BigDecimal.ZERO) { acc, entry -> acc + entry.amount }
+                        val category = entries.first().donorCategory
+                        val result = PartyDonationComplianceCalculator.check(annualTotal, category, BigDecimal.ZERO)
+                        val promptReportRequired = DonationDuty.PROMPT_BUNDESTAG_REPORT_REQUIRED in result.duties
+                        val annualDisclosureRequired = DonationDuty.ANNUAL_DISCLOSURE_REQUIRED in result.duties
+                        if (!promptReportRequired && !annualDisclosureRequired) return@mapNotNull null
+                        DonorDutyDto(
+                            donorType = if (donorMemberId != null) DonorType.MEMBER else DonorType.EXTERNAL,
+                            donorId = (donorMemberId ?: externalDonorId).toString(),
+                            donorDisplayName =
+                                if (donorMemberId != null) {
+                                    memberDisplayName(donorMemberId)
+                                } else {
+                                    externalDonorDisplayName(externalDonorId!!)
+                                },
+                            donorCategory = category,
+                            annualTotal = annualTotal,
+                            promptReportRequired = promptReportRequired,
+                            annualDisclosureRequired = annualDisclosureRequired,
+                        )
+                    }
+
+            DonationDutyReportDto(
+                calendarYear = calendarYear,
+                partyRulesApply = true,
+                donorDuties = donorDuties,
+                anonymousForwarding = anonymousForwarding,
+            )
         }
     }
 
@@ -759,6 +916,8 @@ class AccountingService(
         status: JournalEntryStatus,
         postedAt: LocalDateTime?,
         donorMemberId: Uuid? = null,
+        externalDonorId: Uuid? = null,
+        donorCategory: DonorCategory? = null,
     ): JournalEntryDto {
         val id = Uuid.random()
         JournalEntryTable.insert {
@@ -771,6 +930,8 @@ class AccountingService(
             it[JournalEntryTable.postedAt] = postedAt
             it[createdAt] = nowLocalDateTime()
             it[JournalEntryTable.donorMemberId] = donorMemberId
+            it[JournalEntryTable.externalDonorId] = externalDonorId
+            it[JournalEntryTable.donorCategory] = donorCategory
         }
         input.postings.forEach { posting ->
             PostingTable.insert {
@@ -805,20 +966,83 @@ class AccountingService(
     }
 
     /**
-     * V0.4.1 Spendenbescheinigung donor attribution: when [donorMemberId] is set, [postings] must
-     * contain at least one line against an `INCOME`-typed [LedgerAccountTable] row -- otherwise a
-     * receipt could later be generated for an entry that never actually recorded any income
-     * (e.g. a plain reimbursement wrongly tagged with a donor). Deliberately NOT hard-coded to a
-     * specific account number (e.g. "40450") -- any future donation-designated `INCOME` account
-     * keeps working without a code change. A no-op when [donorMemberId] is `null`. This is a
-     * static input-shape rule over [postings] plus one lookup of the referenced accounts' `type`
-     * (same tier as [requireReserveTypeOnlyOnEquity]), hence [BadRequestException].
+     * V0.5.1 §25 PartG donor identity: [id] must exist as an [ExternalDonorTable] row -- same
+     * existing-entity tier as [requireExistingMember], hence [NotFoundException] -- and its own
+     * [network.lapis.cloud.shared.domain.DonorCategory] classification is returned so the caller can
+     * snapshot it onto the [JournalEntryTable] row (see [requireDonorMutualExclusionAndCategory]).
+     */
+    private fun loadExternalDonorCategory(id: Uuid): DonorCategory =
+        ExternalDonorTable
+            .selectAll()
+            .where { ExternalDonorTable.id eq id }
+            .singleOrNull()
+            ?.get(ExternalDonorTable.donorCategory)
+            ?: throw NotFoundException("ExternalDonor $id not found")
+
+    /**
+     * V0.5.1 §25 PartG: enforces the donor-identity invariant a [JournalEntryInput] must satisfy --
+     * [donorMemberId] and [externalDonorId] are never both set (member XOR external XOR neither/
+     * anonymous, see [network.lapis.cloud.shared.domain.JournalEntryDto] KDoc) -- and returns the
+     * effective/SNAPSHOTTED [network.lapis.cloud.shared.domain.DonorCategory] for this entry (`null`
+     * iff this is not a donation-subject entry at all). [externalDonorCategory] must already have
+     * been loaded by the caller via [loadExternalDonorCategory] when [externalDonorId] is non-null
+     * (that call is what proves the donor exists -- [NotFoundException] tier). This function itself
+     * is a static input-shape rule over its four parameters, hence [BadRequestException], the same
+     * tier as [requireReserveTypeOnlyOnEquity]/[requireCashRegisterOnlyOnAsset].
+     */
+    private fun requireDonorMutualExclusionAndCategory(
+        donorMemberId: Uuid?,
+        externalDonorId: Uuid?,
+        inputCategory: DonorCategory?,
+        externalDonorCategory: DonorCategory?,
+    ): DonorCategory? {
+        if (donorMemberId != null && externalDonorId != null) {
+            throw BadRequestException("donorMemberId and externalDonorId must not both be set on the same JournalEntry")
+        }
+        return when {
+            donorMemberId != null -> {
+                val category =
+                    inputCategory ?: throw BadRequestException("donorCategory is required when donorMemberId is set")
+                if (category == DonorCategory.ANONYMOUS) {
+                    throw BadRequestException("donorCategory must not be ANONYMOUS when donorMemberId is set")
+                }
+                category
+            }
+            externalDonorId != null -> {
+                if (inputCategory != null) {
+                    throw BadRequestException(
+                        "donorCategory must not be set when externalDonorId is set -- it is snapshotted from the " +
+                            "referenced ExternalDonor",
+                    )
+                }
+                externalDonorCategory
+            }
+            else -> {
+                if (inputCategory != null && inputCategory != DonorCategory.ANONYMOUS) {
+                    throw BadRequestException("donorCategory $inputCategory requires a donorMemberId or externalDonorId to be set")
+                }
+                inputCategory
+            }
+        }
+    }
+
+    /**
+     * V0.4.1/V0.5.1 donation income-posting rule, generalized in V0.5.1 from "donorMemberId set" to
+     * "any donation signal" ([donorCategory] non-null, i.e. a member, external, or explicit
+     * anonymous donation): [postings] must contain at least one line against an `INCOME`-typed
+     * [LedgerAccountTable] row -- otherwise a receipt/duty report could later reference an entry
+     * that never actually recorded any income (e.g. a plain reimbursement wrongly tagged with a
+     * donor). Deliberately NOT hard-coded to a specific account number (e.g. "40450") -- any future
+     * donation-designated `INCOME` account keeps working without a code change. A no-op when
+     * [donorCategory] is `null`. This is a static input-shape rule over [postings] plus one lookup
+     * of the referenced accounts' `type` (same tier as [requireReserveTypeOnlyOnEquity]), hence
+     * [BadRequestException].
      */
     private fun requireDonationIncomePosting(
         postings: List<PostingInput>,
-        donorMemberId: Uuid?,
+        donorCategory: DonorCategory?,
     ) {
-        if (donorMemberId == null) return
+        if (donorCategory == null) return
         val ledgerAccountIds = postings.map { it.ledgerAccountId.toAccountingUuid("LedgerAccount") }.distinct()
         val hasIncomePosting =
             ledgerAccountIds.isNotEmpty() &&
@@ -828,7 +1052,178 @@ class AccountingService(
                     .count() > 0
         if (!hasIncomePosting) {
             throw BadRequestException(
-                "donorMemberId $donorMemberId is set but the entry has no posting against an INCOME LedgerAccount",
+                "donorCategory $donorCategory is set but the entry has no posting against an INCOME LedgerAccount",
+            )
+        }
+    }
+
+    /**
+     * V0.5.1 §25 PartG: this journal entry's own donation amount -- Σ over `INCOME`-typed
+     * [postings] of (credit-minus-debit) signed amount, reusing
+     * [GeneralLedgerCalculator.normalBalanceSideOf] rather than hardcoding [PostingSide.CREDIT]
+     * (`INCOME` is credit-normal). A donation entry also carries a debit line into an `ASSET`
+     * account (Kasse/Bank) -- that line is deliberately excluded here, or it would understate the
+     * actual donation income.
+     */
+    private fun donationIncomeAmount(postings: List<PostingInput>): BigDecimal {
+        val ledgerAccountIds = postings.map { it.ledgerAccountId.toAccountingUuid("LedgerAccount") }.distinct()
+        if (ledgerAccountIds.isEmpty()) return BigDecimal.ZERO
+        val incomeAccountIds =
+            LedgerAccountTable
+                .selectAll()
+                .where { (LedgerAccountTable.id inList ledgerAccountIds) and (LedgerAccountTable.type eq LedgerAccountType.INCOME) }
+                .map { it[LedgerAccountTable.id] }
+                .toSet()
+        if (incomeAccountIds.isEmpty()) return BigDecimal.ZERO
+        val normalSide = GeneralLedgerCalculator.normalBalanceSideOf(LedgerAccountType.INCOME)
+        return postings
+            .filter { it.ledgerAccountId.toAccountingUuid("LedgerAccount") in incomeAccountIds }
+            .fold(BigDecimal.ZERO) { acc, posting ->
+                val signed = if (posting.side == normalSide) posting.amount else posting.amount.negate()
+                acc + signed
+            }
+    }
+
+    /**
+     * V0.5.1 §25 PartG: the same donor's ([donorMemberId] or [externalDonorId] -- at most one is
+     * non-null for a real identified donor) other already-`POSTED` donation income total within
+     * calendar year [year], excluding [excludeEntryId] (the entry being posted itself, for the
+     * [postDraftEntry] transition). Returns `ZERO` when both ids are `null` -- an anonymous donation
+     * cannot be correlated to a specific donor, and the §25 PartG anonymous-forwarding rule is
+     * per-donation, not aggregate, see [PartyDonationComplianceCalculator] KDoc.
+     */
+    private fun priorPostedDonationTotalThisYear(
+        donorMemberId: Uuid?,
+        externalDonorId: Uuid?,
+        year: Int,
+        excludeEntryId: Uuid?,
+    ): BigDecimal {
+        if (donorMemberId == null && externalDonorId == null) return BigDecimal.ZERO
+        val yearStart = LocalDate(year, 1, 1)
+        val yearEnd = LocalDate(year, 12, 31)
+        val donorCondition: Op<Boolean> =
+            if (donorMemberId != null) {
+                JournalEntryTable.donorMemberId eq donorMemberId
+            } else {
+                JournalEntryTable.externalDonorId eq externalDonorId
+            }
+        val conditions =
+            mutableListOf<Op<Boolean>>(
+                JournalEntryTable.status eq JournalEntryStatus.POSTED,
+                JournalEntryTable.entryDate greaterEq yearStart,
+                JournalEntryTable.entryDate lessEq yearEnd,
+                donorCondition,
+            )
+        if (excludeEntryId != null) conditions += (JournalEntryTable.id neq excludeEntryId)
+
+        val rows =
+            (PostingTable innerJoin JournalEntryTable innerJoin LedgerAccountTable)
+                .selectAll()
+                .where { conditions.reduce { a, b -> a and b } }
+                .toList()
+
+        val normalSide = GeneralLedgerCalculator.normalBalanceSideOf(LedgerAccountType.INCOME)
+        return rows
+            .filter { it[LedgerAccountTable.type] == LedgerAccountType.INCOME }
+            .groupBy { it[JournalEntryTable.id] }
+            .values
+            .fold(BigDecimal.ZERO) { acc, group ->
+                acc +
+                    group.fold(BigDecimal.ZERO) { acc2, row ->
+                        val amount = row[PostingTable.amount]
+                        val signed = if (row[PostingTable.side] == normalSide) amount else amount.negate()
+                        acc2 + signed
+                    }
+            }
+    }
+
+    /**
+     * V0.5.1 §25 PartG hard-enforcement point: hard-blocks posting with [ConflictException] when
+     * [PartyDonationComplianceCalculator.check] returns [DonationVerdict.PROHIBITED] for
+     * [donationAmount]/[donorCategory]/[priorPostedTotalThisYear] -- [DonationVerdict.ALLOWED] (even
+     * with additional duties) never blocks, see that object's KDoc. Only ever invoked when
+     * [network.lapis.cloud.shared.domain.OrganizationSettingsDto.isPoliticalParty] is `true`.
+     */
+    private fun requirePartyDonationAllowed(
+        donorCategory: DonorCategory,
+        donationAmount: BigDecimal,
+        priorPostedTotalThisYear: BigDecimal,
+    ) {
+        val result = PartyDonationComplianceCalculator.check(donationAmount, donorCategory, priorPostedTotalThisYear)
+        if (result.verdict == DonationVerdict.PROHIBITED) {
+            throw ConflictException(result.reason ?: "Donation prohibited under §25 PartG (donorCategory=$donorCategory)")
+        }
+    }
+
+    /**
+     * Whether [network.lapis.cloud.shared.domain.OrganizationSettingsDto.isPoliticalParty] is set on
+     * the single seeded [OrganizationSettingsTable] row -- the master gate for the whole §25 PartG
+     * mechanism (both [requirePartyDonationAllowed]'s enforcement and [getDonationDutyReport]'s
+     * duty report). `false` (the default) makes both a complete no-op for a plain gemeinnuetziger
+     * Verein.
+     */
+    private fun isPoliticalParty(): Boolean =
+        OrganizationSettingsTable
+            .selectAll()
+            .where { OrganizationSettingsTable.id eq ORGANIZATION_SETTINGS_ID }
+            .singleOrNull()
+            ?.get(OrganizationSettingsTable.isPoliticalParty) ?: false
+
+    /**
+     * One `POSTED` [JournalEntryTable] row within a calendar year whose `donor_category` is
+     * non-null (i.e. a donation-subject entry, per [network.lapis.cloud.shared.domain
+     * .JournalEntryDto] KDoc), paired with that entry's own [donationIncomeAmount] -- feeds
+     * [getDonationDutyReport]. A `PROHIBITED` donation can never appear here -- it was hard-blocked
+     * at post time by [requirePartyDonationAllowed], so only ever-`ALLOWED` donations are `POSTED`.
+     */
+    private data class DonationYearEntry(
+        val id: Uuid,
+        val entryDate: LocalDate,
+        val donorMemberId: Uuid?,
+        val externalDonorId: Uuid?,
+        val donorCategory: DonorCategory,
+        val amount: BigDecimal,
+    )
+
+    private fun loadDonationYearEntries(year: Int): List<DonationYearEntry> {
+        val yearStart = LocalDate(year, 1, 1)
+        val yearEnd = LocalDate(year, 12, 31)
+        val entryRows =
+            JournalEntryTable
+                .selectAll()
+                .where {
+                    (JournalEntryTable.status eq JournalEntryStatus.POSTED) and
+                        (JournalEntryTable.entryDate greaterEq yearStart) and
+                        (JournalEntryTable.entryDate lessEq yearEnd) and
+                        (JournalEntryTable.donorCategory.isNotNull())
+                }.toList()
+        if (entryRows.isEmpty()) return emptyList()
+
+        val entryIds = entryRows.map { it[JournalEntryTable.id] }
+        val normalSide = GeneralLedgerCalculator.normalBalanceSideOf(LedgerAccountType.INCOME)
+        val incomeByEntry =
+            (PostingTable innerJoin LedgerAccountTable)
+                .selectAll()
+                .where { (PostingTable.journalEntryId inList entryIds) and (LedgerAccountTable.type eq LedgerAccountType.INCOME) }
+                .toList()
+                .groupBy { it[PostingTable.journalEntryId] }
+                .mapValues { (_, rows) ->
+                    rows.fold(BigDecimal.ZERO) { acc, row ->
+                        val amount = row[PostingTable.amount]
+                        val signed = if (row[PostingTable.side] == normalSide) amount else amount.negate()
+                        acc + signed
+                    }
+                }
+
+        return entryRows.map { row ->
+            val id = row[JournalEntryTable.id]
+            DonationYearEntry(
+                id = id,
+                entryDate = row[JournalEntryTable.entryDate],
+                donorMemberId = row[JournalEntryTable.donorMemberId],
+                externalDonorId = row[JournalEntryTable.externalDonorId],
+                donorCategory = row[JournalEntryTable.donorCategory]!!,
+                amount = incomeByEntry[id] ?: BigDecimal.ZERO,
             )
         }
     }
@@ -1001,6 +1396,14 @@ class AccountingService(
     }
 
     /**
+     * `displayName` is free-text user input -- same static input-shape tier as
+     * [requireNonBlankCostCenterCode], hence [BadRequestException].
+     */
+    private fun requireNonBlankDisplayName(displayName: String) {
+        if (displayName.isBlank()) throw BadRequestException("ExternalDonor displayName must not be blank")
+    }
+
+    /**
      * Every referenced [CostCenterTable] row must exist and be [CostCenterTable.active] -- same
      * two-tier "not found vs. wrong state" idiom as [requireActiveLedgerAccounts]. Deliberately
      * only invoked from [postJournalEntry]/[postDraftEntry] (not [saveDraftEntry]) -- a treasurer
@@ -1037,6 +1440,13 @@ class AccountingService(
             .singleOrNull()
             ?.toCostCenterDto() ?: throw NotFoundException("CostCenter $id not found")
 
+    private fun loadExternalDonor(id: Uuid): ExternalDonorDto =
+        ExternalDonorTable
+            .selectAll()
+            .where { ExternalDonorTable.id eq id }
+            .singleOrNull()
+            ?.toExternalDonorDto() ?: throw NotFoundException("ExternalDonor $id not found")
+
     private fun loadJournalEntry(id: Uuid): JournalEntryDto {
         val entryRow = requireJournalEntryRow(id)
         val postings =
@@ -1054,6 +1464,14 @@ class AccountingService(
             .where { MemberTable.id eq memberId }
             .singleOrNull()
             ?.get(MemberTable.displayName)
+            .orEmpty()
+
+    private fun externalDonorDisplayName(donorId: Uuid): String =
+        ExternalDonorTable
+            .selectAll()
+            .where { ExternalDonorTable.id eq donorId }
+            .singleOrNull()
+            ?.get(ExternalDonorTable.displayName)
             .orEmpty()
 
     private fun nowLocalDateTime(): LocalDateTime = Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault())
@@ -1082,6 +1500,18 @@ class AccountingService(
             active = this[CostCenterTable.active],
         )
 
+    private fun ResultRow.toExternalDonorDto(): ExternalDonorDto =
+        ExternalDonorDto(
+            id = this[ExternalDonorTable.id].toString(),
+            displayName = this[ExternalDonorTable.displayName],
+            donorCategory = this[ExternalDonorTable.donorCategory],
+            street = this[ExternalDonorTable.street],
+            postalCode = this[ExternalDonorTable.postalCode],
+            city = this[ExternalDonorTable.city],
+            country = this[ExternalDonorTable.country],
+            active = this[ExternalDonorTable.active],
+        )
+
     /**
      * [costCenterId] comes from a `Posting.costCenterId` LEFT JOIN to [CostCenterTable] (see
      * [loadJournalEntry]) -- read via `getOrNull`, never the plain indexing operator, because
@@ -1105,6 +1535,7 @@ class AccountingService(
     private fun ResultRow.toJournalEntryDto(postings: List<PostingDto>): JournalEntryDto {
         val createdBy = this[JournalEntryTable.createdBy]
         val donorMemberId = this[JournalEntryTable.donorMemberId]
+        val externalDonorId = this[JournalEntryTable.externalDonorId]
         return JournalEntryDto(
             id = this[JournalEntryTable.id].toString(),
             entryDate = this[JournalEntryTable.entryDate],
@@ -1118,6 +1549,9 @@ class AccountingService(
             postings = postings,
             donorMemberId = donorMemberId?.toString(),
             donorMemberDisplayName = donorMemberId?.let { memberDisplayName(it) },
+            externalDonorId = externalDonorId?.toString(),
+            externalDonorDisplayName = externalDonorId?.let { externalDonorDisplayName(it) },
+            donorCategory = this[JournalEntryTable.donorCategory],
         )
     }
 }

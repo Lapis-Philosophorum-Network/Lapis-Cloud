@@ -25,14 +25,18 @@ import network.lapis.cloud.server.db.DatabaseConfig
 import network.lapis.cloud.server.db.DevSeedData
 import network.lapis.cloud.server.db.generated.AccountTable
 import network.lapis.cloud.server.db.generated.CostCenterTable
+import network.lapis.cloud.server.db.generated.ExternalDonorTable
 import network.lapis.cloud.server.db.generated.JournalEntryTable
 import network.lapis.cloud.server.db.generated.LedgerAccountTable
 import network.lapis.cloud.server.db.generated.MemberTable
+import network.lapis.cloud.server.db.generated.OrganizationSettingsTable
 import network.lapis.cloud.server.db.generated.PostingTable
 import network.lapis.cloud.server.security.ForbiddenException
 import network.lapis.cloud.server.security.UnauthenticatedException
 import network.lapis.cloud.shared.domain.AccountRole
 import network.lapis.cloud.shared.domain.CostCenterInput
+import network.lapis.cloud.shared.domain.DonorCategory
+import network.lapis.cloud.shared.domain.ExternalDonorInput
 import network.lapis.cloud.shared.domain.GemeinnuetzigkeitSphere
 import network.lapis.cloud.shared.domain.JournalEntryInput
 import network.lapis.cloud.shared.domain.JournalEntryStatus
@@ -64,13 +68,36 @@ class AccountingServiceTest :
         val createdMemberIds = mutableListOf<Uuid>()
         val createdLedgerAccountIds = mutableListOf<Uuid>()
         val createdCostCenterIds = mutableListOf<Uuid>()
+        val createdExternalDonorIds = mutableListOf<Uuid>()
+
+        /**
+         * V0.5.1 §25 PartG: flips the single seeded [OrganizationSettingsTable] row's
+         * `isPoliticalParty` directly (bypassing [network.lapis.cloud.server.rpc
+         * .OrganizationSettingsService], which is exercised by its own dedicated
+         * `OrganizationSettingsServiceTest`) -- this Spec only needs the flag as a fixture
+         * precondition for [AccountingService]'s own gate, not a round-trip of that other service.
+         */
+        fun setIsPoliticalParty(value: Boolean) {
+            transaction {
+                OrganizationSettingsTable.update({ OrganizationSettingsTable.id eq ORGANIZATION_SETTINGS_ID }) {
+                    it[isPoliticalParty] = value
+                }
+            }
+        }
 
         beforeSpec {
             DatabaseConfig.connect()
             DevSeedData.seedIfEmpty(force = true)
         }
 
-        afterSpec { cleanUpAccountingTestData(createdMemberIds, createdLedgerAccountIds, createdCostCenterIds) }
+        afterSpec {
+            // V0.5.1 §25 PartG: reset isPoliticalParty to its default -- every party-gated test in
+            // this Spec must leave the single seeded OrganizationSettings row exactly as it found
+            // it, since it is shared, order-dependent global state (unlike every other fixture in
+            // this file, which is this Spec's own freshly created rows).
+            setIsPoliticalParty(false)
+            cleanUpAccountingTestData(createdMemberIds, createdLedgerAccountIds, createdCostCenterIds, createdExternalDonorIds)
+        }
 
         fun createTestMember(
             email: String,
@@ -144,6 +171,29 @@ class AccountingServiceTest :
             return id
         }
 
+        /**
+         * Directly inserts an [ExternalDonorTable] row, bypassing the RPC service -- same "direct
+         * DB insert + tracked for cleanup" idiom as [createCostCenterDirect], used by tests that
+         * need a pre-existing external donor without exercising `createExternalDonor` itself.
+         */
+        fun createExternalDonorDirect(
+            displayName: String,
+            donorCategory: DonorCategory,
+            active: Boolean = true,
+        ): Uuid {
+            val id = Uuid.random()
+            transaction {
+                ExternalDonorTable.insert {
+                    it[ExternalDonorTable.id] = id
+                    it[ExternalDonorTable.displayName] = displayName
+                    it[ExternalDonorTable.donorCategory] = donorCategory
+                    it[ExternalDonorTable.active] = active
+                }
+            }
+            createdExternalDonorIds += id
+            return id
+        }
+
         // Trailing 5th field is costCenterId, empty when null -- kept backward-compatible with
         // every call site above that never sets PostingInput.costCenterId.
         fun postingsParam(postings: List<PostingInput>): String =
@@ -155,11 +205,15 @@ class AccountingServiceTest :
             postings: List<PostingInput>,
             voucher: String? = null,
             donorMemberId: String? = null,
+            externalDonorId: String? = null,
+            donorCategory: DonorCategory? = null,
         ): String =
             buildString {
                 append("date=$date&description=$description&postings=${postingsParam(postings)}")
                 if (voucher != null) append("&voucher=$voucher")
                 if (donorMemberId != null) append("&donorMemberId=$donorMemberId")
+                if (externalDonorId != null) append("&externalDonorId=$externalDonorId")
+                if (donorCategory != null) append("&donorCategory=$donorCategory")
             }
 
         test("treasurer can create a LedgerAccount; a plain member is forbidden") {
@@ -278,7 +332,15 @@ class AccountingServiceTest :
                 val response =
                     client.post(
                         "/test/post-entry?${
-                            entryParams(LocalDate(2026, 3, 5), "Spende", postings, donorMemberId = donor.toString())
+                            entryParams(
+                                LocalDate(2026, 3, 5),
+                                "Spende",
+                                postings,
+                                donorMemberId = donor.toString(),
+                                // V0.5.1 §25 PartG: donorCategory is now required whenever
+                                // donorMemberId is set -- see requireDonorMutualExclusionAndCategory.
+                                donorCategory = DonorCategory.GERMAN_NATURAL_PERSON,
+                            )
                         }",
                     ) {
                         header("X-Member-Id", treasurer.toString())
@@ -402,7 +464,19 @@ class AccountingServiceTest :
                             ),
                         )
                     return client
-                        .post("/test/post-entry?${entryParams(date, "Spende", postings, donorMemberId = donorMemberId)}") {
+                        .post(
+                            "/test/post-entry?${
+                                entryParams(
+                                    date,
+                                    "Spende",
+                                    postings,
+                                    donorMemberId = donorMemberId,
+                                    // V0.5.1 §25 PartG: donorCategory is now required whenever
+                                    // donorMemberId is set -- see requireDonorMutualExclusionAndCategory.
+                                    donorCategory = DonorCategory.GERMAN_NATURAL_PERSON,
+                                )
+                            }",
+                        ) {
                             header("X-Member-Id", treasurer.toString())
                         }.bodyAsText()
                         .split(":")[0]
@@ -2691,6 +2765,571 @@ class AccountingServiceTest :
                     .status shouldBe HttpStatusCode.Unauthorized
             }
         }
+
+        // ── V0.5.1 §25 PartG Spendenannahmeverbot ────────────────────────────────
+
+        test("ExternalDonor CRUD: create/list/get/deactivate; blank displayName BadRequest; deactivate hides from activeOnly") {
+            testApplication {
+                application {
+                    install(StatusPages) { installAccountingExceptionHandlers() }
+                    routing { registerAccountingTestRoutes() }
+                }
+                val treasurer = createTestMember("acct-treasurer-ed-crud@example.org", AccountRole.TREASURER)
+                val board = createTestMember("acct-board-ed-crud@example.org", AccountRole.BOARD)
+                val plainMember = createTestMember("acct-plain-ed-crud@example.org", AccountRole.MEMBER)
+
+                val created =
+                    client.post(
+                        "/test/create-external-donor?displayName=Firma+Muster+GmbH&donorCategory=GERMAN_COMPANY_OR_ORGANIZATION",
+                    ) { header("X-Member-Id", treasurer.toString()) }
+                created.status shouldBe HttpStatusCode.OK
+                val createdParts = created.bodyAsText().split(":")
+                createdParts[1] shouldBe "Firma Muster GmbH"
+                createdParts[2] shouldBe "GERMAN_COMPANY_OR_ORGANIZATION"
+                createdParts[3] shouldBe "true"
+                val donorId = createdParts[0]
+                createdExternalDonorIds += Uuid.parse(donorId)
+
+                val fetched =
+                    client.get("/test/get-external-donor/$donorId") { header("X-Member-Id", board.toString()) }.bodyAsText()
+                fetched shouldBe created.bodyAsText()
+
+                val listed =
+                    client.get("/test/list-external-donors") { header("X-Member-Id", treasurer.toString()) }.bodyAsText()
+                listed.contains(donorId) shouldBe true
+
+                val deactivated =
+                    client.post("/test/deactivate-external-donor/$donorId") { header("X-Member-Id", treasurer.toString()) }
+                deactivated.status shouldBe HttpStatusCode.OK
+                deactivated.bodyAsText() shouldBe "$donorId:false"
+
+                val activeOnlyAfter =
+                    client.get("/test/list-external-donors") { header("X-Member-Id", treasurer.toString()) }.bodyAsText()
+                activeOnlyAfter.contains(donorId) shouldBe false
+                val allAfter =
+                    client
+                        .get("/test/list-external-donors?activeOnly=false") { header("X-Member-Id", treasurer.toString()) }
+                        .bodyAsText()
+                allAfter.contains(donorId) shouldBe true
+
+                val blank =
+                    client.post("/test/create-external-donor?displayName=&donorCategory=GERMAN_NATURAL_PERSON") {
+                        header("X-Member-Id", treasurer.toString())
+                    }
+                blank.status shouldBe HttpStatusCode.BadRequest
+
+                val forbidden =
+                    client.post("/test/create-external-donor?displayName=X&donorCategory=GERMAN_NATURAL_PERSON") {
+                        header("X-Member-Id", plainMember.toString())
+                    }
+                forbidden.status shouldBe HttpStatusCode.Forbidden
+
+                val notFound =
+                    client.post("/test/deactivate-external-donor/${Uuid.random()}") { header("X-Member-Id", treasurer.toString()) }
+                notFound.status shouldBe HttpStatusCode.NotFound
+            }
+        }
+
+        test("donor-identity mutual exclusion and category validation: every invalid combination is rejected with BadRequest") {
+            testApplication {
+                application {
+                    install(StatusPages) { installAccountingExceptionHandlers() }
+                    routing { registerAccountingTestRoutes() }
+                }
+                val treasurer = createTestMember("acct-treasurer-donor-validation@example.org", AccountRole.TREASURER)
+                val member = createTestMember("acct-member-donor-validation@example.org", AccountRole.MEMBER)
+                val externalDonor = createExternalDonorDirect("Verein Foerderer e.V.", DonorCategory.GERMAN_COMPANY_OR_ORGANIZATION)
+                val kasse = createLedgerAccount("9200", LedgerAccountType.ASSET)
+                val spenden = createLedgerAccount("9201", LedgerAccountType.INCOME, accountClass = 2)
+
+                fun donationPostings() =
+                    listOf(
+                        PostingInput(
+                            kasse.toString(),
+                            PostingSide.DEBIT,
+                            BigDecimal("10.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
+                        PostingInput(
+                            spenden.toString(),
+                            PostingSide.CREDIT,
+                            BigDecimal("10.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
+                    )
+
+                // Both donorMemberId and externalDonorId set -- rejected at saveDraftEntry too (not
+                // just postJournalEntry), see class-level scope note "at save AND post".
+                val bothIds =
+                    client.post(
+                        "/test/save-draft?${
+                            entryParams(
+                                LocalDate(2026, 1, 1),
+                                "Beide-Ids",
+                                donationPostings(),
+                                donorMemberId = member.toString(),
+                                externalDonorId = externalDonor.toString(),
+                            )
+                        }",
+                    ) { header("X-Member-Id", treasurer.toString()) }
+                bothIds.status shouldBe HttpStatusCode.BadRequest
+
+                // donorMemberId set without donorCategory.
+                val memberNoCategory =
+                    client.post(
+                        "/test/post-entry?${
+                            entryParams(
+                                LocalDate(2026, 1, 2),
+                                "Mitglied-Ohne-Kategorie",
+                                donationPostings(),
+                                donorMemberId = member.toString(),
+                            )
+                        }",
+                    ) { header("X-Member-Id", treasurer.toString()) }
+                memberNoCategory.status shouldBe HttpStatusCode.BadRequest
+
+                // donorMemberId set with donorCategory = ANONYMOUS -- explicitly disallowed.
+                val memberAnonymous =
+                    client.post(
+                        "/test/post-entry?${
+                            entryParams(
+                                LocalDate(2026, 1, 3),
+                                "Mitglied-Anonym",
+                                donationPostings(),
+                                donorMemberId = member.toString(),
+                                donorCategory = DonorCategory.ANONYMOUS,
+                            )
+                        }",
+                    ) { header("X-Member-Id", treasurer.toString()) }
+                memberAnonymous.status shouldBe HttpStatusCode.BadRequest
+
+                // externalDonorId set WITH an input donorCategory -- must be omitted (snapshotted instead).
+                val externalWithCategory =
+                    client.post(
+                        "/test/post-entry?${
+                            entryParams(
+                                LocalDate(2026, 1, 4),
+                                "Extern-Mit-Kategorie",
+                                donationPostings(),
+                                externalDonorId = externalDonor.toString(),
+                                donorCategory = DonorCategory.GERMAN_NATURAL_PERSON,
+                            )
+                        }",
+                    ) { header("X-Member-Id", treasurer.toString()) }
+                externalWithCategory.status shouldBe HttpStatusCode.BadRequest
+
+                // Identified category without any donor id.
+                val categoryWithoutDonor =
+                    client.post(
+                        "/test/post-entry?${
+                            entryParams(
+                                LocalDate(2026, 1, 5),
+                                "Kategorie-Ohne-Donor",
+                                donationPostings(),
+                                donorCategory = DonorCategory.GERMAN_NATURAL_PERSON,
+                            )
+                        }",
+                    ) { header("X-Member-Id", treasurer.toString()) }
+                categoryWithoutDonor.status shouldBe HttpStatusCode.BadRequest
+
+                // ANONYMOUS with no donor id at all is the one explicitly-allowed "identified
+                // category without a donor id" case.
+                val anonymousOk =
+                    client.post(
+                        "/test/post-entry?${
+                            entryParams(
+                                LocalDate(2026, 1, 6),
+                                "Anonym-Ok",
+                                donationPostings(),
+                                donorCategory = DonorCategory.ANONYMOUS,
+                            )
+                        }",
+                    ) { header("X-Member-Id", treasurer.toString()) }
+                anonymousOk.status shouldBe HttpStatusCode.OK
+            }
+        }
+
+        test("external-donor donation snapshots the donor's category onto journal_entry.donor_category; round-trips via getJournalEntry") {
+            testApplication {
+                application {
+                    install(StatusPages) { installAccountingExceptionHandlers() }
+                    routing { registerAccountingTestRoutes() }
+                }
+                val treasurer = createTestMember("acct-treasurer-snapshot@example.org", AccountRole.TREASURER)
+                val externalDonor = createExternalDonorDirect("Muster AG", DonorCategory.GERMAN_COMPANY_OR_ORGANIZATION)
+                val kasse = createLedgerAccount("9210", LedgerAccountType.ASSET)
+                val spenden = createLedgerAccount("9211", LedgerAccountType.INCOME, accountClass = 2)
+
+                val postings =
+                    listOf(
+                        PostingInput(
+                            kasse.toString(),
+                            PostingSide.DEBIT,
+                            BigDecimal("25.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
+                        PostingInput(
+                            spenden.toString(),
+                            PostingSide.CREDIT,
+                            BigDecimal("25.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
+                    )
+                val response =
+                    client.post(
+                        "/test/post-entry?${
+                            entryParams(LocalDate(2026, 8, 1), "Firmenspende", postings, externalDonorId = externalDonor.toString())
+                        }",
+                    ) { header("X-Member-Id", treasurer.toString()) }
+                response.status shouldBe HttpStatusCode.OK
+                val entryId = response.bodyAsText().split(":")[0]
+
+                val fullDonor =
+                    client.get("/test/get-entry-donor-full/$entryId") { header("X-Member-Id", treasurer.toString()) }.bodyAsText()
+                fullDonor shouldBe "$entryId:null:null:$externalDonor:Muster AG:GERMAN_COMPANY_OR_ORGANIZATION"
+            }
+        }
+
+        test(
+            "isPoliticalParty=false: a structurally-prohibited-category external donation posts successfully (complete no-op for a Verein)",
+        ) {
+            testApplication {
+                application {
+                    install(StatusPages) { installAccountingExceptionHandlers() }
+                    routing { registerAccountingTestRoutes() }
+                }
+                setIsPoliticalParty(false)
+                val treasurer = createTestMember("acct-treasurer-verein-noop@example.org", AccountRole.TREASURER)
+                val donor = createExternalDonorDirect("Bundesamt fuer X", DonorCategory.PUBLIC_LAW_CORPORATION)
+                val kasse = createLedgerAccount("9220", LedgerAccountType.ASSET)
+                val spenden = createLedgerAccount("9221", LedgerAccountType.INCOME, accountClass = 2)
+
+                val postings =
+                    listOf(
+                        PostingInput(
+                            kasse.toString(),
+                            PostingSide.DEBIT,
+                            BigDecimal("100.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
+                        PostingInput(
+                            spenden.toString(),
+                            PostingSide.CREDIT,
+                            BigDecimal("100.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
+                    )
+                val response =
+                    client.post(
+                        "/test/post-entry?${
+                            entryParams(LocalDate(2050, 1, 1), "Verein-Noop", postings, externalDonorId = donor.toString())
+                        }",
+                    ) { header("X-Member-Id", treasurer.toString()) }
+                response.status shouldBe HttpStatusCode.OK
+
+                val report =
+                    client.get("/test/donation-duty-report?year=2050") { header("X-Member-Id", treasurer.toString()) }.bodyAsText()
+                report shouldBe "false##"
+            }
+        }
+
+        test("isPoliticalParty=true: a structurally-prohibited-category donation is hard-blocked with Conflict; nothing persisted") {
+            testApplication {
+                application {
+                    install(StatusPages) { installAccountingExceptionHandlers() }
+                    routing { registerAccountingTestRoutes() }
+                }
+                setIsPoliticalParty(true)
+                val treasurer = createTestMember("acct-treasurer-party-prohibited@example.org", AccountRole.TREASURER)
+                val donor = createExternalDonorDirect("Bundesamt fuer Y", DonorCategory.PUBLIC_LAW_CORPORATION)
+                val kasse = createLedgerAccount("9222", LedgerAccountType.ASSET)
+                val spenden = createLedgerAccount("9223", LedgerAccountType.INCOME, accountClass = 2)
+
+                val countBefore = transaction { JournalEntryTable.selectAll().count() }
+
+                val postings =
+                    listOf(
+                        PostingInput(
+                            kasse.toString(),
+                            PostingSide.DEBIT,
+                            BigDecimal("100.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
+                        PostingInput(
+                            spenden.toString(),
+                            PostingSide.CREDIT,
+                            BigDecimal("100.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
+                    )
+                val response =
+                    client.post(
+                        "/test/post-entry?${
+                            entryParams(LocalDate(2051, 1, 1), "Partei-Verboten", postings, externalDonorId = donor.toString())
+                        }",
+                    ) { header("X-Member-Id", treasurer.toString()) }
+                response.status shouldBe HttpStatusCode.Conflict
+
+                val countAfter = transaction { JournalEntryTable.selectAll().count() }
+                countAfter shouldBe countBefore
+            }
+        }
+
+        test(
+            "isPoliticalParty=true: two NON_EU_FOREIGN_NATURAL_PERSON donations from the same donor crossing the annual cap -- second post Conflict",
+        ) {
+            testApplication {
+                application {
+                    install(StatusPages) { installAccountingExceptionHandlers() }
+                    routing { registerAccountingTestRoutes() }
+                }
+                setIsPoliticalParty(true)
+                val treasurer = createTestMember("acct-treasurer-foreign-cap@example.org", AccountRole.TREASURER)
+                val donor = createExternalDonorDirect("Foreign Donor Ltd", DonorCategory.NON_EU_FOREIGN_NATURAL_PERSON)
+                val kasse = createLedgerAccount("9224", LedgerAccountType.ASSET)
+                val spenden = createLedgerAccount("9225", LedgerAccountType.INCOME, accountClass = 2)
+                val cap = PartyDonationComplianceCalculator.FOREIGN_DONOR_ANNUAL_CAP_EUR
+
+                suspend fun postDonation(
+                    date: LocalDate,
+                    amount: BigDecimal,
+                ) = client.post(
+                    "/test/post-entry?${
+                        entryParams(
+                            date,
+                            "Foreign-$date",
+                            listOf(
+                                PostingInput(
+                                    kasse.toString(),
+                                    PostingSide.DEBIT,
+                                    amount,
+                                    sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                                ),
+                                PostingInput(
+                                    spenden.toString(),
+                                    PostingSide.CREDIT,
+                                    amount,
+                                    sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                                ),
+                            ),
+                            externalDonorId = donor.toString(),
+                        )
+                    }",
+                ) { header("X-Member-Id", treasurer.toString()) }
+
+                val firstAmount = cap - BigDecimal("100.00")
+                val first = postDonation(LocalDate(2052, 1, 1), firstAmount)
+                first.status shouldBe HttpStatusCode.OK
+
+                // 100 + 1 more than firstAmount pushes the annual total 1.00 EUR over the cap.
+                val second = postDonation(LocalDate(2052, 6, 1), BigDecimal("101.00"))
+                second.status shouldBe HttpStatusCode.Conflict
+            }
+        }
+
+        test(
+            "isPoliticalParty=true: an allowed large donation posts successfully and appears in getDonationDutyReport with " +
+                "both duties; an anonymous donation above the forwarding threshold appears under anonymousForwarding",
+        ) {
+            testApplication {
+                application {
+                    install(StatusPages) { installAccountingExceptionHandlers() }
+                    routing { registerAccountingTestRoutes() }
+                }
+                setIsPoliticalParty(true)
+                val treasurer = createTestMember("acct-treasurer-duty-report@example.org", AccountRole.TREASURER)
+                val donor = createExternalDonorDirect("Grossspender GmbH", DonorCategory.GERMAN_COMPANY_OR_ORGANIZATION)
+                val kasse = createLedgerAccount("9226", LedgerAccountType.ASSET)
+                val spenden = createLedgerAccount("9227", LedgerAccountType.INCOME, accountClass = 2)
+
+                val largeDonation =
+                    client.post(
+                        "/test/post-entry?${
+                            entryParams(
+                                LocalDate(2053, 1, 1),
+                                "Grossspende",
+                                listOf(
+                                    PostingInput(
+                                        kasse.toString(),
+                                        PostingSide.DEBIT,
+                                        BigDecimal("40000.00"),
+                                        sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                                    ),
+                                    PostingInput(
+                                        spenden.toString(),
+                                        PostingSide.CREDIT,
+                                        BigDecimal("40000.00"),
+                                        sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                                    ),
+                                ),
+                                externalDonorId = donor.toString(),
+                            )
+                        }",
+                    ) { header("X-Member-Id", treasurer.toString()) }
+                largeDonation.status shouldBe HttpStatusCode.OK
+
+                val anonymousDonation =
+                    client.post(
+                        "/test/post-entry?${
+                            entryParams(
+                                LocalDate(2053, 2, 1),
+                                "Anonyme-Spende",
+                                listOf(
+                                    PostingInput(
+                                        kasse.toString(),
+                                        PostingSide.DEBIT,
+                                        BigDecimal("800.00"),
+                                        sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                                    ),
+                                    PostingInput(
+                                        spenden.toString(),
+                                        PostingSide.CREDIT,
+                                        BigDecimal("800.00"),
+                                        sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                                    ),
+                                ),
+                                donorCategory = DonorCategory.ANONYMOUS,
+                            )
+                        }",
+                    ) { header("X-Member-Id", treasurer.toString()) }
+                anonymousDonation.status shouldBe HttpStatusCode.OK
+                val anonymousEntryId = anonymousDonation.bodyAsText().split(":")[0]
+
+                val report =
+                    client.get("/test/donation-duty-report?year=2053") { header("X-Member-Id", treasurer.toString()) }.bodyAsText()
+                val (partyRulesApply, donorDutiesRaw, anonymousRaw) = report.split("#")
+                partyRulesApply shouldBe "true"
+
+                val donorDuty = donorDutiesRaw.split(";").single { it.contains(donor.toString()) }
+                val donorDutyParts = donorDuty.split(":")
+                donorDutyParts[0] shouldBe "EXTERNAL"
+                donorDutyParts[1] shouldBe donor.toString()
+                donorDutyParts[2] shouldBe "GERMAN_COMPANY_OR_ORGANIZATION"
+                donorDutyParts[3] shouldBe "40000.00"
+                donorDutyParts[4] shouldBe "true"
+                donorDutyParts[5] shouldBe "true"
+
+                anonymousRaw shouldBe "$anonymousEntryId:2053-02-01:800.00"
+
+                // Role gating on the report itself: BOARD may read, plain MEMBER forbidden, unauthenticated unauthorized.
+                val board = createTestMember("acct-board-duty-report@example.org", AccountRole.BOARD)
+                val plainMember = createTestMember("acct-plain-duty-report@example.org", AccountRole.MEMBER)
+                client.get("/test/donation-duty-report?year=2053") { header("X-Member-Id", board.toString()) }.status shouldBe
+                    HttpStatusCode.OK
+                client.get("/test/donation-duty-report?year=2053") { header("X-Member-Id", plainMember.toString()) }.status shouldBe
+                    HttpStatusCode.Forbidden
+                client.get("/test/donation-duty-report?year=2053").status shouldBe HttpStatusCode.Unauthorized
+            }
+        }
+
+        test(
+            "postDraftEntry path: a draft saved with a prohibited-category external donor succeeds at save, blocks only at postDraftEntry",
+        ) {
+            testApplication {
+                application {
+                    install(StatusPages) { installAccountingExceptionHandlers() }
+                    routing { registerAccountingTestRoutes() }
+                }
+                setIsPoliticalParty(true)
+                val treasurer = createTestMember("acct-treasurer-draft-partg@example.org", AccountRole.TREASURER)
+                val donor = createExternalDonorDirect("Berufsverband Z", DonorCategory.PROFESSIONAL_OR_TRADE_ASSOCIATION)
+                val kasse = createLedgerAccount("9228", LedgerAccountType.ASSET)
+                val spenden = createLedgerAccount("9229", LedgerAccountType.INCOME, accountClass = 2)
+
+                val postings =
+                    listOf(
+                        PostingInput(
+                            kasse.toString(),
+                            PostingSide.DEBIT,
+                            BigDecimal("50.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
+                        PostingInput(
+                            spenden.toString(),
+                            PostingSide.CREDIT,
+                            BigDecimal("50.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
+                    )
+                val draftResponse =
+                    client.post(
+                        "/test/save-draft?${
+                            entryParams(LocalDate(2054, 1, 1), "Entwurf-Verboten", postings, externalDonorId = donor.toString())
+                        }",
+                    ) { header("X-Member-Id", treasurer.toString()) }
+                draftResponse.status shouldBe HttpStatusCode.OK
+                val entryId = draftResponse.bodyAsText().split(":")[0]
+
+                val postResponse = client.post("/test/post-draft/$entryId") { header("X-Member-Id", treasurer.toString()) }
+                postResponse.status shouldBe HttpStatusCode.Conflict
+
+                val stillDraft =
+                    transaction { JournalEntryTable.selectAll().where { JournalEntryTable.id eq Uuid.parse(entryId) }.single() }
+                stillDraft[JournalEntryTable.status] shouldBe JournalEntryStatus.DRAFT
+            }
+        }
+
+        test("getDonationDutyReport is scoped to the requested calendarYear -- a prior-year donation from the same donor is excluded") {
+            testApplication {
+                application {
+                    install(StatusPages) { installAccountingExceptionHandlers() }
+                    routing { registerAccountingTestRoutes() }
+                }
+                setIsPoliticalParty(true)
+                val treasurer = createTestMember("acct-treasurer-year-scope@example.org", AccountRole.TREASURER)
+                val donor = createExternalDonorDirect("Jahresgrenze GmbH", DonorCategory.GERMAN_COMPANY_OR_ORGANIZATION)
+                val kasse = createLedgerAccount("9230", LedgerAccountType.ASSET)
+                val spenden = createLedgerAccount("9231", LedgerAccountType.INCOME, accountClass = 2)
+                val promptThreshold = PartyDonationComplianceCalculator.PROMPT_REPORT_THRESHOLD_EUR
+
+                suspend fun postDonation(date: LocalDate) =
+                    client.post(
+                        "/test/post-entry?${
+                            entryParams(
+                                date,
+                                "Jahresgrenze-$date",
+                                listOf(
+                                    PostingInput(
+                                        kasse.toString(),
+                                        PostingSide.DEBIT,
+                                        promptThreshold + BigDecimal("1.00"),
+                                        sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                                    ),
+                                    PostingInput(
+                                        spenden.toString(),
+                                        PostingSide.CREDIT,
+                                        promptThreshold + BigDecimal("1.00"),
+                                        sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                                    ),
+                                ),
+                                externalDonorId = donor.toString(),
+                            )
+                        }",
+                    ) { header("X-Member-Id", treasurer.toString()) }
+
+                postDonation(LocalDate(2060, 12, 31)).status shouldBe HttpStatusCode.OK
+                postDonation(LocalDate(2061, 1, 1)).status shouldBe HttpStatusCode.OK
+
+                val report2060 =
+                    client.get("/test/donation-duty-report?year=2060") { header("X-Member-Id", treasurer.toString()) }.bodyAsText()
+                report2060.split("#")[1].contains(donor.toString()) shouldBe true
+
+                val report2061 =
+                    client.get("/test/donation-duty-report?year=2061") { header("X-Member-Id", treasurer.toString()) }.bodyAsText()
+                report2061.split("#")[1].contains(donor.toString()) shouldBe true
+
+                // Each year's total is independent (no cross-year leakage): both years individually
+                // exceed the prompt-report threshold on their own single donation, not because of an
+                // incorrectly-aggregated multi-year total.
+                val duty2060 =
+                    report2060
+                        .split("#")[1]
+                        .split(";")
+                        .single { it.contains(donor.toString()) }
+                        .split(":")
+                duty2060[3] shouldBe (promptThreshold + BigDecimal("1.00")).toString()
+            }
+        }
     })
 
 private fun StatusPagesConfig.installAccountingExceptionHandlers() {
@@ -2813,6 +3452,61 @@ private fun Route.registerAccountingTestRoutes() {
         val dto = service.getJournalEntry(call.parameters["id"]!!)
         call.respondText("${dto.id}:${dto.donorMemberId}:${dto.donorMemberDisplayName}")
     }
+    // V0.5.1 §25 PartG donor-attribution round-trip -- separate route from /test/get-entry-donor
+    // so that existing route's response format (and every test asserting on it) never has to
+    // change; adds externalDonorId/externalDonorDisplayName/donorCategory.
+    get("/test/get-entry-donor-full/{id}") {
+        val service = AccountingService(call)
+        val dto = service.getJournalEntry(call.parameters["id"]!!)
+        call.respondText(
+            "${dto.id}:${dto.donorMemberId}:${dto.donorMemberDisplayName}:" +
+                "${dto.externalDonorId}:${dto.externalDonorDisplayName}:${dto.donorCategory}",
+        )
+    }
+    post("/test/create-external-donor") {
+        val service = AccountingService(call)
+        val q = call.request.queryParameters
+        val dto =
+            service.createExternalDonor(
+                ExternalDonorInput(
+                    displayName = q["displayName"]!!,
+                    donorCategory = DonorCategory.valueOf(q["donorCategory"]!!),
+                    street = q["street"],
+                    postalCode = q["postalCode"],
+                    city = q["city"],
+                    country = q["country"],
+                    active = q["active"]?.toBoolean() ?: true,
+                ),
+            )
+        call.respondText("${dto.id}:${dto.displayName}:${dto.donorCategory}:${dto.active}")
+    }
+    post("/test/deactivate-external-donor/{id}") {
+        val service = AccountingService(call)
+        val dto = service.deactivateExternalDonor(call.parameters["id"]!!)
+        call.respondText("${dto.id}:${dto.active}")
+    }
+    get("/test/list-external-donors") {
+        val service = AccountingService(call)
+        val activeOnly = call.request.queryParameters["activeOnly"]?.toBoolean() ?: true
+        val list = service.listExternalDonors(activeOnly)
+        call.respondText(list.joinToString(";") { "${it.id}:${it.displayName}:${it.active}" })
+    }
+    get("/test/get-external-donor/{id}") {
+        val service = AccountingService(call)
+        val dto = service.getExternalDonor(call.parameters["id"]!!)
+        call.respondText("${dto.id}:${dto.displayName}:${dto.donorCategory}:${dto.active}")
+    }
+    get("/test/donation-duty-report") {
+        val service = AccountingService(call)
+        val year = call.request.queryParameters["year"]!!.toInt()
+        val dto = service.getDonationDutyReport(year)
+        val donorDuties =
+            dto.donorDuties.joinToString(";") {
+                "${it.donorType}:${it.donorId}:${it.donorCategory}:${it.annualTotal}:${it.promptReportRequired}:${it.annualDisclosureRequired}"
+            }
+        val anonymous = dto.anonymousForwarding.joinToString(";") { "${it.journalEntryId}:${it.entryDate}:${it.amount}" }
+        call.respondText("${dto.partyRulesApply}#$donorDuties#$anonymous")
+    }
     get("/test/list-journal") {
         val service = AccountingService(call)
         val q = call.request.queryParameters
@@ -2920,19 +3614,26 @@ private suspend fun readJournalEntryInput(call: ApplicationCall): JournalEntryIn
         voucherReference = q["voucher"],
         postings = postings,
         donorMemberId = q["donorMemberId"],
+        externalDonorId = q["externalDonorId"],
+        donorCategory = q["donorCategory"]?.let { DonorCategory.valueOf(it) },
     )
 }
 
 /**
  * Hard-deletes every row this Spec created, child-before-parent -- same discipline as
- * [cleanUpElectionTestData]/[cleanUpSystemicConsensusTestData].
+ * [cleanUpElectionTestData]/[cleanUpSystemicConsensusTestData]. [externalDonorIds] (V0.5.1 §25
+ * PartG) must be deleted only AFTER the referencing [JournalEntryTable] rows are gone (FK
+ * `journal_entry.external_donor_id -> external_donor`) -- those rows are already swept above via
+ * `journalEntryIds` (computed from `createdBy in memberIds`, and every donation-posting test in
+ * this Spec posts as a tracked treasurer), so this happens naturally in the existing order.
  */
 private fun cleanUpAccountingTestData(
     memberIds: List<Uuid>,
     ledgerAccountIds: List<Uuid>,
     costCenterIds: List<Uuid> = emptyList(),
+    externalDonorIds: List<Uuid> = emptyList(),
 ) {
-    if (memberIds.isEmpty() && ledgerAccountIds.isEmpty() && costCenterIds.isEmpty()) return
+    if (memberIds.isEmpty() && ledgerAccountIds.isEmpty() && costCenterIds.isEmpty() && externalDonorIds.isEmpty()) return
     transaction {
         val journalEntryIds =
             if (memberIds.isNotEmpty()) {
@@ -2957,6 +3658,9 @@ private fun cleanUpAccountingTestData(
         }
         if (costCenterIds.isNotEmpty()) {
             CostCenterTable.deleteWhere { CostCenterTable.id inList costCenterIds }
+        }
+        if (externalDonorIds.isNotEmpty()) {
+            ExternalDonorTable.deleteWhere { ExternalDonorTable.id inList externalDonorIds }
         }
         if (memberIds.isNotEmpty()) {
             AccountTable.deleteWhere { AccountTable.memberId inList memberIds }

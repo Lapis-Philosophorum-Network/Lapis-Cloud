@@ -57,6 +57,23 @@ CREATE TABLE cost_center (
     active BOOLEAN NOT NULL DEFAULT TRUE
 );
 
+-- V0.5.1 §25 PartG donor identity for a non-member donor (see 10-accounting.kuml.kts file header).
+CREATE TABLE external_donor (
+    id UUID NOT NULL PRIMARY KEY,
+    display_name VARCHAR(300) NOT NULL,
+    donor_category VARCHAR(41) NOT NULL,
+    street VARCHAR(200) NULL,
+    postal_code VARCHAR(20) NULL,
+    city VARCHAR(200) NULL,
+    country VARCHAR(100) NULL,
+    active BOOLEAN NOT NULL DEFAULT TRUE,
+    CHECK (donor_category IN (
+        'GERMAN_NATURAL_PERSON', 'EU_NATURAL_PERSON', 'NON_EU_FOREIGN_NATURAL_PERSON',
+        'GERMAN_COMPANY_OR_ORGANIZATION', 'PUBLIC_LAW_CORPORATION', 'OVER_25_PERCENT_STATE_OWNED_COMPANY',
+        'OTHER_PARTY_OR_PARLIAMENTARY_GROUP_ENTITY', 'PROFESSIONAL_OR_TRADE_ASSOCIATION', 'ANONYMOUS'
+    ))
+);
+
 CREATE TABLE ledger_account (
     id UUID NOT NULL PRIMARY KEY,
     account_number VARCHAR(10) NOT NULL,
@@ -181,7 +198,14 @@ CREATE TABLE journal_entry (
     posted_at TIMESTAMP NULL,
     created_at TIMESTAMP NOT NULL,
     donor_member_id UUID NULL,
-    CHECK (status IN ('DRAFT', 'POSTED'))
+    donor_category VARCHAR(41) NULL,
+    external_donor_id UUID NULL,
+    CHECK (status IN ('DRAFT', 'POSTED')),
+    CHECK (donor_category IN (
+        'GERMAN_NATURAL_PERSON', 'EU_NATURAL_PERSON', 'NON_EU_FOREIGN_NATURAL_PERSON',
+        'GERMAN_COMPANY_OR_ORGANIZATION', 'PUBLIC_LAW_CORPORATION', 'OVER_25_PERCENT_STATE_OWNED_COMPANY',
+        'OTHER_PARTY_OR_PARLIAMENTARY_GROUP_ENTITY', 'PROFESSIONAL_OR_TRADE_ASSOCIATION', 'ANONYMOUS'
+    ))
 );
 
 CREATE TABLE document_version (
@@ -619,6 +643,7 @@ ALTER TABLE systemic_consensus_resistance ADD CONSTRAINT fk_systemic_consensus_r
 ALTER TABLE systemic_consensus_resistance ADD CONSTRAINT fk_systemic_consensus_resistance_option_id FOREIGN KEY (option_id) REFERENCES systemic_consensus_option(id);
 ALTER TABLE journal_entry ADD CONSTRAINT fk_journal_entry_created_by FOREIGN KEY (created_by) REFERENCES member(id);
 ALTER TABLE journal_entry ADD CONSTRAINT fk_journal_entry_donor_member_id FOREIGN KEY (donor_member_id) REFERENCES member(id);
+ALTER TABLE journal_entry ADD CONSTRAINT fk_journal_entry_external_donor_id FOREIGN KEY (external_donor_id) REFERENCES external_donor(id);
 ALTER TABLE posting ADD CONSTRAINT fk_posting_journal_entry_id FOREIGN KEY (journal_entry_id) REFERENCES journal_entry(id);
 ALTER TABLE posting ADD CONSTRAINT fk_posting_ledger_account_id FOREIGN KEY (ledger_account_id) REFERENCES ledger_account(id);
 ALTER TABLE posting ADD CONSTRAINT fk_posting_cost_center_id FOREIGN KEY (cost_center_id) REFERENCES cost_center(id);

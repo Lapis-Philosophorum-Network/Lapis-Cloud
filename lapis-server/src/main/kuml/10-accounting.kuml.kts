@@ -151,6 +151,34 @@
 // bills) have no project/campaign association; only a booking tied to a specific cost center gets
 // one. This is the mechanism a later, separate V0.6 wave will attach Crowdfunding/Auktion
 // campaigns to -- no crowdfunding/auction-specific logic ships this wave.
+//
+// §25 PartG Spendenannahmeverbot (V0.5.1, only relevant when organization_settings
+// .is_political_party is true -- a plain gemeinnuetziger Verein never runs this check at all, see
+// network.lapis.cloud.server.rpc.AccountingService/PartyDonationComplianceCalculator KDoc):
+// V0.4.1's `journal_entry.donor_member_id` only supports a donating MEMBER; real-world party
+// donations routinely come from non-members, so this wave adds `external_donor` -- a genuine
+// persisted, identifiable entity (not a free-text name) so that per-donor-per-calendar-year
+// aggregate thresholds (foreign-donation cap, disclosure, prompt-report) can be computed by
+// summing that SAME donor's donations across multiple journal entries. `donor_category` (see
+// `donorCategory` enum below) is a NEW classification a treasurer explicitly assigns per donation
+// (no automatic inference) -- placed on BOTH `external_donor` (the donor's own intrinsic
+// classification, picked once at creation) AND `journal_entry` (a SNAPSHOT of the effective
+// category at post time: copied from the donor for an external donation, taken from the input for
+// a member donation, or ANONYMOUS). The snapshot is deliberate: a `journal_entry` is immutable once
+// POSTED, so the historical compliance verdict/report must reflect the category AT post time, not
+// the donor's possibly-later-edited classification. `journal_entry.external_donor_id` is a new
+// nullable FK -> external_donor, mutually exclusive with `donor_member_id` (member XOR external XOR
+// neither/anonymous) -- enforced at the service layer only (AccountingService), the same class of
+// cross-row/cross-column invariant as the balance check and the reserveType/isCashRegister
+// cross-column rules, not expressible as a single-row CHECK. The whole §25 PartG check (verdict +
+// follow-up-duty report) is service-layer-only and gated on organization_settings
+// .is_political_party -- a complete no-op for a Verein, see AccountingService KDoc.
+//
+// DSGVO note: `external_donor` holds PII of a data subject who is NOT a member and therefore has NO
+// FK to `member(id)` -- PersonalDataCoverageTest (which only walks member-FK tables) does not flag
+// it and no PersonalDataRegistry/allowlist entry is required for the build to stay green. Full
+// erasure/export coverage of external donors is deliberately deferred to the later V0.5.4 DSGVO-
+// Vollausbau wave -- this is a known, intentional gap for this wave, not an oversight.
 import dev.kuml.profile.erm.ermMappingProfile
 import dev.kuml.uml.Multiplicity
 import dev.kuml.uml.dsl.applyProfile
@@ -227,6 +255,81 @@ classDiagram(name = "Accounting") {
     // a real persisted entity with its own id/lifecycle (create/deactivate/list -- exactly
     // LedgerAccount's own CRUD shape), not an enum literal. See the file header for the full
     // placement/optionality rationale.
+    // §25 PartG donor classification (V0.5.1), a treasurer explicitly assigns per donation -- no
+    // automatic inference of a donor's legal category from any other data (see file header). Used
+    // on BOTH `external_donor.donor_category` (the donor's own intrinsic classification, NOT NULL)
+    // and `journal_entry.donor_category` (a nullable SNAPSHOT of the effective category at post
+    // time -- see file header). Literal order is load-bearing: AccountingSchemaDriftTest asserts
+    // ErmDataType.Enum.values in exactly this order, matching
+    // network.lapis.cloud.shared.domain.DonorCategory. The four structural literals
+    // PUBLIC_LAW_CORPORATION/OVER_25_PERCENT_STATE_OWNED_COMPANY/
+    // OTHER_PARTY_OR_PARLIAMENTARY_GROUP_ENTITY/PROFESSIONAL_OR_TRADE_ASSOCIATION are always
+    // PROHIBITED by category alone (amount-independent) in
+    // network.lapis.cloud.server.rpc.PartyDonationComplianceCalculator -- see that object's KDoc
+    // for the full verdict logic and the "verify against current §25/25a/25c/25d PartG + a lawyer"
+    // disclaimer that applies to every category-to-Absatz mapping below.
+    val donorCategory = enumOf(name = "DonorCategory") {
+        literal(name = "GERMAN_NATURAL_PERSON")
+        literal(name = "EU_NATURAL_PERSON")
+        literal(name = "NON_EU_FOREIGN_NATURAL_PERSON")
+        literal(name = "GERMAN_COMPANY_OR_ORGANIZATION")
+        literal(name = "PUBLIC_LAW_CORPORATION")
+        literal(name = "OVER_25_PERCENT_STATE_OWNED_COMPANY")
+        literal(name = "OTHER_PARTY_OR_PARLIAMENTARY_GROUP_ENTITY")
+        literal(name = "PROFESSIONAL_OR_TRADE_ASSOCIATION")
+        literal(name = "ANONYMOUS")
+    }
+
+    // V0.5.1 §25 PartG donor identity for a NON-member donor -- see file header for why a free-text
+    // name alone could not reliably identify "the same donor" across bookings for the per-donor-
+    // per-year aggregate thresholds. Deliberately useful to a plain Verein too (attributing a
+    // non-member donation for a §10b EStG receipt) -- unlike the compliance CHECK itself, this
+    // entity is NOT gated on organization_settings.is_political_party. Lifecycle is
+    // create/deactivate/list/get only (deactivate never delete), mirroring `CostCenter` exactly, so
+    // historical postings referencing a donor are never invalidated. Deliberately NO unique index
+    // on `display_name` -- two real donors may share a name; identity is the id.
+    val externalDonor = classOf(name = "ExternalDonor") {
+        stereotype("Entity") { "tableName" to "external_donor"; "kotlinObjectName" to "ExternalDonorTable" }
+
+        attribute(name = "id", type = "UUID") {
+            stereotype("Id")
+            stereotype("Column") { "columnName" to "id" }
+        }
+        attribute(name = "displayName", type = "String") {
+            stereotype("Column") { "columnName" to "display_name"; "sqlType" to "VARCHAR(300)" }
+        }
+        // NOT NULL -- the donor's own intrinsic classification, picked once at creation. See
+        // `donorCategory` enum comment above.
+        attribute(name = "donorCategory", type = donorCategory) {
+            stereotype("Column") {
+                "columnName" to "donor_category"
+                "enumType" to "network.lapis.cloud.shared.domain.DonorCategory"
+            }
+        }
+        attribute(name = "street", type = "String") {
+            multiplicity = Multiplicity(0, 1)
+            stereotype("Column") { "columnName" to "street"; "sqlType" to "VARCHAR(200)" }
+        }
+        attribute(name = "postalCode", type = "String") {
+            multiplicity = Multiplicity(0, 1)
+            stereotype("Column") { "columnName" to "postal_code"; "sqlType" to "VARCHAR(20)" }
+        }
+        attribute(name = "city", type = "String") {
+            multiplicity = Multiplicity(0, 1)
+            stereotype("Column") { "columnName" to "city"; "sqlType" to "VARCHAR(200)" }
+        }
+        attribute(name = "country", type = "String") {
+            multiplicity = Multiplicity(0, 1)
+            stereotype("Column") { "columnName" to "country"; "sqlType" to "VARCHAR(100)" }
+        }
+        // Deactivate instead of delete -- same "never remove a referenced entity" rule as
+        // ledger_account.active/cost_center.active.
+        attribute(name = "active", type = "Boolean") {
+            defaultValue = "TRUE"
+            stereotype("Column") { "columnName" to "active" }
+        }
+    }
+
     val costCenter = classOf(name = "CostCenter") {
         stereotype("Entity") { "tableName" to "cost_center"; "kotlinObjectName" to "CostCenterTable" }
         stereotype("Index") {
@@ -371,6 +474,22 @@ classDiagram(name = "Accounting") {
             multiplicity = Multiplicity(0, 1)
             stereotype("Column") { "columnName" to "donor_member_id"; "fkEntity" to "Member" }
         }
+        // V0.5.1 §25 PartG: nullable SNAPSHOT of the effective DonorCategory at post time -- see
+        // file header for why this is a snapshot (POSTED immutability) rather than a live read of
+        // external_donor.donor_category. Non-null iff this entry is "a donation subject to the §25
+        // PartG check" (member donation, external donation, or explicit ANONYMOUS) -- enforced at
+        // the service layer (AccountingService.requireDonorMutualExclusionAndCategory), not a CHECK
+        // constraint (cross-column rule spanning donor_member_id/external_donor_id/donor_category,
+        // same class as the balance invariant). Deliberately no `sqlType` override -- same proven
+        // nullable-enum auto-sizing path as `reserveType` above (longest literal
+        // "OTHER_PARTY_OR_PARLIAMENTARY_GROUP_ENTITY" = 41 chars).
+        attribute(name = "donorCategory", type = donorCategory) {
+            multiplicity = Multiplicity(0, 1)
+            stereotype("Column") {
+                "columnName" to "donor_category"
+                "enumType" to "network.lapis.cloud.shared.domain.DonorCategory"
+            }
+        }
     }
 
     val posting = classOf(name = "Posting") {
@@ -427,5 +546,15 @@ classDiagram(name = "Accounting") {
     association(source = costCenter, target = posting, id = "assoc-cost-center-posting") {
         source { multiplicity("0..1") }
         target { multiplicity("0..*"); role = "costCenterId" }
+    }
+
+    // journal_entry.external_donor_id -> external_donor (id): association-derived default matches
+    // (unlike donor_member_id, whose derived default "member_id" would be wrong -- that one stays
+    // a plain «Column» fkEntity, see the journal_entry.donorMemberId comment above). V0.5.1 §25
+    // PartG: nullable -- most journal entries are not a donation at all, and even a donation may be
+    // attributed to a member instead (mutually exclusive, enforced at the service layer).
+    association(source = externalDonor, target = journalEntry, id = "assoc-external-donor-journal-entry") {
+        source { multiplicity("0..1") }
+        target { multiplicity("0..*"); role = "externalDonorId" }
     }
 }

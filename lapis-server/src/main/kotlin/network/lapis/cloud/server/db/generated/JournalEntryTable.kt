@@ -5,6 +5,7 @@ package network.lapis.cloud.server.db.generated
 import kotlin.uuid.Uuid
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.LocalDateTime
+import network.lapis.cloud.shared.domain.DonorCategory
 import network.lapis.cloud.shared.domain.JournalEntryStatus
 import org.jetbrains.exposed.v1.core.Column
 import org.jetbrains.exposed.v1.core.Table
@@ -21,6 +22,8 @@ public object JournalEntryTable : Table("journal_entry") {
     public val postedAt: Column<LocalDateTime?> = datetime("posted_at").nullable()
     public val createdAt: Column<LocalDateTime> = datetime("created_at")
     public val donorMemberId: Column<Uuid?> = optReference("donor_member_id", MemberTable.id)
+    public val donorCategory: Column<DonorCategory?> = enumerationByName<DonorCategory>("donor_category", 41).nullable()
+    public val externalDonorId: Column<Uuid?> = optReference("external_donor_id", ExternalDonorTable.id)
 
     override val primaryKey: PrimaryKey = PrimaryKey(id)
 

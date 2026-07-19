@@ -202,6 +202,17 @@ data class PostingInput(
  * `requireDonationIncomePosting` for the validation (must reference at least one posting against
  * an `INCOME` ledger account). `createdBy` remains the treasurer who booked the entry, never the
  * donor -- these are deliberately two distinct fields.
+ *
+ * [externalDonorId]/[externalDonorDisplayName] (V0.5.1 §25 PartG) are the non-member counterpart --
+ * non-null only when this entry has been attributed to an [ExternalDonorDto]. [donorMemberId] and
+ * [externalDonorId] are never both non-null (member XOR external XOR neither/anonymous, enforced at
+ * the service layer, see `AccountingService.requireDonorMutualExclusionAndCategory`). [donorCategory]
+ * is the effective/SNAPSHOTTED [DonorCategory] at post time -- non-null iff this entry is a donation
+ * subject to the §25 PartG check (member donation: copied from the input; external donation: copied
+ * from the donor's own classification at that moment; explicit anonymous donation:
+ * [DonorCategory.ANONYMOUS]). It is a snapshot, not a live read, because a `POSTED` entry is
+ * immutable -- see `10-accounting.kuml.kts` file header for why the historical verdict/report must
+ * reflect the category AT post time, not a donor's possibly-later-edited classification.
  */
 @Serializable
 data class JournalEntryDto(
@@ -217,6 +228,9 @@ data class JournalEntryDto(
     val postings: List<PostingDto>,
     val donorMemberId: String? = null,
     val donorMemberDisplayName: String? = null,
+    val externalDonorId: String? = null,
+    val externalDonorDisplayName: String? = null,
+    val donorCategory: DonorCategory? = null,
 )
 
 /**
@@ -227,6 +241,15 @@ data class JournalEntryDto(
  * draft). [donorMemberId] (V0.4.1) defaults to `null` -- see [JournalEntryDto] KDoc; when set, the
  * entry must reference an existing member (`NotFoundException` otherwise) and contain at least
  * one posting against an `INCOME` ledger account (`BadRequestException` otherwise).
+ *
+ * [externalDonorId] (V0.5.1 §25 PartG) is the non-member counterpart -- mutually exclusive with
+ * [donorMemberId] (`BadRequestException` if both are set). [donorCategory] is required exactly
+ * when this is a member donation ([donorMemberId] set, must not be [DonorCategory.ANONYMOUS]) or an
+ * explicit anonymous donation (neither id set, [donorCategory] == [DonorCategory.ANONYMOUS]);
+ * when [externalDonorId] is set, [donorCategory] must be left `null` here -- the effective category
+ * is snapshotted from the referenced [ExternalDonorDto] instead (`BadRequestException` if a caller
+ * also passes one, to keep a single source of truth) -- see [JournalEntryDto] KDoc and
+ * `AccountingService.requireDonorMutualExclusionAndCategory` for the full validation matrix.
  */
 @Serializable
 data class JournalEntryInput(
@@ -235,6 +258,8 @@ data class JournalEntryInput(
     val voucherReference: String? = null,
     val postings: List<PostingInput> = emptyList(),
     val donorMemberId: String? = null,
+    val externalDonorId: String? = null,
+    val donorCategory: DonorCategory? = null,
 )
 
 /** One row of the Hauptbuch (general ledger) for a single [GeneralLedgerDto.ledgerAccountId]. */

@@ -6,6 +6,7 @@ import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
 import io.kotest.matchers.shouldBe
 import network.lapis.cloud.server.db.generated.CostCenterTable
+import network.lapis.cloud.server.db.generated.ExternalDonorTable
 import network.lapis.cloud.server.db.generated.JournalEntryTable
 import network.lapis.cloud.server.db.generated.LedgerAccountTable
 import network.lapis.cloud.server.db.generated.PostingTable
@@ -35,9 +36,9 @@ class AccountingSchemaDriftTest :
 
         fun ErmModel.entityNameOf(entityId: String): String? = entities.firstOrNull { it.id == entityId }?.name
 
-        test("model declares exactly ledger_account, journal_entry, posting, cost_center and the member stub") {
+        test("model declares exactly ledger_account, journal_entry, posting, cost_center, external_donor and the member stub") {
             model.entities.map { it.name }.toSet() shouldBe
-                setOf("member", "ledger_account", "journal_entry", "posting", "cost_center")
+                setOf("member", "ledger_account", "journal_entry", "posting", "cost_center", "external_donor")
         }
 
         // ── (1) Model vs. real H2-migrated schema ───────────────────────────────
@@ -166,6 +167,53 @@ class AccountingSchemaDriftTest :
             real.columns.getValue("cost_center_id").nullable shouldBe true
         }
 
+        test("external_donor table shape matches the real migrated schema (V0.5.1 §25 PartG)") {
+            val entity = model.entities.single { it.name == "external_donor" }
+            val real = transaction { introspectAccountingTable("external_donor") }
+
+            entity.attributes.map { it.name }.toSet() shouldBe real.columns.keys
+            entity.attributes.forEach { attr ->
+                val col = real.columns.getValue(attr.name!!)
+                withClue("column '${attr.name}'") {
+                    col.nullable shouldBe attr.nullable
+                }
+            }
+        }
+
+        test("external_donor entity column-name set matches the generated ExternalDonorTable 1:1") {
+            model.entities
+                .single { it.name == "external_donor" }
+                .attributes
+                .map { it.name } shouldContainExactlyInAnyOrder ExternalDonorTable.columns.map { it.name }
+        }
+
+        test("external_donor.donor_category is NOT NULL -- the donor's own intrinsic classification is always known") {
+            val entity = model.entities.single { it.name == "external_donor" }
+            entity.attributeByName("donor_category")?.nullable shouldBe false
+
+            val real = transaction { introspectAccountingTable("external_donor") }
+            real.columns.getValue("donor_category").nullable shouldBe false
+        }
+
+        test("journal_entry.external_donor_id is a nullable FK -> external_donor (V0.5.1 §25 PartG)") {
+            val entity = model.entities.single { it.name == "journal_entry" }
+            val real = transaction { introspectAccountingTable("journal_entry") }
+
+            real.foreignKeys["external_donor_id"] shouldBe "external_donor"
+            model.entityNameOf(entity.attributeByName("external_donor_id")?.foreignKey?.targetEntityId ?: "") shouldBe
+                "external_donor"
+            entity.attributeByName("external_donor_id")?.nullable shouldBe true
+            real.columns.getValue("external_donor_id").nullable shouldBe true
+        }
+
+        test("journal_entry.donor_category is nullable -- most entries are not a donation at all (V0.5.1 §25 PartG)") {
+            val entity = model.entities.single { it.name == "journal_entry" }
+            entity.attributeByName("donor_category")?.nullable shouldBe true
+
+            val real = transaction { introspectAccountingTable("journal_entry") }
+            real.columns.getValue("donor_category").nullable shouldBe true
+        }
+
         test("posting.amount is modelled with DECIMAL(15,2) precision, not the default DECIMAL(19,2)") {
             val entity = model.entities.single { it.name == "posting" }
             entity.attributeByName("amount")?.type shouldBe ErmDataType.Decimal(15, 2)
@@ -271,6 +319,42 @@ class AccountingSchemaDriftTest :
                         ),
                     externalFqName = "network.lapis.cloud.shared.domain.ReserveType",
                 )
+        }
+
+        test(
+            "external_donor.donor_category/journal_entry.donor_category are modelled as real ErmDataType.Enum columns " +
+                "(V0.5.1 §25 PartG, load-bearing literal order)",
+        ) {
+            val expectedDonorCategoryEnum =
+                ErmDataType.Enum(
+                    name = "DonorCategory",
+                    values =
+                        listOf(
+                            "GERMAN_NATURAL_PERSON",
+                            "EU_NATURAL_PERSON",
+                            "NON_EU_FOREIGN_NATURAL_PERSON",
+                            "GERMAN_COMPANY_OR_ORGANIZATION",
+                            "PUBLIC_LAW_CORPORATION",
+                            "OVER_25_PERCENT_STATE_OWNED_COMPANY",
+                            "OTHER_PARTY_OR_PARLIAMENTARY_GROUP_ENTITY",
+                            "PROFESSIONAL_OR_TRADE_ASSOCIATION",
+                            "ANONYMOUS",
+                        ),
+                    externalFqName = "network.lapis.cloud.shared.domain.DonorCategory",
+                )
+
+            val externalDonorCategoryType =
+                model.entities
+                    .single { it.name == "external_donor" }
+                    .attributeByName("donor_category")
+                    ?.type
+            val journalEntryCategoryType =
+                model.entities
+                    .single { it.name == "journal_entry" }
+                    .attributeByName("donor_category")
+                    ?.type
+            externalDonorCategoryType shouldBe expectedDonorCategoryEnum
+            journalEntryCategoryType shouldBe expectedDonorCategoryEnum
         }
     })
 

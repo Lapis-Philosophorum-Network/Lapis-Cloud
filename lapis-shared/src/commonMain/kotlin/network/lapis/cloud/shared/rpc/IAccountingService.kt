@@ -7,6 +7,9 @@ import network.lapis.cloud.shared.domain.BalanceSheetDto
 import network.lapis.cloud.shared.domain.CostCenterDto
 import network.lapis.cloud.shared.domain.CostCenterInput
 import network.lapis.cloud.shared.domain.CostCenterReportDto
+import network.lapis.cloud.shared.domain.DonationDutyReportDto
+import network.lapis.cloud.shared.domain.ExternalDonorDto
+import network.lapis.cloud.shared.domain.ExternalDonorInput
 import network.lapis.cloud.shared.domain.FourSphereIncomeStatementDto
 import network.lapis.cloud.shared.domain.GeneralLedgerDto
 import network.lapis.cloud.shared.domain.IncomeStatementDto
@@ -43,7 +46,11 @@ interface IAccountingService {
     /**
      * Role: TREASURER/ADMIN. Saves [input] as [JournalEntryStatus.DRAFT] -- [input].postings may
      * be empty or unbalanced (that is the point of a draft). Use [postDraftEntry] to transition it
-     * to [JournalEntryStatus.POSTED] once it balances.
+     * to [JournalEntryStatus.POSTED] once it balances. The donor-identity/§25 PartG validation
+     * ([input].donorMemberId/externalDonorId/donorCategory mutual exclusion, see [JournalEntryInput]
+     * KDoc) still applies at save time -- only the §25 PartG PROHIBITED-verdict *enforcement* itself
+     * is deferred to [postJournalEntry]/[postDraftEntry] (same "draft is provisional" rule as every
+     * other POST-time-only guard, e.g. `requireActiveCostCenters`).
      */
     suspend fun saveDraftEntry(input: JournalEntryInput): JournalEntryDto
 
@@ -51,14 +58,22 @@ interface IAccountingService {
      * Role: TREASURER/ADMIN. Validates [input].postings balanced (at least two lines, at least one
      * debit and one credit, Σdebit = Σcredit) and writes the entry directly as
      * [JournalEntryStatus.POSTED] in one atomic transaction -- an unbalanced attempt is rejected
-     * and nothing is persisted.
+     * and nothing is persisted. When [network.lapis.cloud.shared.domain.OrganizationSettingsDto
+     * .isPoliticalParty] is `true` and this entry carries a donor (member, external, or explicit
+     * anonymous), the §25 PartG compliance check also runs: a `PROHIBITED` verdict rejects the
+     * whole entry with `ConflictException` (nothing persisted); an `ALLOWED` verdict with
+     * additional duties still succeeds -- duties are never a posting blocker, see
+     * `network.lapis.cloud.server.rpc.PartyDonationComplianceCalculator` KDoc and
+     * [getDonationDutyReport]. A complete no-op for a plain gemeinnuetziger Verein
+     * (`isPoliticalParty == false`).
      */
     suspend fun postJournalEntry(input: JournalEntryInput): JournalEntryDto
 
     /**
      * Role: TREASURER/ADMIN. Transitions an existing [JournalEntryStatus.DRAFT] entry to
      * [JournalEntryStatus.POSTED] once its current postings balance; rejected (and the entry left
-     * unchanged) if they do not.
+     * unchanged) if they do not. Same §25 PartG compliance gate as [postJournalEntry] applies here
+     * too, at this POST transition -- see that method's KDoc.
      */
     suspend fun postDraftEntry(id: String): JournalEntryDto
 
@@ -191,4 +206,34 @@ interface IAccountingService {
         from: LocalDate? = null,
         to: LocalDate,
     ): CostCenterReportDto
+
+    /**
+     * Role: TREASURER/ADMIN. V0.5.1 §25 PartG donor identity for a non-member donor -- see
+     * [ExternalDonorDto] KDoc. Rejects a blank [ExternalDonorInput.displayName] with
+     * `BadRequestException`. NOT gated on [network.lapis.cloud.shared.domain.OrganizationSettingsDto
+     * .isPoliticalParty] -- useful to a plain gemeinnuetziger Verein too (attributing a non-member
+     * donation for a §10b EStG receipt); only the compliance *check* itself is party-gated.
+     */
+    suspend fun createExternalDonor(input: ExternalDonorInput): ExternalDonorDto
+
+    /** Role: TREASURER/ADMIN. Deactivates (never deletes) an [ExternalDonorDto]. */
+    suspend fun deactivateExternalDonor(id: String): ExternalDonorDto
+
+    /** Role: TREASURER/BOARD/ADMIN. */
+    suspend fun listExternalDonors(activeOnly: Boolean = true): List<ExternalDonorDto>
+
+    /** Role: TREASURER/BOARD/ADMIN. */
+    suspend fun getExternalDonor(id: String): ExternalDonorDto
+
+    /**
+     * Role: TREASURER/BOARD/ADMIN. §25 PartG follow-up-duty report (V0.5.1) for [calendarYear] --
+     * see [network.lapis.cloud.shared.domain.DonationDutyReportDto] KDoc. Returns
+     * `partyRulesApply = false` with empty lists when
+     * [network.lapis.cloud.shared.domain.OrganizationSettingsDto.isPoliticalParty] is `false` -- a
+     * complete no-op for a plain gemeinnuetziger Verein. Only [JournalEntryStatus.POSTED] donations
+     * contribute (same "DRAFT is provisional" rule as every other statement method); a `PROHIBITED`
+     * donation can never appear here -- it was hard-blocked at post time, see [postJournalEntry]
+     * KDoc.
+     */
+    suspend fun getDonationDutyReport(calendarYear: Int): DonationDutyReportDto
 }
