@@ -23,11 +23,13 @@ import network.lapis.cloud.shared.domain.IncomeStatementDto
 import network.lapis.cloud.shared.domain.JournalEntryDto
 import network.lapis.cloud.shared.domain.JournalEntryInput
 import network.lapis.cloud.shared.domain.JournalEntryStatus
+import network.lapis.cloud.shared.domain.KassenbuchDto
 import network.lapis.cloud.shared.domain.LedgerAccountDto
 import network.lapis.cloud.shared.domain.LedgerAccountInput
 import network.lapis.cloud.shared.domain.LedgerAccountType
 import network.lapis.cloud.shared.domain.PostingDto
 import network.lapis.cloud.shared.domain.PostingInput
+import network.lapis.cloud.shared.domain.PostingSide
 import network.lapis.cloud.shared.domain.ReserveType
 import network.lapis.cloud.shared.domain.UseOfFundsStatementDto
 import network.lapis.cloud.shared.rpc.IAccountingService
@@ -37,6 +39,7 @@ import org.jetbrains.exposed.v1.core.SortOrder
 import org.jetbrains.exposed.v1.core.and
 import org.jetbrains.exposed.v1.core.eq
 import org.jetbrains.exposed.v1.core.greaterEq
+import org.jetbrains.exposed.v1.core.inList
 import org.jetbrains.exposed.v1.core.lessEq
 import org.jetbrains.exposed.v1.exceptions.ExposedSQLException
 import org.jetbrains.exposed.v1.jdbc.insert
@@ -83,6 +86,7 @@ class AccountingService(
         val current = resolveCurrentMember(call)
         current.requireRole(*TREASURY_ROLES)
         requireReserveTypeOnlyOnEquity(input.type, input.reserveType)
+        requireCashRegisterOnlyOnAsset(input.type, input.isCashRegister)
         return transaction {
             val duplicate =
                 LedgerAccountTable
@@ -102,6 +106,7 @@ class AccountingService(
                     it[type] = input.type
                     it[active] = input.active
                     it[reserveType] = input.reserveType
+                    it[isCashRegister] = input.isCashRegister
                 }
             } catch (e: ExposedSQLException) {
                 // Application-level pre-check above is racy under concurrency on its own -- the
@@ -152,6 +157,10 @@ class AccountingService(
         return transaction {
             requireBalanced(input.postings)
             requireActiveLedgerAccounts(input.postings.map { it.ledgerAccountId.toAccountingUuid("LedgerAccount") })
+            val cashAccountIds =
+                loadCashRegisterAccountIds(input.postings.map { it.ledgerAccountId.toAccountingUuid("LedgerAccount") })
+            requireVoucherForCashPostings(input.voucherReference, cashAccountIds)
+            requireNonNegativeCashBalances(input.postings, cashAccountIds)
             insertJournalEntry(input, current.memberId, JournalEntryStatus.POSTED, postedAt = nowLocalDateTime())
         }
     }
@@ -181,6 +190,9 @@ class AccountingService(
                     }
             requireBalanced(postings)
             requireActiveLedgerAccounts(postings.map { it.ledgerAccountId.toAccountingUuid("LedgerAccount") })
+            val cashAccountIds = loadCashRegisterAccountIds(postings.map { it.ledgerAccountId.toAccountingUuid("LedgerAccount") })
+            requireVoucherForCashPostings(entryRow[JournalEntryTable.voucherReference], cashAccountIds)
+            requireNonNegativeCashBalances(postings, cashAccountIds)
             JournalEntryTable.update({ JournalEntryTable.id eq entryId }) {
                 it[status] = JournalEntryStatus.POSTED
                 it[postedAt] = nowLocalDateTime()
@@ -321,6 +333,76 @@ class AccountingService(
         }
         return transaction {
             UseOfFundsCalculator.statement(loadYearFacts(throughYear = toFiscalYear), fromFiscalYear, toFiscalYear)
+        }
+    }
+
+    override suspend fun getKassenbuch(
+        ledgerAccountId: String,
+        from: LocalDate?,
+        to: LocalDate?,
+    ): KassenbuchDto {
+        val current = resolveCurrentMember(call)
+        current.requireRole(*ACCOUNTING_READ_ROLES)
+        val accountId = ledgerAccountId.toAccountingUuid("LedgerAccount")
+        return transaction {
+            val accountRow =
+                LedgerAccountTable.selectAll().where { LedgerAccountTable.id eq accountId }.singleOrNull()
+                    ?: throw NotFoundException("LedgerAccount $ledgerAccountId not found")
+            if (!accountRow[LedgerAccountTable.isCashRegister]) {
+                // Requires a DB lookup of the referenced account's persisted state -- same tier as
+                // requireActiveLedgerAccounts, not a static input-shape check -- so ConflictException,
+                // matching the "existing entity found but in the wrong state/kind" idiom used
+                // throughout (ElectionService/GovernanceService/SystemicConsensusService/etc.).
+                throw ConflictException("LedgerAccount $ledgerAccountId is not a cash-register account (isCashRegister=false)")
+            }
+
+            // Always load the FULL POSTED history for this account -- no from/to filter here. This
+            // is deliberate: kassenbuchNumber/runningBalance must reflect each posting's true
+            // chronological position since inception, not its position within whatever from/to
+            // window the caller happens to request. Numbering/running-balance a filtered subset
+            // would let the same physical posting carry a different kassenbuchNumber depending on
+            // the query window, undermining the GoBD "gapless numbering" guarantee this feature
+            // exists to provide. from/to only narrow which of the already-numbered lines are
+            // *returned*, plus derive openingBalance/closingBalance for that window.
+            val rows =
+                (PostingTable innerJoin JournalEntryTable)
+                    .selectAll()
+                    .where {
+                        (PostingTable.ledgerAccountId eq accountId) and
+                            (JournalEntryTable.status eq JournalEntryStatus.POSTED)
+                    }.orderBy(JournalEntryTable.entryDate to SortOrder.ASC, JournalEntryTable.createdAt to SortOrder.ASC)
+                    .toList()
+
+            val sourceLines =
+                rows.map { row ->
+                    KassenbuchCalculator.KassenbuchSourceLine(
+                        journalEntryId = row[JournalEntryTable.id].toString(),
+                        entryDate = row[JournalEntryTable.entryDate],
+                        description = row[JournalEntryTable.description],
+                        voucherReference = row[JournalEntryTable.voucherReference],
+                        side = row[PostingTable.side],
+                        amount = row[PostingTable.amount],
+                    )
+                }
+            val allLines = KassenbuchCalculator.kassenbuch(sourceLines)
+            val windowedLines =
+                allLines.filter { line ->
+                    (from == null || line.entryDate >= from) && (to == null || line.entryDate <= to)
+                }
+            // The running balance of the last full-history line strictly before the window (or ZERO
+            // if the window starts at inception / no such line exists) -- this is what the filtered
+            // getKassenbuch call used to hardcode to ZERO regardless of `from`.
+            val openingBalance =
+                allLines.lastOrNull { from != null && it.entryDate < from }?.runningBalance ?: BigDecimal.ZERO
+
+            KassenbuchDto(
+                ledgerAccountId = accountId.toString(),
+                accountNumber = accountRow[LedgerAccountTable.accountNumber],
+                name = accountRow[LedgerAccountTable.name],
+                openingBalance = openingBalance,
+                closingBalance = windowedLines.lastOrNull()?.runningBalance ?: openingBalance,
+                lines = windowedLines,
+            )
         }
     }
 
@@ -577,6 +659,132 @@ class AccountingService(
         }
     }
 
+    /**
+     * `isCashRegister` (V0.3.5) is only meaningful on an `ASSET`-typed [LedgerAccountTable] row --
+     * see [LedgerAccountDto] KDoc: a physical cash register is always an asset. This is a
+     * cross-column rule that no single-row `CHECK` constraint can express, so it is enforced here,
+     * the same class of service-layer guard as [requireReserveTypeOnlyOnEquity].
+     */
+    private fun requireCashRegisterOnlyOnAsset(
+        type: LedgerAccountType,
+        isCashRegister: Boolean,
+    ) {
+        if (isCashRegister && type != LedgerAccountType.ASSET) {
+            throw BadRequestException("isCashRegister may only be set on an ASSET LedgerAccount, got $type")
+        }
+    }
+
+    /** The subset of [ledgerAccountIds] whose [LedgerAccountTable.isCashRegister] is `true`. */
+    private fun loadCashRegisterAccountIds(ledgerAccountIds: Collection<Uuid>): Set<Uuid> {
+        val distinctIds = ledgerAccountIds.distinct()
+        if (distinctIds.isEmpty()) return emptySet()
+        return LedgerAccountTable
+            .selectAll()
+            .where { (LedgerAccountTable.id inList distinctIds) and (LedgerAccountTable.isCashRegister eq true) }
+            .map { it[LedgerAccountTable.id] }
+            .toSet()
+    }
+
+    /**
+     * GoBD "kein Buchen ohne Beleg": rejects with [ConflictException] if [cashAccountIds] is
+     * non-empty (i.e. the entry references at least one cash-register [LedgerAccountTable] row) and
+     * [voucherReference] is null/blank. [cashAccountIds] is computed once by the caller (shared with
+     * [requireNonNegativeCashBalances]) via [loadCashRegisterAccountIds] -- a DB lookup of the
+     * referenced accounts' [LedgerAccountTable.isCashRegister] state, the same tier as
+     * [requireActiveLedgerAccounts] (not the tier of a static-input-shape `BadRequestException`
+     * check). Every other (non-cash) posting stays free of this requirement, matching
+     * [network.lapis.cloud.shared.domain.JournalEntryInput.voucherReference]'s existing
+     * nullable/optional contract.
+     */
+    private fun requireVoucherForCashPostings(
+        voucherReference: String?,
+        cashAccountIds: Set<Uuid>,
+    ) {
+        if (!voucherReference.isNullOrBlank()) return
+        if (cashAccountIds.isNotEmpty()) {
+            throw ConflictException(
+                "Postings against a cash-register LedgerAccount require a non-blank voucherReference (kein Buchen ohne Beleg)",
+            )
+        }
+    }
+
+    /**
+     * GoBD "Kassenbestand darf nie negativ werden": for every cash-register [LedgerAccountTable] row
+     * in [cashAccountIds] ([postings] references, computed once by the caller and shared with
+     * [requireVoucherForCashPostings]), aggregates this entry's own net signed delta for that account
+     * (grouped once per account, not checked line-by-line -- a single entry may legitimately carry
+     * offsetting lines against the same cash account) and rejects with [ConflictException] if that
+     * account's pre-existing cumulative `POSTED` balance ([currentPostedBalance]) plus this delta
+     * would be strictly negative. Draining a cash account to exactly `0` is allowed -- only a
+     * strictly negative projected balance is rejected.
+     *
+     * Concurrency: this is a check-then-act (read balance, decide, then the caller's transaction
+     * inserts the new postings) with no DB-level CHECK/UNIQUE constraint able to back it up --
+     * unlike e.g. the LedgerAccount.accountNumber uniqueness case, "sum of postings >= 0" is an
+     * aggregate invariant no single-row constraint can express. [lockCashRegisterAccounts] takes a
+     * row-level lock (`SELECT ... FOR UPDATE`) on every account in [cashAccountIds] before the
+     * balance read, so two concurrent transactions touching the same cash account are serialized:
+     * the second transaction's [currentPostedBalance] read blocks until the first commits (or rolls
+     * back) and therefore always sees the first transaction's postings, preventing both from
+     * independently computing a non-negative projected balance that is jointly negative.
+     */
+    private fun requireNonNegativeCashBalances(
+        postings: List<PostingInput>,
+        cashAccountIds: Set<Uuid>,
+    ) {
+        if (cashAccountIds.isEmpty()) return
+        lockCashRegisterAccounts(cashAccountIds)
+        val postingsByAccount = postings.groupBy { it.ledgerAccountId.toAccountingUuid("LedgerAccount") }
+        // isCashRegister implies ASSET (requireCashRegisterOnlyOnAsset), so the normal-balance side
+        // is always DEBIT -- call normalBalanceSideOf rather than hardcoding PostingSide.DEBIT, to
+        // avoid a second, drifting sign-convention source of truth.
+        val normalSide = GeneralLedgerCalculator.normalBalanceSideOf(LedgerAccountType.ASSET)
+        cashAccountIds.forEach { accountId ->
+            val entryDelta =
+                postingsByAccount.getValue(accountId).fold(BigDecimal.ZERO) { acc, posting ->
+                    val signed = if (posting.side == normalSide) posting.amount else posting.amount.negate()
+                    acc + signed
+                }
+            val projectedBalance = currentPostedBalance(accountId, normalSide) + entryDelta
+            if (projectedBalance.signum() < 0) {
+                throw ConflictException(
+                    "Posting would drive cash-register LedgerAccount $accountId negative (projected balance $projectedBalance)",
+                )
+            }
+        }
+    }
+
+    /**
+     * Takes a `SELECT ... FOR UPDATE` row lock on every [LedgerAccountTable] row in [accountIds],
+     * held for the remainder of the caller's transaction -- the mutex [requireNonNegativeCashBalances]
+     * relies on to serialize concurrent postJournalEntry/postDraftEntry calls against the same
+     * cash-register account. See that function's KDoc for the race it closes.
+     */
+    private fun lockCashRegisterAccounts(accountIds: Set<Uuid>) {
+        LedgerAccountTable
+            .selectAll()
+            .where { LedgerAccountTable.id inList accountIds }
+            .forUpdate()
+            .toList()
+    }
+
+    /** Cumulative net balance of every existing `POSTED` posting against [accountId], signed by [normalSide]. */
+    private fun currentPostedBalance(
+        accountId: Uuid,
+        normalSide: PostingSide,
+    ): BigDecimal {
+        val rows =
+            (PostingTable innerJoin JournalEntryTable)
+                .selectAll()
+                .where { (PostingTable.ledgerAccountId eq accountId) and (JournalEntryTable.status eq JournalEntryStatus.POSTED) }
+                .toList()
+        return rows.fold(BigDecimal.ZERO) { acc, row ->
+            val amount = row[PostingTable.amount]
+            val signed = if (row[PostingTable.side] == normalSide) amount else amount.negate()
+            acc + signed
+        }
+    }
+
     /** Every referenced [LedgerAccountTable] row must exist and be [LedgerAccountTable.active]. */
     private fun requireActiveLedgerAccounts(ledgerAccountIds: List<Uuid>) {
         ledgerAccountIds.distinct().forEach { accountId ->
@@ -632,6 +840,7 @@ class AccountingService(
             type = this[LedgerAccountTable.type],
             active = this[LedgerAccountTable.active],
             reserveType = this[LedgerAccountTable.reserveType],
+            isCashRegister = this[LedgerAccountTable.isCashRegister],
         )
 
     private fun ResultRow.toPostingDto(): PostingDto =

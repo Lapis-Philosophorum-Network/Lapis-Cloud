@@ -17,6 +17,8 @@ public object LedgerAccountTable : Table("ledger_account") {
     public val active: Column<Boolean> = bool("active")
     // TODO default = "TRUE"
     public val reserveType: Column<ReserveType?> = enumerationByName<ReserveType>("reserve_type", 27).nullable()
+    public val isCashRegister: Column<Boolean> = bool("is_cash_register")
+    // TODO default = "FALSE"
 
     override val primaryKey: PrimaryKey = PrimaryKey(id)
 

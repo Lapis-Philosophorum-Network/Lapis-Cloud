@@ -105,7 +105,7 @@
 //  - P&L (GuV) / balance sheet (Bilanz) derivation -> V0.3.2. LedgerAccountType is shipped now so
 //    that wave can classify normal-balance sides, but no statement is computed here.
 //  - §55 AO Mittelverwendungsrechnung (use-of-funds/timely-use tracking) -> V0.3.4.
-//  - Not in scope at all this wave: Kassenbuch, Kostenstellen, fiscal-year close/Saldenvortrag
+//  - Not in scope at all this wave: Kostenstellen, fiscal-year close/Saldenvortrag
 //    (class 9 carryforward), opening balances beyond the dev seed, USt/VAT handling,
 //    Storno/reversal postings (JournalEntryStatus is enum-extensible with e.g. REVERSED later),
 //    multi-currency, Beleg/attachment storage, automatic Contribution<->journal reconciliation
@@ -121,6 +121,20 @@
 // is computed read-only from existing POSTED postings and needs no further schema). This mirrors
 // V0.3.2/V0.3.3's "derive a report from the existing journal, add at most one classificatory
 // column" pattern rather than introducing a parallel allocation ledger.
+//
+// Kassenbuch (V0.3.5, GoBD-Vorstufe fuer V0.5): ledger_account.is_cash_register (NOT NULL boolean,
+// default FALSE, see `isCashRegister` below and the dedicated comment ahead of the `ledgerAccount`
+// classOf) is the ONLY schema addition this wave makes. `accountClass` alone cannot identify a
+// physical cash register: SKR42 Kontenklasse 1 ("liquide Mittel") also holds Bank (18000) and
+// Forderungen (12000) -- see DevSeedData.kt. The Kassenbuch itself is NOT a new persisted entity --
+// it is a derived read-only view (network.lapis.cloud.server.rpc.KassenbuchCalculator) computed
+// purely from existing immutable POSTED postings against an is_cash_register account, same
+// "derive a report from the journal, add at most one classificatory column" pattern V0.3.4's
+// reserve_type addition took. Two GoBD-informed guards are enforced at the service layer
+// (AccountingService) at POST time only ("kein Buchen ohne Beleg" for cash postings, and a
+// never-negative cash balance) -- full GoBD tamper-evidence (hash-chaining, retention enforcement,
+// audit-log infrastructure, TSE/Kassensicherungsverordnung integration) remains out of scope,
+// deferred to V0.5. Kostenstellen remains V0.3.6 scope.
 import dev.kuml.profile.erm.ermMappingProfile
 import dev.kuml.uml.Multiplicity
 import dev.kuml.uml.dsl.applyProfile
@@ -241,6 +255,17 @@ classDiagram(name = "Accounting") {
         attribute(name = "reserveType", type = reserveType) {
             multiplicity = Multiplicity(0, 1)
             stereotype("Column") { "columnName" to "reserve_type"; "enumType" to "network.lapis.cloud.shared.domain.ReserveType" }
+        }
+        // V0.3.5 Kassenbuch: identifies this LedgerAccount as a physical cash register (Kasse), as
+        // opposed to a bank account or receivable that happens to share the same SKR42 Kontenklasse 1
+        // ("liquide Mittel") -- see file header for why accountClass alone cannot distinguish Kasse
+        // (16000) from Bank (18000)/Forderungen (12000) within class 1 (confirmed by DevSeedData.kt).
+        // Only ever true when `type` is ASSET, enforced at the service layer
+        // (AccountingService.requireCashRegisterOnlyOnAsset) -- same class of cross-column constraint
+        // as `reserveType` only-on-EQUITY above, not expressible as a single-row CHECK.
+        attribute(name = "isCashRegister", type = "Boolean") {
+            defaultValue = "FALSE"
+            stereotype("Column") { "columnName" to "is_cash_register" }
         }
     }
 

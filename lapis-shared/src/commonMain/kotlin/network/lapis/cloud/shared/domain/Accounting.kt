@@ -93,7 +93,11 @@ enum class ReserveType(
  * than re-parsed from [accountNumber] on every read. [reserveType] (V0.3.4) is non-null only for a
  * treasurer-designated §62 AO reserve account -- see [ReserveType] KDoc; it is only ever set when
  * [type] is [LedgerAccountType.EQUITY], enforced at the service layer
- * (`network.lapis.cloud.server.rpc.AccountingService`).
+ * (`network.lapis.cloud.server.rpc.AccountingService`). [isCashRegister] (V0.3.5) marks this
+ * account as a physical cash register (Kasse) for the Kassenbuch view -- see the `.kuml.kts` file
+ * header for why `accountClass` alone cannot distinguish a Kasse from a Bank/Forderungen account
+ * within the same SKR42 Kontenklasse 1; it is only ever `true` when [type] is
+ * [LedgerAccountType.ASSET], enforced the same way as [reserveType]'s cross-column rule.
  */
 @Serializable
 data class LedgerAccountDto(
@@ -104,9 +108,14 @@ data class LedgerAccountDto(
     val type: LedgerAccountType,
     val active: Boolean,
     val reserveType: ReserveType? = null,
+    val isCashRegister: Boolean = false,
 )
 
-/** [reserveType] defaults to `null` so existing call sites stay source-compatible -- see [ReserveType]/[LedgerAccountDto] KDoc. */
+/**
+ * [reserveType] defaults to `null` so existing call sites stay source-compatible -- see
+ * [ReserveType]/[LedgerAccountDto] KDoc. [isCashRegister] (V0.3.5) defaults to `false` for the same
+ * reason -- see [LedgerAccountDto] KDoc.
+ */
 @Serializable
 data class LedgerAccountInput(
     val accountNumber: String,
@@ -115,6 +124,7 @@ data class LedgerAccountInput(
     val type: LedgerAccountType,
     val active: Boolean = true,
     val reserveType: ReserveType? = null,
+    val isCashRegister: Boolean = false,
 )
 
 /**
@@ -200,4 +210,47 @@ data class GeneralLedgerDto(
     val openingBalance: Decimal,
     val closingBalance: Decimal,
     val lines: List<GeneralLedgerLineDto>,
+)
+
+/**
+ * One Kassenbuch (cash book, V0.3.5) line -- a specialized Einnahme/Ausgabe (not Soll/Haben) view
+ * over one [PostingDto] against a [LedgerAccountDto.isCashRegister] account. Exactly one of
+ * [amountIn] (Einnahme)/[amountOut] (Ausgabe) is non-zero, the other is always `0` -- see
+ * `network.lapis.cloud.server.rpc.KassenbuchCalculator` KDoc. [kassenbuchNumber] is a 1-based,
+ * gapless sequential line number derived purely from chronological ordering of the account's
+ * existing immutable `POSTED` postings -- no new persisted sequence, safe because a `POSTED` entry
+ * can never be reordered or renumbered. [voucherReference] is carried through unchanged (including
+ * `null` for a pre-V0.3.5 posting that predates the "kein Buchen ohne Beleg" guard). The mandatory
+ * [PostingDto.sphere] is deliberately NOT surfaced here -- the Kassenbuch is a cash-audit view, not
+ * a Gemeinnützigkeit-sphere report.
+ */
+@Serializable
+data class KassenbuchLineDto(
+    val kassenbuchNumber: Int,
+    val journalEntryId: String,
+    val entryDate: LocalDate,
+    val description: String,
+    val voucherReference: String?,
+    val amountIn: Decimal,
+    val amountOut: Decimal,
+    val runningBalance: Decimal,
+)
+
+/**
+ * The Kassenbuch (cash book, V0.3.5) for one [LedgerAccountDto.isCashRegister] account,
+ * chronologically ordered -- see [KassenbuchLineDto] KDoc. [openingBalance] is always `0` in this
+ * wave, same as [GeneralLedgerDto.openingBalance]; [closingBalance] equals the last
+ * [KassenbuchLineDto.runningBalance], or [openingBalance] if [lines] is empty. This is a
+ * GoBD-informed view (foundational for V0.5's full GoBD bundle) -- cryptographic tamper-evidence,
+ * retention enforcement, and TSE integration are explicitly out of scope this wave, see
+ * `10-accounting.kuml.kts` file header.
+ */
+@Serializable
+data class KassenbuchDto(
+    val ledgerAccountId: String,
+    val accountNumber: String,
+    val name: String,
+    val openingBalance: Decimal,
+    val closingBalance: Decimal,
+    val lines: List<KassenbuchLineDto>,
 )

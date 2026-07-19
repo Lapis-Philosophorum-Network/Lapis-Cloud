@@ -18,6 +18,8 @@ import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
 import io.ktor.server.testing.testApplication
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.datetime.LocalDate
 import network.lapis.cloud.server.db.DatabaseConfig
 import network.lapis.cloud.server.db.DevSeedData
@@ -96,6 +98,7 @@ class AccountingServiceTest :
             type: LedgerAccountType,
             accountClass: Int = 0,
             reserveType: ReserveType? = null,
+            isCashRegister: Boolean = false,
         ): Uuid {
             val id = Uuid.random()
             transaction {
@@ -107,6 +110,7 @@ class AccountingServiceTest :
                     it[LedgerAccountTable.type] = type
                     it[active] = true
                     it[LedgerAccountTable.reserveType] = reserveType
+                    it[LedgerAccountTable.isCashRegister] = isCashRegister
                 }
             }
             createdLedgerAccountIds += id
@@ -1375,6 +1379,659 @@ class AccountingServiceTest :
                     .status shouldBe HttpStatusCode.BadRequest
             }
         }
+
+        // ── Kassenbuch (V0.3.5) ──────────────────────────────────────────────
+
+        test("treasurer can create an ASSET LedgerAccount with isCashRegister=true; it round-trips in the DTO") {
+            testApplication {
+                application {
+                    install(StatusPages) { installAccountingExceptionHandlers() }
+                    routing { registerAccountingTestRoutes() }
+                }
+                val treasurer = createTestMember("acct-treasurer-cash-create@example.org", AccountRole.TREASURER)
+
+                val created =
+                    client
+                        .post(
+                            "/test/create-ledger-account?number=0960&name=Testkasse&class=1&type=ASSET&isCashRegister=true",
+                        ) { header("X-Member-Id", treasurer.toString()) }
+                        .bodyAsText()
+                val parts = created.split(":")
+                parts[2] shouldBe "ASSET"
+                parts[5] shouldBe "true"
+                createdLedgerAccountIds += Uuid.parse(parts[0])
+            }
+        }
+
+        test("isCashRegister=true on a non-ASSET LedgerAccount is rejected with BadRequest; nothing persisted") {
+            testApplication {
+                application {
+                    install(StatusPages) { installAccountingExceptionHandlers() }
+                    routing { registerAccountingTestRoutes() }
+                }
+                val treasurer = createTestMember("acct-treasurer-cash-invalid@example.org", AccountRole.TREASURER)
+                val countBefore = transaction { LedgerAccountTable.selectAll().count() }
+
+                val response =
+                    client.post(
+                        "/test/create-ledger-account?number=0961&name=Falsch&class=4&type=INCOME&isCashRegister=true",
+                    ) { header("X-Member-Id", treasurer.toString()) }
+                response.status shouldBe HttpStatusCode.BadRequest
+
+                val countAfter = transaction { LedgerAccountTable.selectAll().count() }
+                countAfter shouldBe countBefore
+            }
+        }
+
+        test(
+            "postJournalEntry touching a cash-register account without a voucherReference is rejected with Conflict; " +
+                "succeeds once given one",
+        ) {
+            testApplication {
+                application {
+                    install(StatusPages) { installAccountingExceptionHandlers() }
+                    routing { registerAccountingTestRoutes() }
+                }
+                val treasurer = createTestMember("acct-treasurer-cash-voucher@example.org", AccountRole.TREASURER)
+                val kasse = createLedgerAccount("0962", LedgerAccountType.ASSET, isCashRegister = true)
+                val beitraege = createLedgerAccount("4020", LedgerAccountType.INCOME, accountClass = 4)
+
+                val postings =
+                    listOf(
+                        PostingInput(
+                            kasse.toString(),
+                            PostingSide.DEBIT,
+                            BigDecimal("20.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
+                        PostingInput(
+                            beitraege.toString(),
+                            PostingSide.CREDIT,
+                            BigDecimal("20.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
+                    )
+                val countBefore = transaction { JournalEntryTable.selectAll().count() }
+
+                val withoutVoucher =
+                    client.post("/test/post-entry?${entryParams(LocalDate(2026, 8, 1), "Ohne-Beleg", postings)}") {
+                        header("X-Member-Id", treasurer.toString())
+                    }
+                withoutVoucher.status shouldBe HttpStatusCode.Conflict
+                val countAfter = transaction { JournalEntryTable.selectAll().count() }
+                countAfter shouldBe countBefore
+
+                val withVoucher =
+                    client.post(
+                        "/test/post-entry?${entryParams(LocalDate(2026, 8, 1), "Mit-Beleg", postings, voucher = "BELEG-001")}",
+                    ) { header("X-Member-Id", treasurer.toString()) }
+                withVoucher.status shouldBe HttpStatusCode.OK
+            }
+        }
+
+        test("postJournalEntry touching a non-cash ASSET account without a voucherReference still succeeds (regression guard)") {
+            testApplication {
+                application {
+                    install(StatusPages) { installAccountingExceptionHandlers() }
+                    routing { registerAccountingTestRoutes() }
+                }
+                val treasurer = createTestMember("acct-treasurer-noncash-voucher@example.org", AccountRole.TREASURER)
+                val bank = createLedgerAccount("0963", LedgerAccountType.ASSET)
+                val beitraege = createLedgerAccount("4021", LedgerAccountType.INCOME, accountClass = 4)
+
+                val postings =
+                    listOf(
+                        PostingInput(
+                            bank.toString(),
+                            PostingSide.DEBIT,
+                            BigDecimal("15.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
+                        PostingInput(
+                            beitraege.toString(),
+                            PostingSide.CREDIT,
+                            BigDecimal("15.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
+                    )
+                val response =
+                    client.post("/test/post-entry?${entryParams(LocalDate(2026, 8, 2), "Bank-Ohne-Beleg", postings)}") {
+                        header("X-Member-Id", treasurer.toString())
+                    }
+                response.status shouldBe HttpStatusCode.OK
+            }
+        }
+
+        test(
+            "postJournalEntry that would drive a cash-register account negative is rejected with Conflict; " +
+                "the account balance is unchanged",
+        ) {
+            testApplication {
+                application {
+                    install(StatusPages) { installAccountingExceptionHandlers() }
+                    routing { registerAccountingTestRoutes() }
+                }
+                val treasurer = createTestMember("acct-treasurer-cash-negative@example.org", AccountRole.TREASURER)
+                val kasse = createLedgerAccount("0964", LedgerAccountType.ASSET, isCashRegister = true)
+                val beitraege = createLedgerAccount("4022", LedgerAccountType.INCOME, accountClass = 4)
+                val miete = createLedgerAccount("6330", LedgerAccountType.EXPENSE, accountClass = 6)
+
+                client.post(
+                    "/test/post-entry?${
+                        entryParams(
+                            LocalDate(2026, 8, 3),
+                            "Einzahlung",
+                            listOf(
+                                PostingInput(
+                                    kasse.toString(),
+                                    PostingSide.DEBIT,
+                                    BigDecimal("50.00"),
+                                    sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                                ),
+                                PostingInput(
+                                    beitraege.toString(),
+                                    PostingSide.CREDIT,
+                                    BigDecimal("50.00"),
+                                    sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                                ),
+                            ),
+                            voucher = "BELEG-010",
+                        )
+                    }",
+                ) { header("X-Member-Id", treasurer.toString()) }
+
+                val ledgerBefore =
+                    client.get("/test/general-ledger/$kasse") { header("X-Member-Id", treasurer.toString()) }.bodyAsText()
+
+                // Attempt to withdraw 80 -- would drive the account to -30.
+                val overdraw =
+                    client.post(
+                        "/test/post-entry?${
+                            entryParams(
+                                LocalDate(2026, 8, 4),
+                                "Ueberzug",
+                                listOf(
+                                    PostingInput(
+                                        miete.toString(),
+                                        PostingSide.DEBIT,
+                                        BigDecimal("80.00"),
+                                        sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                                    ),
+                                    PostingInput(
+                                        kasse.toString(),
+                                        PostingSide.CREDIT,
+                                        BigDecimal("80.00"),
+                                        sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                                    ),
+                                ),
+                                voucher = "BELEG-011",
+                            )
+                        }",
+                    ) { header("X-Member-Id", treasurer.toString()) }
+                overdraw.status shouldBe HttpStatusCode.Conflict
+
+                val ledgerAfter =
+                    client.get("/test/general-ledger/$kasse") { header("X-Member-Id", treasurer.toString()) }.bodyAsText()
+                ledgerAfter shouldBe ledgerBefore
+            }
+        }
+
+        test("postJournalEntry that drains a cash-register account to exactly zero succeeds (only strictly negative is rejected)") {
+            testApplication {
+                application {
+                    install(StatusPages) { installAccountingExceptionHandlers() }
+                    routing { registerAccountingTestRoutes() }
+                }
+                val treasurer = createTestMember("acct-treasurer-cash-zero@example.org", AccountRole.TREASURER)
+                val kasse = createLedgerAccount("0965", LedgerAccountType.ASSET, isCashRegister = true)
+                val beitraege = createLedgerAccount("4023", LedgerAccountType.INCOME, accountClass = 4)
+                val miete = createLedgerAccount("6331", LedgerAccountType.EXPENSE, accountClass = 6)
+
+                client.post(
+                    "/test/post-entry?${
+                        entryParams(
+                            LocalDate(2026, 8, 5),
+                            "Einzahlung",
+                            listOf(
+                                PostingInput(
+                                    kasse.toString(),
+                                    PostingSide.DEBIT,
+                                    BigDecimal("40.00"),
+                                    sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                                ),
+                                PostingInput(
+                                    beitraege.toString(),
+                                    PostingSide.CREDIT,
+                                    BigDecimal("40.00"),
+                                    sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                                ),
+                            ),
+                            voucher = "BELEG-020",
+                        )
+                    }",
+                ) { header("X-Member-Id", treasurer.toString()) }
+
+                val drainToZero =
+                    client.post(
+                        "/test/post-entry?${
+                            entryParams(
+                                LocalDate(2026, 8, 6),
+                                "Vollstaendige-Auszahlung",
+                                listOf(
+                                    PostingInput(
+                                        miete.toString(),
+                                        PostingSide.DEBIT,
+                                        BigDecimal("40.00"),
+                                        sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                                    ),
+                                    PostingInput(
+                                        kasse.toString(),
+                                        PostingSide.CREDIT,
+                                        BigDecimal("40.00"),
+                                        sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                                    ),
+                                ),
+                                voucher = "BELEG-021",
+                            )
+                        }",
+                    ) { header("X-Member-Id", treasurer.toString()) }
+                drainToZero.status shouldBe HttpStatusCode.OK
+            }
+        }
+
+        test(
+            "concurrency: N simultaneous postJournalEntry withdrawals against the same cash-register " +
+                "account -- only as many succeed as the balance allows, it never goes negative",
+        ) {
+            testApplication {
+                application {
+                    install(StatusPages) { installAccountingExceptionHandlers() }
+                    routing { registerAccountingTestRoutes() }
+                }
+                val treasurer = createTestMember("acct-treasurer-cash-concurrency@example.org", AccountRole.TREASURER)
+                val kasse = createLedgerAccount("0971", LedgerAccountType.ASSET, isCashRegister = true)
+                val beitraege = createLedgerAccount("4027", LedgerAccountType.INCOME, accountClass = 4)
+                val miete = createLedgerAccount("6333", LedgerAccountType.EXPENSE, accountClass = 6)
+
+                // Seed 50.00 into the cash account.
+                client.post(
+                    "/test/post-entry?${
+                        entryParams(
+                            LocalDate(2036, 9, 1),
+                            "Einzahlung",
+                            listOf(
+                                PostingInput(
+                                    kasse.toString(),
+                                    PostingSide.DEBIT,
+                                    BigDecimal("50.00"),
+                                    sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                                ),
+                                PostingInput(
+                                    beitraege.toString(),
+                                    PostingSide.CREDIT,
+                                    BigDecimal("50.00"),
+                                    sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                                ),
+                            ),
+                            voucher = "BELEG-300",
+                        )
+                    }",
+                ) { header("X-Member-Id", treasurer.toString()) }
+
+                // Fire 5 concurrent withdrawals of 30.00 each -- only ONE can succeed without driving
+                // the account negative (50 - 30 = 20; a second 30 would take it to -10). Without the
+                // SELECT ... FOR UPDATE row lock in requireNonNegativeCashBalances, two concurrent
+                // calls could each read the pre-withdrawal balance of 50 under READ_COMMITTED,
+                // independently compute a non-negative projected balance, and both commit.
+                val attempts = 5
+                val results =
+                    coroutineScope {
+                        (1..attempts)
+                            .map { i ->
+                                async {
+                                    client
+                                        .post(
+                                            "/test/post-entry?${
+                                                entryParams(
+                                                    LocalDate(2036, 9, 2),
+                                                    "Auszahlung-$i",
+                                                    listOf(
+                                                        PostingInput(
+                                                            miete.toString(),
+                                                            PostingSide.DEBIT,
+                                                            BigDecimal("30.00"),
+                                                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                                                        ),
+                                                        PostingInput(
+                                                            kasse.toString(),
+                                                            PostingSide.CREDIT,
+                                                            BigDecimal("30.00"),
+                                                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                                                        ),
+                                                    ),
+                                                    voucher = "BELEG-30$i",
+                                                )
+                                            }",
+                                        ) { header("X-Member-Id", treasurer.toString()) }
+                                        .status
+                                }
+                            }.map { it.await() }
+                    }
+                results.count { it == HttpStatusCode.OK } shouldBe 1
+                results.count { it == HttpStatusCode.Conflict } shouldBe attempts - 1
+
+                val finalBalance =
+                    client
+                        .get("/test/kassenbuch/$kasse") { header("X-Member-Id", treasurer.toString()) }
+                        .bodyAsText()
+                        .substringBefore("#")
+                        .split(":")[3] // closingBalance
+                finalBalance shouldBe "20.00"
+            }
+        }
+
+        test(
+            "saveDraftEntry allows an unbalanced/voucher-less draft touching a cash account; " +
+                "postDraftEntry enforces both guards at DRAFT->POSTED",
+        ) {
+            testApplication {
+                application {
+                    install(StatusPages) { installAccountingExceptionHandlers() }
+                    routing { registerAccountingTestRoutes() }
+                }
+                val treasurer = createTestMember("acct-treasurer-cash-draft@example.org", AccountRole.TREASURER)
+                val kasse = createLedgerAccount("0966", LedgerAccountType.ASSET, isCashRegister = true)
+                val beitraege = createLedgerAccount("4024", LedgerAccountType.INCOME, accountClass = 4)
+
+                // Unbalanced, voucher-less draft touching the cash account -- must be freely saveable.
+                val draftPostings =
+                    listOf(
+                        PostingInput(
+                            kasse.toString(),
+                            PostingSide.DEBIT,
+                            BigDecimal("60.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
+                    )
+                val draftResponse =
+                    client.post("/test/save-draft?${entryParams(LocalDate(2026, 8, 7), "Kassen-Entwurf", draftPostings)}") {
+                        header("X-Member-Id", treasurer.toString())
+                    }
+                draftResponse.status shouldBe HttpStatusCode.OK
+                val entryId = draftResponse.bodyAsText().split(":")[0]
+
+                // Balance it by inserting the missing credit line directly (simulating a later
+                // edit) -- still voucher-less, so postDraftEntry must still reject.
+                transaction {
+                    PostingTable.insert {
+                        it[id] = Uuid.random()
+                        it[journalEntryId] = Uuid.parse(entryId)
+                        it[ledgerAccountId] = beitraege
+                        it[side] = PostingSide.CREDIT
+                        it[amount] = BigDecimal("60.00")
+                        it[sphere] = GemeinnuetzigkeitSphere.IDEELLER_BEREICH
+                    }
+                }
+                val rejectedForVoucher = client.post("/test/post-draft/$entryId") { header("X-Member-Id", treasurer.toString()) }
+                rejectedForVoucher.status shouldBe HttpStatusCode.Conflict
+
+                // Add the voucherReference directly (simulating a later edit) -- now it succeeds.
+                transaction {
+                    JournalEntryTable.update({ JournalEntryTable.id eq Uuid.parse(entryId) }) {
+                        it[voucherReference] = "BELEG-030"
+                    }
+                }
+                val posted = client.post("/test/post-draft/$entryId") { header("X-Member-Id", treasurer.toString()) }
+                posted.status shouldBe HttpStatusCode.OK
+                posted.bodyAsText().split(":")[1] shouldBe "POSTED"
+            }
+        }
+
+        test(
+            "getKassenbuch returns chronologically-numbered lines with correct amountIn/amountOut/runningBalance, " +
+                "excludes DRAFT and out-of-range",
+        ) {
+            testApplication {
+                application {
+                    install(StatusPages) { installAccountingExceptionHandlers() }
+                    routing { registerAccountingTestRoutes() }
+                }
+                val treasurer = createTestMember("acct-treasurer-kassenbuch@example.org", AccountRole.TREASURER)
+                val kasse = createLedgerAccount("0967", LedgerAccountType.ASSET, isCashRegister = true)
+                val beitraege = createLedgerAccount("4025", LedgerAccountType.INCOME, accountClass = 4)
+                val miete = createLedgerAccount("6332", LedgerAccountType.EXPENSE, accountClass = 6)
+
+                suspend fun post(
+                    date: LocalDate,
+                    description: String,
+                    postings: List<PostingInput>,
+                    voucher: String,
+                ) {
+                    client.post("/test/post-entry?${entryParams(date, description, postings, voucher)}") {
+                        header("X-Member-Id", treasurer.toString())
+                    }
+                }
+                // In range: +100 Einnahme, -30 Ausgabe.
+                post(
+                    LocalDate(2035, 9, 1),
+                    "Spende",
+                    listOf(
+                        PostingInput(
+                            kasse.toString(),
+                            PostingSide.DEBIT,
+                            BigDecimal("100.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
+                        PostingInput(
+                            beitraege.toString(),
+                            PostingSide.CREDIT,
+                            BigDecimal("100.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
+                    ),
+                    "BELEG-100",
+                )
+                post(
+                    LocalDate(2035, 9, 2),
+                    "Miete",
+                    listOf(
+                        PostingInput(
+                            miete.toString(),
+                            PostingSide.DEBIT,
+                            BigDecimal("30.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
+                        PostingInput(
+                            kasse.toString(),
+                            PostingSide.CREDIT,
+                            BigDecimal("30.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
+                    ),
+                    "BELEG-101",
+                )
+                // Out of range -- must not appear.
+                post(
+                    LocalDate(2035, 10, 1),
+                    "Spaeter",
+                    listOf(
+                        PostingInput(
+                            kasse.toString(),
+                            PostingSide.DEBIT,
+                            BigDecimal("999.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
+                        PostingInput(
+                            beitraege.toString(),
+                            PostingSide.CREDIT,
+                            BigDecimal("999.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
+                    ),
+                    "BELEG-102",
+                )
+                // DRAFT in range -- must not appear.
+                client.post(
+                    "/test/save-draft?${
+                        entryParams(
+                            LocalDate(2035, 9, 3),
+                            "Entwurf-Kassenbuch",
+                            listOf(
+                                PostingInput(
+                                    kasse.toString(),
+                                    PostingSide.DEBIT,
+                                    BigDecimal("777.00"),
+                                    sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                                ),
+                            ),
+                        )
+                    }",
+                ) { header("X-Member-Id", treasurer.toString()) }
+
+                val response =
+                    client
+                        .get("/test/kassenbuch/$kasse?from=2035-09-01&to=2035-09-30") {
+                            header("X-Member-Id", treasurer.toString())
+                        }.bodyAsText()
+                val (headerRaw, linesRaw) = response.split("#")
+                val headerParts = headerRaw.split(":")
+                headerParts[4] shouldBe "2" // lines.size
+                val lines = linesRaw.split(";").map { it.split(":") }
+                lines.size shouldBe 2
+                lines[0][0] shouldBe "1" // kassenbuchNumber
+                lines[0][3] shouldBe "BELEG-100"
+                lines[0][4] shouldBe "100.00" // amountIn
+                lines[0][5] shouldBe "0" // amountOut
+                lines[0][6] shouldBe "100.00" // runningBalance
+                lines[1][0] shouldBe "2"
+                lines[1][3] shouldBe "BELEG-101"
+                lines[1][4] shouldBe "0"
+                lines[1][5] shouldBe "30.00"
+                lines[1][6] shouldBe "70.00"
+            }
+        }
+
+        test(
+            "getKassenbuch numbering/openingBalance is stable across a from filter -- the same physical " +
+                "posting keeps its kassenbuchNumber and the filtered window's openingBalance reflects prior history",
+        ) {
+            testApplication {
+                application {
+                    install(StatusPages) { installAccountingExceptionHandlers() }
+                    routing { registerAccountingTestRoutes() }
+                }
+                val treasurer = createTestMember("acct-treasurer-kassenbuch-stable@example.org", AccountRole.TREASURER)
+                val kasse = createLedgerAccount("0970", LedgerAccountType.ASSET, isCashRegister = true)
+                val beitraege = createLedgerAccount("4026", LedgerAccountType.INCOME, accountClass = 4)
+
+                suspend fun post(
+                    date: LocalDate,
+                    description: String,
+                    amount: BigDecimal,
+                    voucher: String,
+                ) {
+                    client.post(
+                        "/test/post-entry?${
+                            entryParams(
+                                date,
+                                description,
+                                listOf(
+                                    PostingInput(
+                                        kasse.toString(),
+                                        PostingSide.DEBIT,
+                                        amount,
+                                        sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                                    ),
+                                    PostingInput(
+                                        beitraege.toString(),
+                                        PostingSide.CREDIT,
+                                        amount,
+                                        sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                                    ),
+                                ),
+                                voucher = voucher,
+                            )
+                        }",
+                    ) { header("X-Member-Id", treasurer.toString()) }
+                }
+
+                // Two postings BEFORE the query window (July), one INSIDE it (August).
+                post(LocalDate(2036, 7, 1), "Juli-1", BigDecimal("40.00"), "BELEG-200")
+                post(LocalDate(2036, 7, 15), "Juli-2", BigDecimal("25.00"), "BELEG-201")
+                post(LocalDate(2036, 8, 1), "August-1", BigDecimal("10.00"), "BELEG-202")
+
+                val unfiltered =
+                    client.get("/test/kassenbuch/$kasse") { header("X-Member-Id", treasurer.toString()) }.bodyAsText()
+                val (unfilteredHeader, unfilteredLinesRaw) = unfiltered.split("#")
+                unfilteredHeader.split(":")[2] shouldBe "0" // openingBalance since inception is ZERO
+                val unfilteredLines = unfilteredLinesRaw.split(";").map { it.split(":") }
+                unfilteredLines.size shouldBe 3
+                unfilteredLines[2][0] shouldBe "3" // the August posting is the 3rd line since inception
+
+                val filtered =
+                    client
+                        .get("/test/kassenbuch/$kasse?from=2036-08-01&to=2036-08-31") {
+                            header("X-Member-Id", treasurer.toString())
+                        }.bodyAsText()
+                val (filteredHeader, filteredLinesRaw) = filtered.split("#")
+                val filteredHeaderParts = filteredHeader.split(":")
+                filteredHeaderParts[2] shouldBe "65.00" // openingBalance = 40.00 + 25.00 from the two July postings
+                filteredHeaderParts[4] shouldBe "1" // lines.size
+                val filteredLines = filteredLinesRaw.split(";").map { it.split(":") }
+                filteredLines.size shouldBe 1
+                // Same physical posting keeps the SAME kassenbuchNumber ("3") it has unfiltered -- the
+                // fixed bug previously restarted numbering at "1" for a filtered window.
+                filteredLines[0][0] shouldBe "3"
+                filteredLines[0][3] shouldBe "BELEG-202"
+                filteredLines[0][6] shouldBe "75.00" // runningBalance = 65.00 opening + 10.00
+            }
+        }
+
+        test(
+            "getKassenbuch on a non-cash-register LedgerAccount is rejected with Conflict; " +
+                "on a nonexistent LedgerAccount is rejected with NotFound",
+        ) {
+            testApplication {
+                application {
+                    install(StatusPages) { installAccountingExceptionHandlers() }
+                    routing { registerAccountingTestRoutes() }
+                }
+                val treasurer = createTestMember("acct-treasurer-kassenbuch-invalid@example.org", AccountRole.TREASURER)
+                val bank = createLedgerAccount("0968", LedgerAccountType.ASSET)
+
+                client
+                    .get("/test/kassenbuch/$bank") { header("X-Member-Id", treasurer.toString()) }
+                    .status shouldBe HttpStatusCode.Conflict
+
+                client
+                    .get("/test/kassenbuch/${Uuid.random()}") { header("X-Member-Id", treasurer.toString()) }
+                    .status shouldBe HttpStatusCode.NotFound
+            }
+        }
+
+        test("getKassenbuch authorization: TREASURER/BOARD/ADMIN may read, plain MEMBER is Forbidden, unauthenticated is Unauthorized") {
+            testApplication {
+                application {
+                    install(StatusPages) { installAccountingExceptionHandlers() }
+                    routing { registerAccountingTestRoutes() }
+                }
+                val treasurer = createTestMember("acct-treasurer-kassenbuch-auth@example.org", AccountRole.TREASURER)
+                val board = createTestMember("acct-board-kassenbuch-auth@example.org", AccountRole.BOARD)
+                val plainMember = createTestMember("acct-plain-kassenbuch-auth@example.org", AccountRole.MEMBER)
+                val kasse = createLedgerAccount("0969", LedgerAccountType.ASSET, isCashRegister = true)
+
+                client
+                    .get("/test/kassenbuch/$kasse") { header("X-Member-Id", treasurer.toString()) }
+                    .status shouldBe HttpStatusCode.OK
+                client
+                    .get("/test/kassenbuch/$kasse") { header("X-Member-Id", board.toString()) }
+                    .status shouldBe HttpStatusCode.OK
+                client
+                    .get("/test/kassenbuch/$kasse") { header("X-Member-Id", plainMember.toString()) }
+                    .status shouldBe HttpStatusCode.Forbidden
+                client.get("/test/kassenbuch/$kasse").status shouldBe HttpStatusCode.Unauthorized
+            }
+        }
     })
 
 private fun StatusPagesConfig.installAccountingExceptionHandlers() {
@@ -1408,9 +2065,10 @@ private fun Route.registerAccountingTestRoutes() {
                     accountClass = q["class"]!!.toInt(),
                     type = LedgerAccountType.valueOf(q["type"]!!),
                     reserveType = q["reserveType"]?.let { ReserveType.valueOf(it) },
+                    isCashRegister = q["isCashRegister"]?.toBoolean() ?: false,
                 ),
             )
-        call.respondText("${dto.id}:${dto.accountNumber}:${dto.type}:${dto.active}:${dto.reserveType}")
+        call.respondText("${dto.id}:${dto.accountNumber}:${dto.type}:${dto.active}:${dto.reserveType}:${dto.isCashRegister}")
     }
     get("/test/list-ledger-accounts") {
         val service = AccountingService(call)
@@ -1456,6 +2114,23 @@ private fun Route.registerAccountingTestRoutes() {
         val service = AccountingService(call)
         val dto = service.getGeneralLedgerAccount(call.parameters["ledgerAccountId"]!!)
         call.respondText("${dto.ledgerAccountId}:${dto.openingBalance}:${dto.closingBalance}:${dto.lines.size}")
+    }
+    get("/test/kassenbuch/{ledgerAccountId}") {
+        val service = AccountingService(call)
+        val q = call.request.queryParameters
+        val dto =
+            service.getKassenbuch(
+                call.parameters["ledgerAccountId"]!!,
+                from = q["from"]?.let { LocalDate.parse(it) },
+                to = q["to"]?.let { LocalDate.parse(it) },
+            )
+        // Per-line: kassenbuchNumber:journalEntryId:entryDate:voucherReference:amountIn:amountOut:runningBalance, semicolon-joined.
+        val lines =
+            dto.lines.joinToString(";") { line ->
+                "${line.kassenbuchNumber}:${line.journalEntryId}:${line.entryDate}:${line.voucherReference}:" +
+                    "${line.amountIn}:${line.amountOut}:${line.runningBalance}"
+            }
+        call.respondText("${dto.ledgerAccountId}:${dto.accountNumber}:${dto.openingBalance}:${dto.closingBalance}:${dto.lines.size}#$lines")
     }
     get("/test/income-statement") {
         val service = AccountingService(call)

@@ -10,6 +10,7 @@ import network.lapis.cloud.shared.domain.IncomeStatementDto
 import network.lapis.cloud.shared.domain.JournalEntryDto
 import network.lapis.cloud.shared.domain.JournalEntryInput
 import network.lapis.cloud.shared.domain.JournalEntryStatus
+import network.lapis.cloud.shared.domain.KassenbuchDto
 import network.lapis.cloud.shared.domain.LedgerAccountDto
 import network.lapis.cloud.shared.domain.LedgerAccountInput
 import network.lapis.cloud.shared.domain.UseOfFundsStatementDto
@@ -137,4 +138,20 @@ interface IAccountingService {
         fromFiscalYear: Int,
         toFiscalYear: Int,
     ): UseOfFundsStatementDto
+
+    /**
+     * Role: TREASURER/BOARD/ADMIN. Kassenbuch (cash book, V0.3.5, GoBD-Vorstufe) for one
+     * [network.lapis.cloud.shared.domain.LedgerAccountDto.isCashRegister] account over
+     * `[from, to]` (both inclusive; `from == null` means "since inception") -- see [KassenbuchDto]
+     * KDoc. Only [JournalEntryStatus.POSTED] postings contribute -- same "DRAFT is provisional"
+     * rule as [getGeneralLedgerAccount]. Rejects with `BadRequestException` if [ledgerAccountId]
+     * names an existing account that is not [network.lapis.cloud.shared.domain.LedgerAccountDto
+     * .isCashRegister] (wrong kind of resource for this endpoint), and `NotFoundException` if it
+     * does not exist at all -- mirrors [getGeneralLedgerAccount]'s existing not-found behavior.
+     */
+    suspend fun getKassenbuch(
+        ledgerAccountId: String,
+        from: LocalDate? = null,
+        to: LocalDate? = null,
+    ): KassenbuchDto
 }

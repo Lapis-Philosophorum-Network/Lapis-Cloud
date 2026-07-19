@@ -134,6 +134,14 @@ class AccountingSchemaDriftTest :
             real.columns.getValue("reserve_type").nullable shouldBe true
         }
 
+        test("ledger_account.is_cash_register is NOT NULL, defaulting to false (V0.3.5 Kassenbuch)") {
+            val entity = model.entities.single { it.name == "ledger_account" }
+            entity.attributeByName("is_cash_register")?.nullable shouldBe false
+
+            val real = transaction { introspectAccountingTable("ledger_account") }
+            real.columns.getValue("is_cash_register").nullable shouldBe false
+        }
+
         // ── (2) Model vs. generated Exposed Table objects ────────────────────
 
         test("ledger_account entity column-name set matches the generated LedgerAccountTable 1:1") {

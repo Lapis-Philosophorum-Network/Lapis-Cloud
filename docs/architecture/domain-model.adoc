@@ -366,6 +366,12 @@ classDiagram(name = "Lapis Cloud Domain Model — Accounting (V0.3.1)") {
         attribute(name = "accountClass", type = "Int")
         attribute(name = "type", type = ledgerAccountType)
         attribute(name = "active", type = "Boolean", defaultValue = "true")
+        // §62 AO reserve category (V0.3.4) -- nullable, only set on a treasurer-designated EQUITY
+        // reserve account. See the reserve-accounting prose below for the full rule.
+        attribute(name = "reserveType", type = "String")
+        // Identifies this LedgerAccount as a physical cash register/Kasse (V0.3.5) -- see the
+        // Kassenbuch prose below for the full rule (only ever true on an ASSET account).
+        attribute(name = "isCashRegister", type = "Boolean", defaultValue = "false")
     }
 
     val journalEntry = classOf(name = "JournalEntry") {
@@ -449,9 +455,10 @@ ADMIN roles as `getGeneralLedgerAccount`.
 
 Line lists (`StatementLineDto`) omit accounts with a zero net balance in the requested scope — they
 are a derived-from-journal view, not a complete chart-of-accounts listing. Still explicitly out of
-scope (unchanged from V0.3.1's list above): fiscal-year close/Saldenvortrag, Kassenbuch (V0.3.5),
+scope (unchanged from V0.3.1's list above): fiscal-year close/Saldenvortrag,
 Kostenstellen (V0.3.6), non-calendar fiscal years. (Mittelverwendungsrechnung/Rücklagen, originally
-listed here as a later non-goal, shipped in V0.3.4 -- see below.)
+listed here as a later non-goal, shipped in V0.3.4 -- see below. Kassenbuch, likewise originally
+listed here as a later non-goal, shipped in V0.3.5 -- see further below.)
 
 [#four-sphere-separation]
 === Four-sphere Gemeinnützigkeit separation (V0.3.3)
@@ -582,6 +589,70 @@ Explicitly, deliberately out of scope for V0.3.4 (see `UseOfFundsCalculator`/`Re
 the full list, each flagged individually): the §62 Abs.1 Nr.3 freie-Rücklage percentage-cap
 enforcement; automatic application of the §55 Abs.1 Nr.5 Satz 4 small-organization
 (≤45.000 EUR) exemption; any automated "Gemeinnützigkeit lost/retained" verdict or certification;
-§64 AO Freigrenze evaluation (later compliance-bundle territory); Kassenbuch (V0.3.5); general-purpose
+§64 AO Freigrenze evaluation (later compliance-bundle territory); general-purpose
 Kostenstellen (V0.3.6); non-calendar fiscal years; and any client/KVision UI (this is a backend-only
-wave).
+wave). (Kassenbuch, listed here as a later non-goal, shipped in V0.3.5 -- see below.)
+
+=== Kassenbuch (V0.3.5, GoBD-Vorstufe)
+
+**This is the foundational piece a future V0.5 GoBD (Grundsätze zur ordnungsmäßigen Führung und
+Aufbewahrung von Büchern) bundle needs to build on -- full GoBD tamper-evidence (cryptographic
+hash-chaining, formal retention-period enforcement, audit-log infrastructure, TSE/
+Kassensicherungsverordnung technical-security-equipment integration) is explicitly OUT of scope
+this wave.** A Kassenbuch (cash book) is a chronological, gapless record of every cash-register
+(Kasse) movement -- date, description, Beleg (voucher) reference, Einnahme/Ausgabe (amount in/out),
+and running balance.
+
+**`LedgerAccount.isCashRegister` is the only schema addition this wave makes** (NOT NULL boolean,
+default `false`). `accountClass` alone cannot identify a physical cash register: SKR42 Kontenklasse
+1 ("liquide Mittel") also holds `18000 Bank (Girokonto)` and
+`12000 Forderungen aus Lieferungen und Leistungen`, both `ASSET` like `16000 Kasse` -- see
+`DevSeedData.kt`. `isCashRegister` may only be `true` on an `ASSET` account
+(`AccountingService.requireCashRegisterOnlyOnAsset`), the same class of service-layer cross-column
+guard as `reserveType`'s only-on-`EQUITY` rule above -- not expressible as a single-row `CHECK`.
+**The Kassenbuch itself is NOT a new persisted entity** -- `network.lapis.cloud.server.rpc
+.KassenbuchCalculator` (pure, unit-tested without a database, same idiom as
+`GeneralLedgerCalculator`/`JournalEntryBalance`/`UseOfFundsCalculator`) derives it purely from the
+account's existing immutable `POSTED` postings, delegating the running-balance math to
+`GeneralLedgerCalculator.runningBalances` with the `ASSET` (debit-normal) side and re-labelling each
+line's single signed DEBIT/CREDIT amount into an Einnahme (`amountIn`)/Ausgabe (`amountOut`) pair --
+a real Kassenbuch's columns, not Soll/Haben. `KassenbuchLineDto.kassenbuchNumber` is a 1-based,
+gapless sequential line number derived purely from chronological ordering of the account's `POSTED`
+postings -- no new persisted sequence, safe because a `POSTED` entry can never be reordered or
+renumbered. This mirrors V0.3.4's "derive a report from the existing journal, add at most one
+classificatory column" pattern.
+
+Two GoBD-informed guards are enforced at the service layer (`AccountingService`), both **only at
+the moment an entry becomes `POSTED`** (`postJournalEntry`, and the `postDraftEntry` DRAFT→POSTED
+transition) -- `saveDraftEntry` stays free-form, matching the existing "draft is provisional"
+philosophy:
+
+* **"Kein Buchen ohne Beleg"** (`requireVoucherForCashPostings`) -- a posting set referencing any
+  `isCashRegister` account is rejected (`ConflictException`) unless the entry's `voucherReference`
+  is non-blank. Every other (non-cash) posting is unaffected -- `JournalEntry.voucherReference`
+  stays nullable/optional, no schema change, no regression for existing non-cash bookings.
+* **Never-negative cash balance** (`requireNonNegativeCashBalances`) -- for each `isCashRegister`
+  account an entry's own postings touch, this entry's net signed delta for that account (aggregated
+  across all of the entry's lines against it, not checked line-by-line -- a single entry may
+  legitimately carry offsetting lines against the same cash account) is added to that account's
+  pre-existing cumulative `POSTED` balance; a strictly negative projected result is rejected
+  (`ConflictException`). Draining a cash account to exactly `0` is allowed -- only a strictly
+  negative balance is not. Since `isCashRegister` implies `ASSET`, the normal-balance side is always
+  `DEBIT` -- computed via `GeneralLedgerCalculator.normalBalanceSideOf(LedgerAccountType.ASSET)`
+  rather than a second, hardcoded sign-convention constant.
+
+**`getKassenbuch`** (role: TREASURER/BOARD/ADMIN, same as every other statement method) returns the
+`KassenbuchDto` for one `LedgerAccount` over `[from, to]` (`from == null` means "since inception"),
+only `POSTED` postings contributing -- same "DRAFT is provisional" rule as `getGeneralLedgerAccount`.
+Rejects with `BadRequestException` if the account exists but is not `isCashRegister` (wrong kind of
+resource for this endpoint), and `NotFoundException` if it does not exist at all -- mirrors
+`getGeneralLedgerAccount`'s existing not-found behavior. `Posting.sphere` stays mandatory even on
+cash-account lines (unchanged V0.3.3 rule, informational only there) and is deliberately NOT
+surfaced in `KassenbuchLineDto` -- the Kassenbuch is a cash-audit view, not a Gemeinnützigkeit-sphere
+report.
+
+Explicitly, deliberately out of scope for V0.3.5 (deferred to V0.5's GoBD bundle unless noted
+otherwise): cryptographic tamper-evidence/hash-chaining; formal retention-period enforcement; full
+audit-log infrastructure; TSE (Kassensicherungsverordnung) integration; general-purpose
+Kostenstellen (V0.3.6, unchanged); non-calendar fiscal years; and any client/KVision UI (this is a
+backend-only wave, same as every prior accounting wave).

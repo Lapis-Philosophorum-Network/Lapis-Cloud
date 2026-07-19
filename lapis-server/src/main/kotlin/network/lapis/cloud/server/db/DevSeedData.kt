@@ -94,14 +94,18 @@ object DevSeedData {
         val accountClass: Int,
         val type: LedgerAccountType,
         val reserveType: ReserveType? = null,
+        val isCashRegister: Boolean = false,
     )
 
     val demoLedgerAccounts =
         listOf(
             // Klasse 0 -- Anlagevermögen. (LOW confidence -- SKR04-consistent candidate.)
             SeedLedgerAccount("06500", "Betriebs- und Geschäftsausstattung", 0, LedgerAccountType.ASSET),
-            // Klasse 1 -- liquide Mittel. (HIGH confidence.)
-            SeedLedgerAccount("16000", "Kasse", 1, LedgerAccountType.ASSET),
+            // Klasse 1 -- liquide Mittel. (HIGH confidence.) "16000 Kasse" is the physical cash
+            // register (V0.3.5 Kassenbuch) -- accountClass alone can't distinguish it from
+            // "18000 Bank"/"12000 Forderungen" below, all class 1, see 10-accounting.kuml.kts
+            // file header.
+            SeedLedgerAccount("16000", "Kasse", 1, LedgerAccountType.ASSET, isCashRegister = true),
             SeedLedgerAccount("18000", "Bank (Girokonto)", 1, LedgerAccountType.ASSET),
             // Klasse 1 -- Forderungen. (MED confidence.)
             SeedLedgerAccount("12000", "Forderungen aus Lieferungen und Leistungen", 1, LedgerAccountType.ASSET),
@@ -203,6 +207,7 @@ object DevSeedData {
                     it[type] = seed.type
                     it[active] = true
                     it[reserveType] = seed.reserveType
+                    it[isCashRegister] = seed.isCashRegister
                 }
             }
         }
