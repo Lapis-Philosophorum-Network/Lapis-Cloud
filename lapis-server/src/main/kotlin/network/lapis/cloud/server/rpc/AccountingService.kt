@@ -7,6 +7,7 @@ import kotlinx.datetime.LocalDate
 import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
+import network.lapis.cloud.server.db.generated.CostCenterTable
 import network.lapis.cloud.server.db.generated.JournalEntryTable
 import network.lapis.cloud.server.db.generated.LedgerAccountTable
 import network.lapis.cloud.server.db.generated.MemberTable
@@ -16,6 +17,9 @@ import network.lapis.cloud.server.security.resolveCurrentMember
 import network.lapis.cloud.shared.domain.AccountRole
 import network.lapis.cloud.shared.domain.AnnualFinancialStatementDto
 import network.lapis.cloud.shared.domain.BalanceSheetDto
+import network.lapis.cloud.shared.domain.CostCenterDto
+import network.lapis.cloud.shared.domain.CostCenterInput
+import network.lapis.cloud.shared.domain.CostCenterReportDto
 import network.lapis.cloud.shared.domain.FourSphereIncomeStatementDto
 import network.lapis.cloud.shared.domain.GemeinnuetzigkeitSphere
 import network.lapis.cloud.shared.domain.GeneralLedgerDto
@@ -143,6 +147,62 @@ class AccountingService(
         }
     }
 
+    override suspend fun createCostCenter(input: CostCenterInput): CostCenterDto {
+        val current = resolveCurrentMember(call)
+        current.requireRole(*TREASURY_ROLES)
+        requireNonBlankCostCenterCode(input.code)
+        return transaction {
+            val duplicate =
+                CostCenterTable
+                    .selectAll()
+                    .where { CostCenterTable.code eq input.code }
+                    .count() > 0
+            if (duplicate) {
+                throw ConflictException("CostCenter with code ${input.code} already exists")
+            }
+            val id = Uuid.random()
+            try {
+                CostCenterTable.insert {
+                    it[CostCenterTable.id] = id
+                    it[code] = input.code
+                    it[name] = input.name
+                    it[description] = input.description
+                    it[active] = input.active
+                }
+            } catch (e: ExposedSQLException) {
+                // Application-level pre-check above is racy under concurrency on its own -- the
+                // DB-level UNIQUE (uq_cost_center_code) is the real backstop, same "pre-check +
+                // ExposedSQLException backstop" idiom as createLedgerAccount.
+                throw ConflictException("CostCenter with code ${input.code} already exists")
+            }
+            loadCostCenter(id)
+        }
+    }
+
+    override suspend fun deactivateCostCenter(id: String): CostCenterDto {
+        val current = resolveCurrentMember(call)
+        current.requireRole(*TREASURY_ROLES)
+        val costCenterId = id.toAccountingUuid("CostCenter")
+        return transaction {
+            val updated =
+                CostCenterTable.update({ CostCenterTable.id eq costCenterId }) {
+                    it[active] = false
+                }
+            if (updated == 0) throw NotFoundException("CostCenter $id not found")
+            loadCostCenter(costCenterId)
+        }
+    }
+
+    override suspend fun listCostCenters(activeOnly: Boolean): List<CostCenterDto> {
+        val current = resolveCurrentMember(call)
+        current.requireRole(*ACCOUNTING_READ_ROLES)
+        return transaction {
+            val baseQuery = CostCenterTable.selectAll()
+            val query = if (activeOnly) baseQuery.where { CostCenterTable.active eq true } else baseQuery
+            query.orderBy(CostCenterTable.code, SortOrder.ASC).map { it.toCostCenterDto() }
+        }
+    }
+
     override suspend fun saveDraftEntry(input: JournalEntryInput): JournalEntryDto {
         val current = resolveCurrentMember(call)
         current.requireRole(*TREASURY_ROLES)
@@ -157,6 +217,7 @@ class AccountingService(
         return transaction {
             requireBalanced(input.postings)
             requireActiveLedgerAccounts(input.postings.map { it.ledgerAccountId.toAccountingUuid("LedgerAccount") })
+            requireActiveCostCenters(input.postings.mapNotNull { it.costCenterId?.toAccountingUuid("CostCenter") })
             val cashAccountIds =
                 loadCashRegisterAccountIds(input.postings.map { it.ledgerAccountId.toAccountingUuid("LedgerAccount") })
             requireVoucherForCashPostings(input.voucherReference, cashAccountIds)
@@ -186,10 +247,12 @@ class AccountingService(
                             // JournalEntryBalance ignores sphere, but PostingInput now requires it
                             // -- see class KDoc for the no-silent-default rationale.
                             sphere = row[PostingTable.sphere],
+                            costCenterId = row[PostingTable.costCenterId]?.toString(),
                         )
                     }
             requireBalanced(postings)
             requireActiveLedgerAccounts(postings.map { it.ledgerAccountId.toAccountingUuid("LedgerAccount") })
+            requireActiveCostCenters(postings.mapNotNull { it.costCenterId?.toAccountingUuid("CostCenter") })
             val cashAccountIds = loadCashRegisterAccountIds(postings.map { it.ledgerAccountId.toAccountingUuid("LedgerAccount") })
             requireVoucherForCashPostings(entryRow[JournalEntryTable.voucherReference], cashAccountIds)
             requireNonNegativeCashBalances(postings, cashAccountIds)
@@ -314,6 +377,17 @@ class AccountingService(
         current.requireRole(*ACCOUNTING_READ_ROLES)
         return transaction {
             FinancialStatementCalculator.fourSphereIncomeStatement(loadSphereAccountBalances(from, to), from, to)
+        }
+    }
+
+    override suspend fun getCostCenterReport(
+        from: LocalDate?,
+        to: LocalDate,
+    ): CostCenterReportDto {
+        val current = resolveCurrentMember(call)
+        current.requireRole(*ACCOUNTING_READ_ROLES)
+        return transaction {
+            FinancialStatementCalculator.costCenterReport(loadCostCenterAccountBalances(from, to), from, to)
         }
     }
 
@@ -530,6 +604,62 @@ class AccountingService(
     }
 
     /**
+     * Same POSTED-only + optional date-range join as [loadAccountBalances], but grouped by
+     * (costCenterId, ledgerAccountId) instead of ledgerAccountId alone -- feeds
+     * [FinancialStatementCalculator.costCenterReport]. A LEFT JOIN to [CostCenterTable] (not an
+     * inner join -- most postings have no cost center, see [network.lapis.cloud.shared.domain
+     * .CostCenterDto] KDoc), so [CostCenterTable] columns are read via `getOrNull`, never the plain
+     * indexing operator -- Exposed does not widen a NOT-NULL-declared column's Kotlin type to
+     * nullable just because it came from the unmatched side of an outer join.
+     */
+    private fun loadCostCenterAccountBalances(
+        from: LocalDate?,
+        to: LocalDate?,
+    ): List<FinancialStatementCalculator.CostCenterAccountBalance> {
+        val conditions =
+            mutableListOf<Op<Boolean>>(
+                JournalEntryTable.status eq JournalEntryStatus.POSTED,
+            )
+        if (from != null) conditions += (JournalEntryTable.entryDate greaterEq from)
+        if (to != null) conditions += (JournalEntryTable.entryDate lessEq to)
+
+        val rows =
+            (PostingTable innerJoin JournalEntryTable innerJoin LedgerAccountTable)
+                .leftJoin(CostCenterTable)
+                .selectAll()
+                .where { conditions.reduce { a, b -> a and b } }
+                .toList()
+
+        return rows
+            .groupBy { it[PostingTable.costCenterId] to it[PostingTable.ledgerAccountId] }
+            .map { (key, group) ->
+                val (costCenterId, accountId) = key
+                val type = group.first()[LedgerAccountTable.type]
+                val normalSide = GeneralLedgerCalculator.normalBalanceSideOf(type)
+                val netBalance =
+                    group.fold(BigDecimal.ZERO) { acc, row ->
+                        val amount = row[PostingTable.amount]
+                        val signed = if (row[PostingTable.side] == normalSide) amount else amount.negate()
+                        acc + signed
+                    }
+                FinancialStatementCalculator.CostCenterAccountBalance(
+                    costCenterId = costCenterId?.toString(),
+                    costCenterCode = if (costCenterId != null) group.first().getOrNull(CostCenterTable.code) else null,
+                    costCenterName = if (costCenterId != null) group.first().getOrNull(CostCenterTable.name) else null,
+                    account =
+                        FinancialStatementCalculator.AccountBalance(
+                            id = accountId.toString(),
+                            accountNumber = group.first()[LedgerAccountTable.accountNumber],
+                            name = group.first()[LedgerAccountTable.name],
+                            type = type,
+                            accountClass = group.first()[LedgerAccountTable.accountClass],
+                            netBalance = netBalance,
+                        ),
+                )
+            }
+    }
+
+    /**
      * Loads one [UseOfFundsCalculator.YearFacts] per calendar year with any `POSTED` activity
      * through [throughYear] (inclusive) -- feeds [UseOfFundsCalculator.statement]. Only `POSTED`
      * postings contribute (same "DRAFT is provisional" rule as every other loader). `INCOME`/
@@ -633,6 +763,7 @@ class AccountingService(
                 it[side] = posting.side
                 it[amount] = posting.amount
                 it[sphere] = posting.sphere
+                it[costCenterId] = posting.costCenterId?.toAccountingUuid("CostCenter")
             }
         }
         return loadJournalEntry(id)
@@ -801,6 +932,35 @@ class AccountingService(
         }
     }
 
+    /**
+     * `code` is fully free-text user input from a UI form (unlike [LedgerAccountTable.accountNumber],
+     * which is always populated from a fixed SKR42 reference list in practice) -- this is a static
+     * input-shape check, hence [BadRequestException] rather than the existing-entity-tier
+     * exceptions [requireActiveCostCenters] throws.
+     */
+    private fun requireNonBlankCostCenterCode(code: String) {
+        if (code.isBlank()) throw BadRequestException("CostCenter code must not be blank")
+    }
+
+    /**
+     * Every referenced [CostCenterTable] row must exist and be [CostCenterTable.active] -- same
+     * two-tier "not found vs. wrong state" idiom as [requireActiveLedgerAccounts]. Deliberately
+     * only invoked from [postJournalEntry]/[postDraftEntry] (not [saveDraftEntry]) -- a treasurer
+     * must be able to save an in-progress draft that references a cost center they have not
+     * finished setting up yet, same "draft is provisional" rule [requireActiveLedgerAccounts]
+     * itself is *not* subject to at draft-save time either.
+     */
+    private fun requireActiveCostCenters(costCenterIds: List<Uuid>) {
+        costCenterIds.distinct().forEach { costCenterId ->
+            val row =
+                CostCenterTable.selectAll().where { CostCenterTable.id eq costCenterId }.singleOrNull()
+                    ?: throw NotFoundException("CostCenter $costCenterId not found")
+            if (!row[CostCenterTable.active]) {
+                throw ConflictException("CostCenter $costCenterId is not active")
+            }
+        }
+    }
+
     private fun requireJournalEntryRow(id: Uuid): ResultRow =
         JournalEntryTable.selectAll().where { JournalEntryTable.id eq id }.singleOrNull()
             ?: throw NotFoundException("JournalEntry $id not found")
@@ -812,10 +972,18 @@ class AccountingService(
             .singleOrNull()
             ?.toLedgerAccountDto() ?: throw NotFoundException("LedgerAccount $id not found")
 
+    private fun loadCostCenter(id: Uuid): CostCenterDto =
+        CostCenterTable
+            .selectAll()
+            .where { CostCenterTable.id eq id }
+            .singleOrNull()
+            ?.toCostCenterDto() ?: throw NotFoundException("CostCenter $id not found")
+
     private fun loadJournalEntry(id: Uuid): JournalEntryDto {
         val entryRow = requireJournalEntryRow(id)
         val postings =
             (PostingTable innerJoin LedgerAccountTable)
+                .leftJoin(CostCenterTable)
                 .selectAll()
                 .where { PostingTable.journalEntryId eq id }
                 .map { it.toPostingDto() }
@@ -847,6 +1015,21 @@ class AccountingService(
             isCashRegister = this[LedgerAccountTable.isCashRegister],
         )
 
+    private fun ResultRow.toCostCenterDto(): CostCenterDto =
+        CostCenterDto(
+            id = this[CostCenterTable.id].toString(),
+            code = this[CostCenterTable.code],
+            name = this[CostCenterTable.name],
+            description = this[CostCenterTable.description],
+            active = this[CostCenterTable.active],
+        )
+
+    /**
+     * [costCenterId] comes from a `Posting.costCenterId` LEFT JOIN to [CostCenterTable] (see
+     * [loadJournalEntry]) -- read via `getOrNull`, never the plain indexing operator, because
+     * Exposed does not widen a NOT-NULL-declared column's Kotlin type to nullable just because it
+     * came from the unmatched side of an outer join.
+     */
     private fun ResultRow.toPostingDto(): PostingDto =
         PostingDto(
             id = this[PostingTable.id].toString(),
@@ -856,6 +1039,9 @@ class AccountingService(
             side = this[PostingTable.side],
             amount = this[PostingTable.amount],
             sphere = this[PostingTable.sphere],
+            costCenterId = this.getOrNull(CostCenterTable.id)?.toString(),
+            costCenterCode = this.getOrNull(CostCenterTable.code),
+            costCenterName = this.getOrNull(CostCenterTable.name),
         )
 
     private fun ResultRow.toJournalEntryDto(postings: List<PostingDto>): JournalEntryDto {

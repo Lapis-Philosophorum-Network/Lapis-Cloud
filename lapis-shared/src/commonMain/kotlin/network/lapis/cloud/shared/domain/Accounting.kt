@@ -86,6 +86,36 @@ enum class ReserveType(
 }
 
 /**
+ * V0.3.6 Kostenstellen-/Projektbuchhaltung: an open-ended, user-created cost center/project
+ * classification (DATEV KOST2 sense, see `10-accounting.kuml.kts` file header and
+ * `network.lapis.cloud.server.rpc.AccountingService`'s cost-center methods for the full
+ * lifecycle) -- NOT a fixed enum like [GemeinnuetzigkeitSphere]/[ReserveType]: a treasurer creates
+ * a new [CostCenterDto] per project/campaign/event as needed (e.g. "SOMMERFEST-2027"). [code] is a
+ * free-text, unique, stable business key (cross-referencing target for a later V0.6 crowdfunding/
+ * auction campaign); [name] is the human-readable display label -- mirrors [LedgerAccountDto]'s
+ * own accountNumber+name split. Lifecycle is create/deactivate/list only, exactly
+ * [LedgerAccountDto]'s own CRUD shape -- deactivate, never delete, so historical postings that
+ * reference this cost center are never invalidated.
+ */
+@Serializable
+data class CostCenterDto(
+    val id: String,
+    val code: String,
+    val name: String,
+    val description: String?,
+    val active: Boolean,
+)
+
+/** [active] defaults to `true` for the common "create it active" call shape. */
+@Serializable
+data class CostCenterInput(
+    val code: String,
+    val name: String,
+    val description: String? = null,
+    val active: Boolean = true,
+)
+
+/**
  * One SKR42 Konto. [accountNumber] is the five-digit (or shorter, some system accounts are
  * shorter) SKR42 number whose leading digit is the Kontenklasse (0-9) -- see the `.kuml.kts` file
  * header for why the Gemeinnützigkeit sphere is NOT derivable from that class under SKR42.
@@ -130,7 +160,10 @@ data class LedgerAccountInput(
 /**
  * One Soll/Haben line of a [JournalEntryDto] -- always references an active [LedgerAccountDto].
  * [sphere] is the mandatory (never null) Gemeinnützigkeit sphere this line is booked to -- see
- * [GemeinnuetzigkeitSphere] KDoc.
+ * [GemeinnuetzigkeitSphere] KDoc. [costCenterId]/[costCenterCode]/[costCenterName] (V0.3.6) are
+ * all `null` together unless this line was tagged with a [CostCenterDto] -- unlike [sphere], this
+ * is OPTIONAL: most day-to-day postings (membership dues, routine bills) carry no project/campaign
+ * association, see [CostCenterDto] KDoc.
  */
 @Serializable
 data class PostingDto(
@@ -141,11 +174,17 @@ data class PostingDto(
     val side: PostingSide,
     val amount: Decimal,
     val sphere: GemeinnuetzigkeitSphere,
+    val costCenterId: String? = null,
+    val costCenterCode: String? = null,
+    val costCenterName: String? = null,
 )
 
 /**
  * [sphere] deliberately has NO default value -- see [GemeinnuetzigkeitSphere] KDoc for why every
- * posting must be assigned to a sphere explicitly, with no silent fallback.
+ * posting must be assigned to a sphere explicitly, with no silent fallback. [costCenterId] (V0.3.6)
+ * defaults to `null` -- deliberately the OPPOSITE default-value policy from [sphere]: most postings
+ * have no project/campaign association, so requiring every call site to pass one would misrepresent
+ * how rarely a cost center actually applies -- see [CostCenterDto] KDoc.
  */
 @Serializable
 data class PostingInput(
@@ -153,6 +192,7 @@ data class PostingInput(
     val side: PostingSide,
     val amount: Decimal,
     val sphere: GemeinnuetzigkeitSphere,
+    val costCenterId: String? = null,
 )
 
 @Serializable

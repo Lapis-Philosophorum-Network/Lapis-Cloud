@@ -5,6 +5,7 @@ import dev.kuml.erm.model.ErmModel
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldContainExactlyInAnyOrder
 import io.kotest.matchers.shouldBe
+import network.lapis.cloud.server.db.generated.CostCenterTable
 import network.lapis.cloud.server.db.generated.JournalEntryTable
 import network.lapis.cloud.server.db.generated.LedgerAccountTable
 import network.lapis.cloud.server.db.generated.PostingTable
@@ -34,9 +35,9 @@ class AccountingSchemaDriftTest :
 
         fun ErmModel.entityNameOf(entityId: String): String? = entities.firstOrNull { it.id == entityId }?.name
 
-        test("model declares exactly ledger_account, journal_entry, posting and the member stub") {
+        test("model declares exactly ledger_account, journal_entry, posting, cost_center and the member stub") {
             model.entities.map { it.name }.toSet() shouldBe
-                setOf("member", "ledger_account", "journal_entry", "posting")
+                setOf("member", "ledger_account", "journal_entry", "posting", "cost_center")
         }
 
         // ── (1) Model vs. real H2-migrated schema ───────────────────────────────
@@ -111,6 +112,48 @@ class AccountingSchemaDriftTest :
             real.foreignKeys["ledger_account_id"] shouldBe "ledger_account"
             model.entityNameOf(entity.attributeByName("journal_entry_id")?.foreignKey?.targetEntityId ?: "") shouldBe "journal_entry"
             model.entityNameOf(entity.attributeByName("ledger_account_id")?.foreignKey?.targetEntityId ?: "") shouldBe "ledger_account"
+        }
+
+        test("cost_center table shape matches the real migrated schema") {
+            val entity = model.entities.single { it.name == "cost_center" }
+            val real = transaction { introspectAccountingTable("cost_center") }
+
+            entity.attributes.map { it.name }.toSet() shouldBe real.columns.keys
+            entity.attributes.forEach { attr ->
+                val col = real.columns.getValue(attr.name!!)
+                withClue("column '${attr.name}'") {
+                    col.nullable shouldBe attr.nullable
+                }
+            }
+        }
+
+        test("cost_center.code's UNIQUE constraint is pinned via a class-level «Index»") {
+            val entity = model.entities.single { it.name == "cost_center" }
+            val real = transaction { introspectAccountingTable("cost_center") }
+
+            real.uniqueConstraints shouldContainExactlyInAnyOrder listOf(setOf("code"))
+            entity.attributes.none { it.unique } shouldBe true
+            entity.indexes.single { it.name == "uq_cost_center_code" }.let {
+                it.unique shouldBe true
+                it.attributeIds shouldBe listOf(entity.attributeByName("code")!!.id)
+            }
+        }
+
+        test("cost_center entity column-name set matches the generated CostCenterTable 1:1") {
+            model.entities
+                .single { it.name == "cost_center" }
+                .attributes
+                .map { it.name } shouldContainExactlyInAnyOrder CostCenterTable.columns.map { it.name }
+        }
+
+        test("posting.cost_center_id is a nullable FK -> cost_center (V0.3.6, most postings carry none)") {
+            val entity = model.entities.single { it.name == "posting" }
+            val real = transaction { introspectAccountingTable("posting") }
+
+            real.foreignKeys["cost_center_id"] shouldBe "cost_center"
+            model.entityNameOf(entity.attributeByName("cost_center_id")?.foreignKey?.targetEntityId ?: "") shouldBe "cost_center"
+            entity.attributeByName("cost_center_id")?.nullable shouldBe true
+            real.columns.getValue("cost_center_id").nullable shouldBe true
         }
 
         test("posting.amount is modelled with DECIMAL(15,2) precision, not the default DECIMAL(19,2)") {

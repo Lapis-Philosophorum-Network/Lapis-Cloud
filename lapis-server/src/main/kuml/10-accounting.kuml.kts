@@ -21,6 +21,8 @@
 // the dedicated comment ahead of the `posting` classOf below), *not* derived from `account_class`.
 // `account_class` (Int, 0-9) remains a reporting/grouping field only; the real per-posting
 // cost-center/sphere attribute is `posting.sphere` (V0.3.3, mandatory NOT NULL) -- see below.
+// (DATEV KOST1 is that sphere. DATEV KOST2 -- an open-ended, user-created project/campaign
+// classification, unrelated to KOST1/sphere -- is the V0.3.6 `CostCenter` entity, see below.)
 //
 // This is the versioned source-of-truth *model* for the schema shape (ADR-0016), verified against
 // both the real Flyway-migrated H2 schema and the generated Exposed Table objects
@@ -105,7 +107,7 @@
 //  - P&L (GuV) / balance sheet (Bilanz) derivation -> V0.3.2. LedgerAccountType is shipped now so
 //    that wave can classify normal-balance sides, but no statement is computed here.
 //  - §55 AO Mittelverwendungsrechnung (use-of-funds/timely-use tracking) -> V0.3.4.
-//  - Not in scope at all this wave: Kostenstellen, fiscal-year close/Saldenvortrag
+//  - Not in scope at all this wave: Kostenstellen (-> V0.3.6), fiscal-year close/Saldenvortrag
 //    (class 9 carryforward), opening balances beyond the dev seed, USt/VAT handling,
 //    Storno/reversal postings (JournalEntryStatus is enum-extensible with e.g. REVERSED later),
 //    multi-currency, Beleg/attachment storage, automatic Contribution<->journal reconciliation
@@ -134,7 +136,21 @@
 // (AccountingService) at POST time only ("kein Buchen ohne Beleg" for cash postings, and a
 // never-negative cash balance) -- full GoBD tamper-evidence (hash-chaining, retention enforcement,
 // audit-log infrastructure, TSE/Kassensicherungsverordnung integration) remains out of scope,
-// deferred to V0.5. Kostenstellen remains V0.3.6 scope.
+// deferred to V0.5.
+//
+// Kostenstellen-/Projektbuchhaltung (V0.3.6, DATEV KOST2 sense): `CostCenter` (see below) is a
+// new, independent, open-ended entity -- unlike the fixed GemeinnuetzigkeitSphere/ReserveType
+// enums above, a treasurer creates a new CostCenter per project/campaign/event as needed (e.g.
+// "SOMMERFEST-2027"), so it needs its own id/lifecycle (create/deactivate/list), not a fixed
+// literal set. See network.lapis.cloud.shared.domain.CostCenterDto/CostCenterInput and
+// AccountingService's cost-center methods for the full lifecycle, and
+// network.lapis.cloud.server.rpc.FinancialStatementCalculator.costCenterReport for the read-only
+// per-cost-center income/expense/result report this wave adds. `posting.cost_center_id` is the
+// ONLY schema addition on the existing entities this wave makes -- a nullable FK (unlike the
+// mandatory `posting.sphere` above), because most day-to-day postings (membership dues, routine
+// bills) have no project/campaign association; only a booking tied to a specific cost center gets
+// one. This is the mechanism a later, separate V0.6 wave will attach Crowdfunding/Auktion
+// campaigns to -- no crowdfunding/auction-specific logic ships this wave.
 import dev.kuml.profile.erm.ermMappingProfile
 import dev.kuml.uml.Multiplicity
 import dev.kuml.uml.dsl.applyProfile
@@ -203,6 +219,45 @@ classDiagram(name = "Accounting") {
         literal(name = "FREIE_RUECKLAGE") // §62 Abs.1 Nr.3 -- percentage-capped general reserve
         literal(name = "WIEDERBESCHAFFUNGSRUECKLAGE") // §62 Abs.1 Nr.2 -- replacement reserve
         literal(name = "BETRIEBSMITTELRUECKLAGE") // §62 Abs.1 Nr.1 sub-case -- operating-funds reserve
+    }
+
+    // V0.3.6 Kostenstellen-/Projektbuchhaltung: an open-ended, user-created cost center/project
+    // classification (DATEV KOST2 sense) -- unlike GemeinnuetzigkeitSphere/ReserveType (fixed
+    // enums), a treasurer creates a new CostCenter per project/campaign/event as needed, so this is
+    // a real persisted entity with its own id/lifecycle (create/deactivate/list -- exactly
+    // LedgerAccount's own CRUD shape), not an enum literal. See the file header for the full
+    // placement/optionality rationale.
+    val costCenter = classOf(name = "CostCenter") {
+        stereotype("Entity") { "tableName" to "cost_center"; "kotlinObjectName" to "CostCenterTable" }
+        stereotype("Index") {
+            "columns" to listOf("code")
+            "unique" to true
+            "name" to "uq_cost_center_code"
+        }
+
+        attribute(name = "id", type = "UUID") {
+            stereotype("Id")
+            stereotype("Column") { "columnName" to "id" }
+        }
+        // Open-ended, user-created business key (V0.3.6, Kostenstellen/DATEV KOST2 sense) -- unlike
+        // GemeinnuetzigkeitSphere/ReserveType (fixed enums), a treasurer creates a new CostCenter per
+        // project/campaign/event as needed (e.g. "SOMMERFEST-2027"). Free text, UNIQUE.
+        attribute(name = "code", type = "String") {
+            stereotype("Column") { "columnName" to "code"; "sqlType" to "VARCHAR(50)" }
+        }
+        attribute(name = "name", type = "String") {
+            stereotype("Column") { "columnName" to "name"; "sqlType" to "VARCHAR(200)" }
+        }
+        attribute(name = "description", type = "String") {
+            multiplicity = Multiplicity(0, 1)
+            stereotype("Column") { "columnName" to "description"; "sqlType" to "VARCHAR(1000)" }
+        }
+        // Deactivate instead of delete -- same "never remove a referenced entity" rule as
+        // ledger_account.active.
+        attribute(name = "active", type = "Boolean") {
+            defaultValue = "TRUE"
+            stereotype("Column") { "columnName" to "active" }
+        }
     }
 
     val ledgerAccount = classOf(name = "LedgerAccount") {
@@ -353,5 +408,14 @@ classDiagram(name = "Accounting") {
     association(source = ledgerAccount, target = posting, id = "assoc-ledger-account-posting") {
         source { multiplicity("1") }
         target { multiplicity("0..*"); role = "ledgerAccountId" }
+    }
+
+    // posting.cost_center_id -> cost_center (id): association-derived default matches. Nullable --
+    // V0.3.6: most postings (membership dues, routine bills) have no project/campaign association;
+    // only a booking tied to a specific cost center gets one. See file header for the full
+    // open-ended-entity rationale (unlike sphere, which is a mandatory fixed-enum classification).
+    association(source = costCenter, target = posting, id = "assoc-cost-center-posting") {
+        source { multiplicity("0..1") }
+        target { multiplicity("0..*"); role = "costCenterId" }
     }
 }

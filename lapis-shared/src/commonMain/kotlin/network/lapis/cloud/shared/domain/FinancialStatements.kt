@@ -141,3 +141,51 @@ data class AnnualFinancialStatementDto(
     val periodResult: Decimal,
     val accumulatedResult: Decimal,
 )
+
+/**
+ * One [network.lapis.cloud.shared.domain.CostCenterDto]'s slice of a [CostCenterReportDto] --
+ * same income/expense/result shape as [IncomeStatementDto], but scoped to postings tagged with
+ * this cost center only.
+ */
+@Serializable
+data class CostCenterResultDto(
+    val costCenterId: String,
+    val code: String,
+    val name: String,
+    val incomeLines: List<StatementLineDto>,
+    val expenseLines: List<StatementLineDto>,
+    val totalIncome: Decimal,
+    val totalExpense: Decimal,
+    val result: Decimal,
+)
+
+/**
+ * Kostenstellen-/Projektbuchhaltung report (V0.3.6): the same `INCOME`/`EXPENSE` flow over
+ * `[from, to]` as [IncomeStatementDto], re-aggregated by
+ * [network.lapis.cloud.shared.domain.CostCenterDto] instead of collapsed across all accounts.
+ * This is the payoff of the optional per-posting `Posting.costCenterId` column -- see that DTO's
+ * KDoc and `10-accounting.kuml.kts`'s file header.
+ *
+ * Unlike [FourSphereIncomeStatementDto.spheres] (always exactly four, zero-filled),
+ * [costCenters] is NOT zero-filled for every existing [network.lapis.cloud.shared.domain
+ * .CostCenterDto] -- a cost center is open-ended/user-created and could number in the dozens or
+ * hundreds over the years, so zero-filling all of them would be unbounded noise. Only cost centers
+ * with at least one in-scope `POSTED` posting appear, sorted by [CostCenterResultDto.code].
+ * [unassignedIncome]/[unassignedExpense]/[unassignedResult] aggregate every in-scope posting whose
+ * `costCenterId` is `null` (the common case), so [totalIncome]/[totalExpense]/[result] (the sum of
+ * every [costCenters] entry plus the unassigned bucket) reconciles exactly with the plain
+ * [IncomeStatementDto.result] for the identical `[from, to]` window over the same postings -- same
+ * reconciliation guarantee [FourSphereIncomeStatementDto] documents for sphere.
+ */
+@Serializable
+data class CostCenterReportDto(
+    val from: LocalDate?,
+    val to: LocalDate,
+    val costCenters: List<CostCenterResultDto>,
+    val unassignedIncome: Decimal,
+    val unassignedExpense: Decimal,
+    val unassignedResult: Decimal,
+    val totalIncome: Decimal,
+    val totalExpense: Decimal,
+    val result: Decimal,
+)

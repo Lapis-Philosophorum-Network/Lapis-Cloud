@@ -28,6 +28,14 @@ CREATE TABLE committee (
     CHECK (type IN ('EXECUTIVE_BOARD', 'WORKING_GROUP', 'COMMISSION', 'OTHER', 'GENERAL_ASSEMBLY'))
 );
 
+CREATE TABLE cost_center (
+    id UUID NOT NULL PRIMARY KEY,
+    code VARCHAR(50) NOT NULL,
+    name VARCHAR(200) NOT NULL,
+    description VARCHAR(1000) NULL,
+    active BOOLEAN NOT NULL DEFAULT TRUE
+);
+
 CREATE TABLE ledger_account (
     id UUID NOT NULL PRIMARY KEY,
     account_number VARCHAR(10) NOT NULL,
@@ -222,6 +230,7 @@ CREATE TABLE posting (
     sphere VARCHAR(34) NOT NULL,
     journal_entry_id UUID NOT NULL,
     ledger_account_id UUID NOT NULL,
+    cost_center_id UUID NULL,
     CHECK (side IN ('DEBIT', 'CREDIT')),
     CHECK (sphere IN ('IDEELLER_BEREICH', 'VERMOEGENSVERWALTUNG', 'ZWECKBETRIEB', 'WIRTSCHAFTLICHER_GESCHAEFTSBETRIEB'))
 );
@@ -573,6 +582,7 @@ ALTER TABLE systemic_consensus_resistance ADD CONSTRAINT fk_systemic_consensus_r
 ALTER TABLE journal_entry ADD CONSTRAINT fk_journal_entry_created_by FOREIGN KEY (created_by) REFERENCES member(id);
 ALTER TABLE posting ADD CONSTRAINT fk_posting_journal_entry_id FOREIGN KEY (journal_entry_id) REFERENCES journal_entry(id);
 ALTER TABLE posting ADD CONSTRAINT fk_posting_ledger_account_id FOREIGN KEY (ledger_account_id) REFERENCES ledger_account(id);
+ALTER TABLE posting ADD CONSTRAINT fk_posting_cost_center_id FOREIGN KEY (cost_center_id) REFERENCES cost_center(id);
 
 -- Indexes
 
@@ -645,4 +655,5 @@ CREATE INDEX idx_journal_entry_date ON journal_entry (entry_date);
 CREATE INDEX idx_journal_entry_status ON journal_entry (status);
 CREATE INDEX idx_posting_journal_entry ON posting (journal_entry_id);
 CREATE INDEX idx_posting_ledger_account ON posting (ledger_account_id);
+CREATE UNIQUE INDEX uq_cost_center_code ON cost_center (code);
 

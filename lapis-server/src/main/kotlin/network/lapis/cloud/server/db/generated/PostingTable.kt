@@ -16,6 +16,7 @@ public object PostingTable : Table("posting") {
     public val sphere: Column<GemeinnuetzigkeitSphere> = enumerationByName<GemeinnuetzigkeitSphere>("sphere", 34)
     public val journalEntryId: Column<Uuid> = reference("journal_entry_id", JournalEntryTable.id)
     public val ledgerAccountId: Column<Uuid> = reference("ledger_account_id", LedgerAccountTable.id)
+    public val costCenterId: Column<Uuid?> = optReference("cost_center_id", CostCenterTable.id)
 
     override val primaryKey: PrimaryKey = PrimaryKey(id)
 

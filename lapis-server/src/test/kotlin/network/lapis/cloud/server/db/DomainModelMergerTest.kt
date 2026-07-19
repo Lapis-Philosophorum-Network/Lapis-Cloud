@@ -48,17 +48,18 @@ class DomainModelMergerTest :
 
             val merged = DomainModelMerger.merge(diagrams)
 
-            // 43 distinct `"tableName" to "..."` values across the 11 .kuml.kts files (verified by
+            // 44 distinct `"tableName" to "..."` values across the 11 .kuml.kts files (verified by
             // grepping `grep -oh '"tableName" to "[a-z_]*"' lapis-server/src/main/kuml/*.kuml.kts |
-            // sort -u | wc -l`; 66 total «Entity» declarations minus 23 cross-domain-stub
+            // sort -u | wc -l`; 67 total «Entity» declarations minus 23 cross-domain-stub
             // duplicates: member appears in 11 files (10 dropped, every domain stubs it),
             // motion/meeting/resolution each appear in 4 files (3 dropped each), committee appears
             // in 3 files (2 dropped), document and membership_tier each appear in 2 files (1
             // dropped each) -> 10+3+3+3+2+1+1 = 23 dropped. 10-accounting.kuml.kts (V0.3.1) is what
             // pushed member's count up by one file (its own Member stub) versus the pre-V0.3.1
-            // 22-dropped baseline; it adds 3 new real tables (ledger_account/journal_entry/
-            // posting) and does not touch motion/meeting/resolution/committee/document at all.
-            val distinctTableNames = 43
+            // 22-dropped baseline; it adds 4 real tables (ledger_account/journal_entry/posting from
+            // V0.3.1, plus cost_center added in V0.3.6) and does not touch
+            // motion/meeting/resolution/committee/document at all.
+            val distinctTableNames = 44
 
             val result =
                 UmlToExposedViaErmScriptTransformer().transform(
@@ -124,6 +125,7 @@ class DomainModelMergerTest :
                     "LedgerAccountTable.kt",
                     "JournalEntryTable.kt",
                     "PostingTable.kt",
+                    "CostCenterTable.kt",
                 )
         }
 

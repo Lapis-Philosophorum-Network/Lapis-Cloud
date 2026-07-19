@@ -4,6 +4,9 @@ import dev.kilua.rpc.annotations.RpcService
 import kotlinx.datetime.LocalDate
 import network.lapis.cloud.shared.domain.AnnualFinancialStatementDto
 import network.lapis.cloud.shared.domain.BalanceSheetDto
+import network.lapis.cloud.shared.domain.CostCenterDto
+import network.lapis.cloud.shared.domain.CostCenterInput
+import network.lapis.cloud.shared.domain.CostCenterReportDto
 import network.lapis.cloud.shared.domain.FourSphereIncomeStatementDto
 import network.lapis.cloud.shared.domain.GeneralLedgerDto
 import network.lapis.cloud.shared.domain.IncomeStatementDto
@@ -156,4 +159,29 @@ interface IAccountingService {
         from: LocalDate? = null,
         to: LocalDate? = null,
     ): KassenbuchDto
+
+    /**
+     * Role: TREASURER/ADMIN. Kostenstellen-/Projektbuchhaltung (V0.3.6): creates a new, open-ended
+     * [CostCenterDto] -- see that DTO's KDoc. Rejects a duplicate [CostCenterInput.code] and a
+     * blank [CostCenterInput.code] with `BadRequestException`.
+     */
+    suspend fun createCostCenter(input: CostCenterInput): CostCenterDto
+
+    /** Role: TREASURER/ADMIN. Deactivates (never deletes) a [CostCenterDto]. */
+    suspend fun deactivateCostCenter(id: String): CostCenterDto
+
+    /** Role: TREASURER/BOARD/ADMIN. */
+    suspend fun listCostCenters(activeOnly: Boolean = true): List<CostCenterDto>
+
+    /**
+     * Role: TREASURER/BOARD/ADMIN. Kostenstellen-/Projektbuchhaltung report (V0.3.6): the same
+     * `INCOME`/`EXPENSE` flow over `[from, to]` as [getIncomeStatement] (`from == null` means
+     * "since inception"), re-aggregated by [CostCenterDto] instead of collapsed across all
+     * accounts -- see [CostCenterReportDto] KDoc. Only [JournalEntryStatus.POSTED] postings
+     * contribute -- same "DRAFT is provisional" rule as every other statement method.
+     */
+    suspend fun getCostCenterReport(
+        from: LocalDate? = null,
+        to: LocalDate,
+    ): CostCenterReportDto
 }

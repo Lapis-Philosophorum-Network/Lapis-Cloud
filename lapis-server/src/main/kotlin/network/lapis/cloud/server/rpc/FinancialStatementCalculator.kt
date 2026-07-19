@@ -2,6 +2,8 @@ package network.lapis.cloud.server.rpc
 
 import kotlinx.datetime.LocalDate
 import network.lapis.cloud.shared.domain.BalanceSheetDto
+import network.lapis.cloud.shared.domain.CostCenterReportDto
+import network.lapis.cloud.shared.domain.CostCenterResultDto
 import network.lapis.cloud.shared.domain.FourSphereIncomeStatementDto
 import network.lapis.cloud.shared.domain.GemeinnuetzigkeitSphere
 import network.lapis.cloud.shared.domain.IncomeStatementDto
@@ -151,6 +153,82 @@ internal object FinancialStatementCalculator {
             from = from,
             to = to,
             spheres = spheres,
+            totalIncome = totalIncome,
+            totalExpense = totalExpense,
+            result = totalIncome - totalExpense,
+        )
+    }
+
+    /**
+     * One ledger account's net balance within one cost center (or unassigned, if [costCenterId] is
+     * `null`), carrying the same already-signed [account] shape [SphereAccountBalance] uses -- the
+     * caller (`AccountingService.loadCostCenterAccountBalances`) groups summed `PostingTable` rows
+     * by (costCenterId, ledgerAccountId) instead of by ledgerAccountId alone. [costCenterCode]/
+     * [costCenterName] are `null` iff [costCenterId] is `null`.
+     */
+    data class CostCenterAccountBalance(
+        val costCenterId: String?,
+        val costCenterCode: String?,
+        val costCenterName: String?,
+        val account: AccountBalance,
+    )
+
+    /**
+     * Kostenstellen-/Projektbuchhaltung report (V0.3.6) over `[from, to]`: groups [balances] by
+     * cost center, derives one [CostCenterResultDto] per cost center with at least one in-scope
+     * non-zero-balance line (sorted by code) -- deliberately NOT zero-filled for every existing
+     * cost center, unlike [fourSphereIncomeStatement]'s fixed four-entry zero-fill, because
+     * [network.lapis.cloud.shared.domain.CostCenterDto] is open-ended/user-created and could
+     * number in the dozens/hundreds over time. Every balance whose `costCenterId` is `null` is
+     * aggregated into a separate unassigned bucket instead. Overall totals are
+     * Σ(`costCenters` totals) + the unassigned bucket, which reconciles with the plain,
+     * cost-center-agnostic [incomeStatement] result for the identical `[from, to]` window over the
+     * same postings.
+     */
+    fun costCenterReport(
+        balances: List<CostCenterAccountBalance>,
+        from: LocalDate?,
+        to: LocalDate,
+    ): CostCenterReportDto {
+        val assigned = balances.filter { it.costCenterId != null }
+        val unassigned = balances.filter { it.costCenterId == null }
+
+        val costCenters =
+            assigned
+                .groupBy { Triple(it.costCenterId!!, it.costCenterCode!!, it.costCenterName!!) }
+                .map { (key, group) ->
+                    val (costCenterId, code, name) = key
+                    val accountBalances = group.map { it.account }
+                    val incomeLines = linesOf(accountBalances, LedgerAccountType.INCOME)
+                    val expenseLines = linesOf(accountBalances, LedgerAccountType.EXPENSE)
+                    val totalIncome = incomeLines.sumBalances()
+                    val totalExpense = expenseLines.sumBalances()
+                    CostCenterResultDto(
+                        costCenterId = costCenterId,
+                        code = code,
+                        name = name,
+                        incomeLines = incomeLines,
+                        expenseLines = expenseLines,
+                        totalIncome = totalIncome,
+                        totalExpense = totalExpense,
+                        result = totalIncome - totalExpense,
+                    )
+                }.sortedBy { it.code }
+
+        val unassignedAccountBalances = unassigned.map { it.account }
+        val unassignedIncome = linesOf(unassignedAccountBalances, LedgerAccountType.INCOME).sumBalances()
+        val unassignedExpense = linesOf(unassignedAccountBalances, LedgerAccountType.EXPENSE).sumBalances()
+
+        val totalIncome = costCenters.fold(unassignedIncome) { acc, result -> acc + result.totalIncome }
+        val totalExpense = costCenters.fold(unassignedExpense) { acc, result -> acc + result.totalExpense }
+
+        return CostCenterReportDto(
+            from = from,
+            to = to,
+            costCenters = costCenters,
+            unassignedIncome = unassignedIncome,
+            unassignedExpense = unassignedExpense,
+            unassignedResult = unassignedIncome - unassignedExpense,
             totalIncome = totalIncome,
             totalExpense = totalExpense,
             result = totalIncome - totalExpense,

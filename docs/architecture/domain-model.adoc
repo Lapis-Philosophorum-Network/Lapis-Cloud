@@ -359,6 +359,17 @@ classDiagram(name = "Lapis Cloud Domain Model — Accounting (V0.3.1)") {
         literal(name = "POSTED")
     }
 
+    // Open-ended, user-created cost center/project classification (V0.3.6, DATEV KOST2 sense) --
+    // see the Kostenstellen prose below for the full rationale (create/deactivate/list lifecycle,
+    // same CRUD shape as LedgerAccount).
+    val costCenter = classOf(name = "CostCenter") {
+        attribute(name = "id", type = "UUID")
+        attribute(name = "code", type = "String")
+        attribute(name = "name", type = "String")
+        attribute(name = "description", type = "String")
+        attribute(name = "active", type = "Boolean", defaultValue = "true")
+    }
+
     val ledgerAccount = classOf(name = "LedgerAccount") {
         attribute(name = "id", type = "UUID")
         attribute(name = "accountNumber", type = "String")
@@ -399,6 +410,9 @@ classDiagram(name = "Lapis Cloud Domain Model — Accounting (V0.3.1)") {
         attribute(name = "side", type = postingSide)
         attribute(name = "amount", type = "Decimal")
         attribute(name = "sphere", type = gemeinnuetzigkeitSphere)
+        // Optional (V0.3.6) -- most postings have no project/campaign association. See the
+        // Kostenstellen prose below for the full nullability rationale.
+        attribute(name = "costCenterId", type = "UUID")
     }
 
     association(source = journalEntry, target = posting) {
@@ -409,6 +423,11 @@ classDiagram(name = "Lapis Cloud Domain Model — Accounting (V0.3.1)") {
 
     association(source = ledgerAccount, target = posting) {
         source { multiplicity(spec = "1"); navigable = false }
+        target { multiplicity(spec = "0..*"); role = "postings" }
+    }
+
+    association(source = costCenter, target = posting) {
+        source { multiplicity(spec = "0..1"); navigable = false }
         target { multiplicity(spec = "0..*"); role = "postings" }
     }
 
@@ -455,10 +474,11 @@ ADMIN roles as `getGeneralLedgerAccount`.
 
 Line lists (`StatementLineDto`) omit accounts with a zero net balance in the requested scope — they
 are a derived-from-journal view, not a complete chart-of-accounts listing. Still explicitly out of
-scope (unchanged from V0.3.1's list above): fiscal-year close/Saldenvortrag,
-Kostenstellen (V0.3.6), non-calendar fiscal years. (Mittelverwendungsrechnung/Rücklagen, originally
-listed here as a later non-goal, shipped in V0.3.4 -- see below. Kassenbuch, likewise originally
-listed here as a later non-goal, shipped in V0.3.5 -- see further below.)
+scope (unchanged from V0.3.1's list above): fiscal-year close/Saldenvortrag, non-calendar fiscal
+years. (Mittelverwendungsrechnung/Rücklagen, originally listed here as a later non-goal, shipped in
+V0.3.4 -- see below. Kassenbuch, likewise originally listed here as a later non-goal, shipped in
+V0.3.5 -- see further below. Kostenstellen, likewise originally listed here as a later non-goal,
+shipped in V0.3.6 -- see further below.)
 
 [#four-sphere-separation]
 === Four-sphere Gemeinnützigkeit separation (V0.3.3)
@@ -490,8 +510,9 @@ sphere-neutral — accepted tradeoff, since the four-sphere report below only ag
 
 **No Sammelposten/KOST9 escape bucket**: `GemeinnuetzigkeitSphere` has exactly the four real
 spheres, on purpose — a fifth "unassigned"/collective literal would be a way to *not* assign a
-sphere, which contradicts strict separation. A general cost-center/Kostenstellen allocation
-mechanism remains V0.3.6 scope.
+sphere, which contradicts strict separation. A general-purpose, open-ended cost-center/
+Kostenstellen allocation mechanism (DATEV KOST2, unrelated to this KOST1 sphere) shipped as its own
+`CostCenter` entity in V0.3.6 -- see further below.
 
 **A single `JournalEntry` may span multiple spheres**: no single-sphere-per-entry invariant is
 enforced, because sphere is per-line — a cross-sphere Umbuchung is fully transparent since each
@@ -589,9 +610,10 @@ Explicitly, deliberately out of scope for V0.3.4 (see `UseOfFundsCalculator`/`Re
 the full list, each flagged individually): the §62 Abs.1 Nr.3 freie-Rücklage percentage-cap
 enforcement; automatic application of the §55 Abs.1 Nr.5 Satz 4 small-organization
 (≤45.000 EUR) exemption; any automated "Gemeinnützigkeit lost/retained" verdict or certification;
-§64 AO Freigrenze evaluation (later compliance-bundle territory); general-purpose
-Kostenstellen (V0.3.6); non-calendar fiscal years; and any client/KVision UI (this is a backend-only
-wave). (Kassenbuch, listed here as a later non-goal, shipped in V0.3.5 -- see below.)
+§64 AO Freigrenze evaluation (later compliance-bundle territory); non-calendar fiscal years; and
+any client/KVision UI (this is a backend-only wave). (Kassenbuch, listed here as a later non-goal,
+shipped in V0.3.5 -- see below. General-purpose Kostenstellen, likewise listed here as a later
+non-goal, shipped in V0.3.6 -- see further below.)
 
 === Kassenbuch (V0.3.5, GoBD-Vorstufe)
 
@@ -654,6 +676,57 @@ report.
 
 Explicitly, deliberately out of scope for V0.3.5 (deferred to V0.5's GoBD bundle unless noted
 otherwise): cryptographic tamper-evidence/hash-chaining; formal retention-period enforcement; full
-audit-log infrastructure; TSE (Kassensicherungsverordnung) integration; general-purpose
-Kostenstellen (V0.3.6, unchanged); non-calendar fiscal years; and any client/KVision UI (this is a
-backend-only wave, same as every prior accounting wave).
+audit-log infrastructure; TSE (Kassensicherungsverordnung) integration; non-calendar fiscal years;
+and any client/KVision UI (this is a backend-only wave, same as every prior accounting wave).
+(General-purpose Kostenstellen, listed here as a later non-goal, shipped in V0.3.6 -- see below.)
+
+=== Kostenstellen-/Projektbuchhaltung (V0.3.6)
+
+**`CostCenter` is a new, independent, open-ended entity** (DATEV KOST2 sense) -- unlike the fixed
+`GemeinnuetzigkeitSphere`/`ReserveType` enums above, a treasurer creates a new cost center per
+project/campaign/event as needed (e.g. `SOMMERFEST-2027`, `WINTERHILFE-2027`), so it needs its own
+id/lifecycle rather than a fixed literal set. `CostCenter` (`code`, `name`, `description`, `active`)
+mirrors `LedgerAccount`'s own `accountNumber`+`name` split -- `code` is a free-text, UNIQUE, stable
+business key (the future cross-referencing target for a V0.6 crowdfunding/auction campaign),
+`name` the human-readable display label. Lifecycle is create/deactivate/list only, exactly
+`LedgerAccount`'s own CRUD shape (`createCostCenter`/`deactivateCostCenter`/`listCostCenters`) --
+deactivate, never delete, so historical postings that reference a cost center are never
+invalidated. `createCostCenter` rejects a duplicate `code` (`ConflictException`, same pre-check +
+`ExposedSQLException` backstop idiom as `createLedgerAccount`) and a blank `code`
+(`BadRequestException` -- `code` is free-text user input from a UI form, unlike
+`LedgerAccount.accountNumber`, which in practice is always populated from a fixed SKR42 reference
+list).
+
+**`Posting.costCenterId` is the only schema addition on the existing entities this wave makes** --
+a nullable FK (`posting.cost_center_id`), deliberately the *opposite* default-value/nullability
+policy from `Posting.sphere`: most day-to-day postings (membership dues, routine bills) have no
+project/campaign association, so requiring every posting to carry one would misrepresent how
+rarely a cost center actually applies -- there is no "no room to be unassigned" legal-risk
+rationale here the way there is for sphere. `requireActiveCostCenters` (mirrors
+`requireActiveLedgerAccounts`) validates every referenced `CostCenter` exists (`NotFoundException`)
+and is `active` (`ConflictException`), but -- same "draft is provisional" rule as
+`requireActiveLedgerAccounts` -- is only invoked at `postJournalEntry`/`postDraftEntry` time, never
+`saveDraftEntry`: a treasurer must be able to save an in-progress draft that references a cost
+center they have not finished setting up yet (or that has since been deactivated).
+
+**`getCostCenterReport`** (role: TREASURER/BOARD/ADMIN, same as every other statement method)
+derives a read-only `CostCenterReportDto` over `[from, to]` (`from == null` means "since
+inception"), same `INCOME`/`EXPENSE` flow derivation as `getIncomeStatement`, re-aggregated by cost
+center instead of collapsed across all accounts -- only `POSTED` postings contribute. Unlike
+`FourSphereIncomeStatementDto.spheres` (always exactly four, zero-filled), `costCenters` is **NOT**
+zero-filled for every existing `CostCenter` -- a cost center is open-ended/user-created and could
+number in the dozens or hundreds over the years, so zero-filling all of them would be unbounded
+noise; only cost centers with at least one in-scope posting appear, sorted by `code`. Every posting
+whose `costCenterId` is `null` (the common case) is aggregated into a separate
+`unassignedIncome`/`unassignedExpense`/`unassignedResult` bucket instead, so `totalIncome`/
+`totalExpense`/`result` (the sum of every `costCenters` entry plus the unassigned bucket)
+reconciles exactly with the plain, cost-center-agnostic `getIncomeStatement` result for the
+identical `[from, to]` window over the same postings -- same reconciliation guarantee
+`FourSphereIncomeStatementDto` documents for sphere, and verified as a regression test in
+`AccountingServiceTest`.
+
+Explicitly out of scope for V0.3.6 (see `02 Projekte/Lapis Cloud V0.3.md` for the full wave plan):
+budgets, forecasts, variance/actual-vs-budget tracking; hierarchical/nested cost centers;
+cross-cost-center allocation rules; and any crowdfunding/auction-specific fields or logic -- V0.6 is
+a later, separate wave that will *consume* this classification mechanism (attach campaigns to a
+`CostCenter`), not extend it now.

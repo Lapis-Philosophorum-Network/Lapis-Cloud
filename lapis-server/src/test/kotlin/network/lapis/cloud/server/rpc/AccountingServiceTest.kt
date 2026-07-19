@@ -24,6 +24,7 @@ import kotlinx.datetime.LocalDate
 import network.lapis.cloud.server.db.DatabaseConfig
 import network.lapis.cloud.server.db.DevSeedData
 import network.lapis.cloud.server.db.generated.AccountTable
+import network.lapis.cloud.server.db.generated.CostCenterTable
 import network.lapis.cloud.server.db.generated.JournalEntryTable
 import network.lapis.cloud.server.db.generated.LedgerAccountTable
 import network.lapis.cloud.server.db.generated.MemberTable
@@ -31,6 +32,7 @@ import network.lapis.cloud.server.db.generated.PostingTable
 import network.lapis.cloud.server.security.ForbiddenException
 import network.lapis.cloud.server.security.UnauthenticatedException
 import network.lapis.cloud.shared.domain.AccountRole
+import network.lapis.cloud.shared.domain.CostCenterInput
 import network.lapis.cloud.shared.domain.GemeinnuetzigkeitSphere
 import network.lapis.cloud.shared.domain.JournalEntryInput
 import network.lapis.cloud.shared.domain.JournalEntryStatus
@@ -61,13 +63,14 @@ class AccountingServiceTest :
     FunSpec({
         val createdMemberIds = mutableListOf<Uuid>()
         val createdLedgerAccountIds = mutableListOf<Uuid>()
+        val createdCostCenterIds = mutableListOf<Uuid>()
 
         beforeSpec {
             DatabaseConfig.connect()
             DevSeedData.seedIfEmpty(force = true)
         }
 
-        afterSpec { cleanUpAccountingTestData(createdMemberIds, createdLedgerAccountIds) }
+        afterSpec { cleanUpAccountingTestData(createdMemberIds, createdLedgerAccountIds, createdCostCenterIds) }
 
         fun createTestMember(
             email: String,
@@ -117,8 +120,34 @@ class AccountingServiceTest :
             return id
         }
 
+        /**
+         * Directly inserts a [CostCenterTable] row, bypassing the RPC service -- same "direct DB
+         * insert + tracked for cleanup" idiom as [createLedgerAccount], used by tests that need a
+         * pre-existing cost center without exercising `createCostCenter` itself.
+         */
+        fun createCostCenterDirect(
+            code: String,
+            name: String = "Testkostenstelle $code",
+            active: Boolean = true,
+        ): Uuid {
+            val id = Uuid.random()
+            transaction {
+                CostCenterTable.insert {
+                    it[CostCenterTable.id] = id
+                    it[CostCenterTable.code] = code
+                    it[CostCenterTable.name] = name
+                    it[CostCenterTable.description] = null
+                    it[CostCenterTable.active] = active
+                }
+            }
+            createdCostCenterIds += id
+            return id
+        }
+
+        // Trailing 5th field is costCenterId, empty when null -- kept backward-compatible with
+        // every call site above that never sets PostingInput.costCenterId.
         fun postingsParam(postings: List<PostingInput>): String =
-            postings.joinToString(",") { "${it.ledgerAccountId}:${it.side}:${it.amount}:${it.sphere}" }
+            postings.joinToString(",") { "${it.ledgerAccountId}:${it.side}:${it.amount}:${it.sphere}:${it.costCenterId ?: ""}" }
 
         fun entryParams(
             date: LocalDate,
@@ -2032,6 +2061,458 @@ class AccountingServiceTest :
                 client.get("/test/kassenbuch/$kasse").status shouldBe HttpStatusCode.Unauthorized
             }
         }
+
+        // ── Kostenstellen-/Projektbuchhaltung (V0.3.6) ──────────────────────
+
+        test("treasurer can create a CostCenter; duplicate/blank code rejected; non-treasury forbidden") {
+            testApplication {
+                application {
+                    install(StatusPages) { installAccountingExceptionHandlers() }
+                    routing { registerAccountingTestRoutes() }
+                }
+                val treasurer = createTestMember("acct-treasurer-cc-create@example.org", AccountRole.TREASURER)
+                val plainMember = createTestMember("acct-plain-cc-create@example.org", AccountRole.MEMBER)
+
+                val created =
+                    client
+                        .post("/test/create-cost-center?code=SOMMERFEST-2027&name=Sommerfest2027") {
+                            header("X-Member-Id", treasurer.toString())
+                        }.bodyAsText()
+                val parts = created.split(":")
+                parts[1] shouldBe "SOMMERFEST-2027"
+                parts[3] shouldBe "true"
+                createdCostCenterIds += Uuid.parse(parts[0])
+
+                val duplicate =
+                    client.post("/test/create-cost-center?code=SOMMERFEST-2027&name=Zweitversuch") {
+                        header("X-Member-Id", treasurer.toString())
+                    }
+                duplicate.status shouldBe HttpStatusCode.Conflict
+
+                val blank =
+                    client.post("/test/create-cost-center?code=&name=Leer") { header("X-Member-Id", treasurer.toString()) }
+                blank.status shouldBe HttpStatusCode.BadRequest
+
+                val forbidden =
+                    client.post("/test/create-cost-center?code=SOMMERFEST-2028&name=X") {
+                        header("X-Member-Id", plainMember.toString())
+                    }
+                forbidden.status shouldBe HttpStatusCode.Forbidden
+
+                val unauthenticated = client.post("/test/create-cost-center?code=SOMMERFEST-2029&name=X")
+                unauthenticated.status shouldBe HttpStatusCode.Unauthorized
+            }
+        }
+
+        test("deactivateCostCenter sets active=false; unknown id NotFound; non-treasury forbidden") {
+            testApplication {
+                application {
+                    install(StatusPages) { installAccountingExceptionHandlers() }
+                    routing { registerAccountingTestRoutes() }
+                }
+                val treasurer = createTestMember("acct-treasurer-cc-deactivate@example.org", AccountRole.TREASURER)
+                val plainMember = createTestMember("acct-plain-cc-deactivate@example.org", AccountRole.MEMBER)
+                val costCenter = createCostCenterDirect("WINTERHILFE-2027")
+
+                val forbidden =
+                    client.post("/test/deactivate-cost-center/$costCenter") { header("X-Member-Id", plainMember.toString()) }
+                forbidden.status shouldBe HttpStatusCode.Forbidden
+
+                val deactivated =
+                    client.post("/test/deactivate-cost-center/$costCenter") { header("X-Member-Id", treasurer.toString()) }
+                deactivated.status shouldBe HttpStatusCode.OK
+                deactivated.bodyAsText().split(":")[2] shouldBe "false"
+
+                val notFound =
+                    client.post("/test/deactivate-cost-center/${Uuid.random()}") { header("X-Member-Id", treasurer.toString()) }
+                notFound.status shouldBe HttpStatusCode.NotFound
+            }
+        }
+
+        test("listCostCenters filters by activeOnly; BOARD may read, plain MEMBER is forbidden") {
+            testApplication {
+                application {
+                    install(StatusPages) { installAccountingExceptionHandlers() }
+                    routing { registerAccountingTestRoutes() }
+                }
+                val treasurer = createTestMember("acct-treasurer-cc-list@example.org", AccountRole.TREASURER)
+                val board = createTestMember("acct-board-cc-list@example.org", AccountRole.BOARD)
+                val plainMember = createTestMember("acct-plain-cc-list@example.org", AccountRole.MEMBER)
+                val active = createCostCenterDirect("AKTIV-2027")
+                val inactive = createCostCenterDirect("INAKTIV-2027", active = false)
+
+                val activeOnly =
+                    client.get("/test/list-cost-centers") { header("X-Member-Id", treasurer.toString()) }.bodyAsText()
+                activeOnly.contains(active.toString()) shouldBe true
+                activeOnly.contains(inactive.toString()) shouldBe false
+
+                val all =
+                    client
+                        .get("/test/list-cost-centers?activeOnly=false") { header("X-Member-Id", treasurer.toString()) }
+                        .bodyAsText()
+                all.contains(active.toString()) shouldBe true
+                all.contains(inactive.toString()) shouldBe true
+
+                client
+                    .get("/test/list-cost-centers") { header("X-Member-Id", board.toString()) }
+                    .status shouldBe HttpStatusCode.OK
+                client
+                    .get("/test/list-cost-centers") { header("X-Member-Id", plainMember.toString()) }
+                    .status shouldBe HttpStatusCode.Forbidden
+            }
+        }
+
+        test("postJournalEntry: cost center is optional -- a mix of tagged and untagged postings round-trips correctly") {
+            testApplication {
+                application {
+                    install(StatusPages) { installAccountingExceptionHandlers() }
+                    routing { registerAccountingTestRoutes() }
+                }
+                val treasurer = createTestMember("acct-treasurer-cc-roundtrip@example.org", AccountRole.TREASURER)
+                val kasse = createLedgerAccount("0980", LedgerAccountType.ASSET)
+                val beitraege = createLedgerAccount("4030", LedgerAccountType.INCOME, accountClass = 4)
+                val costCenter = createCostCenterDirect("PROJEKT-ROUNDTRIP")
+
+                val postings =
+                    listOf(
+                        PostingInput(
+                            kasse.toString(),
+                            PostingSide.DEBIT,
+                            BigDecimal("45.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                            costCenterId = costCenter.toString(),
+                        ),
+                        PostingInput(
+                            beitraege.toString(),
+                            PostingSide.CREDIT,
+                            BigDecimal("45.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                            // No cost center -- the common case.
+                        ),
+                    )
+                val posted =
+                    client.post("/test/post-entry?${entryParams(LocalDate(2026, 9, 1), "Projekt-Buchung", postings)}") {
+                        header("X-Member-Id", treasurer.toString())
+                    }
+                posted.status shouldBe HttpStatusCode.OK
+                val entryId = posted.bodyAsText().split(":")[0]
+
+                val fetched =
+                    client
+                        .get("/test/get-entry-cost-centers/$entryId") { header("X-Member-Id", treasurer.toString()) }
+                        .bodyAsText()
+                val lines =
+                    fetched.split("|").associate {
+                        val p = it.split(":")
+                        p[0] to p.drop(1)
+                    }
+                lines.getValue(kasse.toString()) shouldBe
+                    listOf(costCenter.toString(), "PROJEKT-ROUNDTRIP", "Testkostenstelle PROJEKT-ROUNDTRIP")
+                lines.getValue(beitraege.toString()) shouldBe listOf("null", "null", "null")
+            }
+        }
+
+        test("postJournalEntry referencing a nonexistent costCenterId is rejected with NotFound; nothing persisted") {
+            testApplication {
+                application {
+                    install(StatusPages) { installAccountingExceptionHandlers() }
+                    routing { registerAccountingTestRoutes() }
+                }
+                val treasurer = createTestMember("acct-treasurer-cc-missing@example.org", AccountRole.TREASURER)
+                val kasse = createLedgerAccount("0981", LedgerAccountType.ASSET)
+                val beitraege = createLedgerAccount("4031", LedgerAccountType.INCOME, accountClass = 4)
+                val countBefore = transaction { JournalEntryTable.selectAll().count() }
+
+                val postings =
+                    listOf(
+                        PostingInput(
+                            kasse.toString(),
+                            PostingSide.DEBIT,
+                            BigDecimal("10.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                            costCenterId = Uuid.random().toString(),
+                        ),
+                        PostingInput(
+                            beitraege.toString(),
+                            PostingSide.CREDIT,
+                            BigDecimal("10.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
+                    )
+                val response =
+                    client.post("/test/post-entry?${entryParams(LocalDate(2026, 9, 2), "Unbekannte-Kostenstelle", postings)}") {
+                        header("X-Member-Id", treasurer.toString())
+                    }
+                response.status shouldBe HttpStatusCode.NotFound
+
+                val countAfter = transaction { JournalEntryTable.selectAll().count() }
+                countAfter shouldBe countBefore
+            }
+        }
+
+        test("postJournalEntry referencing a deactivated costCenter is rejected with Conflict") {
+            testApplication {
+                application {
+                    install(StatusPages) { installAccountingExceptionHandlers() }
+                    routing { registerAccountingTestRoutes() }
+                }
+                val treasurer = createTestMember("acct-treasurer-cc-inactive@example.org", AccountRole.TREASURER)
+                val kasse = createLedgerAccount("0982", LedgerAccountType.ASSET)
+                val beitraege = createLedgerAccount("4032", LedgerAccountType.INCOME, accountClass = 4)
+                val inactiveCostCenter = createCostCenterDirect("INAKTIV-BUCHUNG", active = false)
+
+                val postings =
+                    listOf(
+                        PostingInput(
+                            kasse.toString(),
+                            PostingSide.DEBIT,
+                            BigDecimal("10.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                            costCenterId = inactiveCostCenter.toString(),
+                        ),
+                        PostingInput(
+                            beitraege.toString(),
+                            PostingSide.CREDIT,
+                            BigDecimal("10.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
+                    )
+                val response =
+                    client.post("/test/post-entry?${entryParams(LocalDate(2026, 9, 3), "Inaktive-Kostenstelle", postings)}") {
+                        header("X-Member-Id", treasurer.toString())
+                    }
+                response.status shouldBe HttpStatusCode.Conflict
+            }
+        }
+
+        test(
+            "saveDraftEntry allows a deactivated costCenter (no active check at draft-save time); " +
+                "postDraftEntry rejects it once posting is attempted",
+        ) {
+            testApplication {
+                application {
+                    install(StatusPages) { installAccountingExceptionHandlers() }
+                    routing { registerAccountingTestRoutes() }
+                }
+                val treasurer = createTestMember("acct-treasurer-cc-draft@example.org", AccountRole.TREASURER)
+                val kasse = createLedgerAccount("0983", LedgerAccountType.ASSET)
+                val beitraege = createLedgerAccount("4033", LedgerAccountType.INCOME, accountClass = 4)
+                val inactiveCostCenter = createCostCenterDirect("ENTWURF-INAKTIV", active = false)
+
+                val postings =
+                    listOf(
+                        PostingInput(
+                            kasse.toString(),
+                            PostingSide.DEBIT,
+                            BigDecimal("15.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                            costCenterId = inactiveCostCenter.toString(),
+                        ),
+                        PostingInput(
+                            beitraege.toString(),
+                            PostingSide.CREDIT,
+                            BigDecimal("15.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
+                    )
+                val draftResponse =
+                    client.post("/test/save-draft?${entryParams(LocalDate(2026, 9, 4), "Entwurf-Kostenstelle", postings)}") {
+                        header("X-Member-Id", treasurer.toString())
+                    }
+                draftResponse.status shouldBe HttpStatusCode.OK
+                val entryId = draftResponse.bodyAsText().split(":")[0]
+
+                val postAttempt = client.post("/test/post-draft/$entryId") { header("X-Member-Id", treasurer.toString()) }
+                postAttempt.status shouldBe HttpStatusCode.Conflict
+            }
+        }
+
+        test(
+            "getCostCenterReport: per-cost-center totals, an untouched cost center is absent (not zero-filled), " +
+                "unassigned bucket + costCenters reconciles with getIncomeStatement, sorted by code",
+        ) {
+            testApplication {
+                application {
+                    install(StatusPages) { installAccountingExceptionHandlers() }
+                    routing { registerAccountingTestRoutes() }
+                }
+                val treasurer = createTestMember("acct-treasurer-cc-report@example.org", AccountRole.TREASURER)
+                val board = createTestMember("acct-board-cc-report@example.org", AccountRole.BOARD)
+                val plainMember = createTestMember("acct-plain-cc-report@example.org", AccountRole.MEMBER)
+                val kasse = createLedgerAccount("0984", LedgerAccountType.ASSET)
+                val beitraege = createLedgerAccount("4034", LedgerAccountType.INCOME, accountClass = 4)
+                val miete = createLedgerAccount("6340", LedgerAccountType.EXPENSE, accountClass = 6)
+                val sommerfest = createCostCenterDirect("Z-SOMMERFEST-2044")
+                val winterhilfe = createCostCenterDirect("A-WINTERHILFE-2044")
+                // Never referenced by any posting -- must be absent from the report, not zero-filled.
+                createCostCenterDirect("UNBENUTZT-2044")
+
+                suspend fun post(
+                    date: LocalDate,
+                    description: String,
+                    postings: List<PostingInput>,
+                ) {
+                    client.post("/test/post-entry?${entryParams(date, description, postings)}") {
+                        header("X-Member-Id", treasurer.toString())
+                    }
+                }
+                // Distinct far-future year, same date-range-isolation idiom as the other report tests.
+                // sommerfest: 100 income.
+                post(
+                    LocalDate(2044, 3, 1),
+                    "Sommerfest-Einnahme",
+                    listOf(
+                        PostingInput(
+                            kasse.toString(),
+                            PostingSide.DEBIT,
+                            BigDecimal("100.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                            costCenterId = sommerfest.toString(),
+                        ),
+                        PostingInput(
+                            beitraege.toString(),
+                            PostingSide.CREDIT,
+                            BigDecimal("100.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                            costCenterId = sommerfest.toString(),
+                        ),
+                    ),
+                )
+                // winterhilfe: 50 income, 20 expense.
+                post(
+                    LocalDate(2044, 3, 2),
+                    "Winterhilfe-Spende",
+                    listOf(
+                        PostingInput(
+                            kasse.toString(),
+                            PostingSide.DEBIT,
+                            BigDecimal("50.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                            costCenterId = winterhilfe.toString(),
+                        ),
+                        PostingInput(
+                            beitraege.toString(),
+                            PostingSide.CREDIT,
+                            BigDecimal("50.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                            costCenterId = winterhilfe.toString(),
+                        ),
+                    ),
+                )
+                post(
+                    LocalDate(2044, 3, 3),
+                    "Winterhilfe-Material",
+                    listOf(
+                        PostingInput(
+                            miete.toString(),
+                            PostingSide.DEBIT,
+                            BigDecimal("20.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                            costCenterId = winterhilfe.toString(),
+                        ),
+                        PostingInput(
+                            kasse.toString(),
+                            PostingSide.CREDIT,
+                            BigDecimal("20.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                            costCenterId = winterhilfe.toString(),
+                        ),
+                    ),
+                )
+                // Unassigned: 30 income, no cost center -- the common case.
+                post(
+                    LocalDate(2044, 3, 4),
+                    "Mitgliedsbeitrag",
+                    listOf(
+                        PostingInput(
+                            kasse.toString(),
+                            PostingSide.DEBIT,
+                            BigDecimal("30.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
+                        PostingInput(
+                            beitraege.toString(),
+                            PostingSide.CREDIT,
+                            BigDecimal("30.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        ),
+                    ),
+                )
+                // DRAFT in range, tagged with a cost center -- must not contribute.
+                client.post(
+                    "/test/save-draft?${
+                        entryParams(
+                            LocalDate(2044, 3, 5),
+                            "Entwurf-Kostenstellenbericht",
+                            listOf(
+                                PostingInput(
+                                    beitraege.toString(),
+                                    PostingSide.CREDIT,
+                                    BigDecimal("999.00"),
+                                    sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                                    costCenterId = sommerfest.toString(),
+                                ),
+                            ),
+                        )
+                    }",
+                ) { header("X-Member-Id", treasurer.toString()) }
+
+                val response =
+                    client
+                        .get("/test/cost-center-report?from=2044-03-01&to=2044-03-31") {
+                            header("X-Member-Id", treasurer.toString())
+                        }.bodyAsText()
+                val (perCostCenterRaw, unassignedRaw, overallRaw) = response.split("#")
+                val rows = perCostCenterRaw.split(";")
+                // UNBENUTZT-2044 never appears -- absent, not zero-filled.
+                rows.none { it.startsWith("UNBENUTZT-2044:") } shouldBe true
+                // Sorted by code: "A-WINTERHILFE-2044" before "Z-SOMMERFEST-2044".
+                rows.map { it.split(":")[0] } shouldBe listOf("A-WINTERHILFE-2044", "Z-SOMMERFEST-2044")
+
+                val winterhilfeParts = rows[0].split(":")
+                winterhilfeParts[1] shouldBe "50.00"
+                winterhilfeParts[2] shouldBe "20.00"
+                winterhilfeParts[3] shouldBe "30.00"
+
+                val sommerfestParts = rows[1].split(":")
+                sommerfestParts[1] shouldBe "100.00"
+                sommerfestParts[2] shouldBe "0"
+                sommerfestParts[3] shouldBe "100.00"
+
+                val unassignedParts = unassignedRaw.split(":")
+                unassignedParts[0] shouldBe "30.00"
+                unassignedParts[1] shouldBe "0"
+                unassignedParts[2] shouldBe "30.00"
+
+                val overallParts = overallRaw.split(":")
+                overallParts[0] shouldBe "180.00" // 100 + 50 + 30
+                overallParts[1] shouldBe "20.00"
+                overallParts[2] shouldBe "160.00"
+
+                // Reconciles with the plain, cost-center-agnostic getIncomeStatement for the same window.
+                val incomeStatement =
+                    client
+                        .get("/test/income-statement?from=2044-03-01&to=2044-03-31") {
+                            header("X-Member-Id", treasurer.toString())
+                        }.bodyAsText()
+                        .split(":")
+                incomeStatement[0] shouldBe overallParts[0]
+                incomeStatement[1] shouldBe overallParts[1]
+                incomeStatement[2] shouldBe overallParts[2]
+
+                // Authorization: BOARD may read, plain MEMBER is forbidden, unauthenticated is unauthorized.
+                client
+                    .get("/test/cost-center-report?from=2044-03-01&to=2044-03-31") { header("X-Member-Id", board.toString()) }
+                    .status shouldBe HttpStatusCode.OK
+                client
+                    .get("/test/cost-center-report?from=2044-03-01&to=2044-03-31") {
+                        header("X-Member-Id", plainMember.toString())
+                    }.status shouldBe HttpStatusCode.Forbidden
+                client
+                    .get("/test/cost-center-report?from=2044-03-01&to=2044-03-31")
+                    .status shouldBe HttpStatusCode.Unauthorized
+            }
+        }
     })
 
 private fun StatusPagesConfig.installAccountingExceptionHandlers() {
@@ -2069,6 +2550,54 @@ private fun Route.registerAccountingTestRoutes() {
                 ),
             )
         call.respondText("${dto.id}:${dto.accountNumber}:${dto.type}:${dto.active}:${dto.reserveType}:${dto.isCashRegister}")
+    }
+    post("/test/create-cost-center") {
+        val service = AccountingService(call)
+        val q = call.request.queryParameters
+        val dto =
+            service.createCostCenter(
+                CostCenterInput(
+                    code = q["code"]!!,
+                    name = q["name"]!!,
+                    description = q["description"],
+                    active = q["active"]?.toBoolean() ?: true,
+                ),
+            )
+        call.respondText("${dto.id}:${dto.code}:${dto.name}:${dto.active}")
+    }
+    post("/test/deactivate-cost-center/{id}") {
+        val service = AccountingService(call)
+        val dto = service.deactivateCostCenter(call.parameters["id"]!!)
+        call.respondText("${dto.id}:${dto.code}:${dto.active}")
+    }
+    get("/test/list-cost-centers") {
+        val service = AccountingService(call)
+        val activeOnly = call.request.queryParameters["activeOnly"]?.toBoolean() ?: true
+        val list = service.listCostCenters(activeOnly)
+        call.respondText(list.joinToString(";") { "${it.id}:${it.code}:${it.active}" })
+    }
+    get("/test/cost-center-report") {
+        val service = AccountingService(call)
+        val q = call.request.queryParameters
+        val dto =
+            service.getCostCenterReport(
+                from = q["from"]?.let { LocalDate.parse(it) },
+                to = LocalDate.parse(q["to"]!!),
+            )
+        val perCostCenter =
+            dto.costCenters.joinToString(";") { "${it.code}:${it.totalIncome}:${it.totalExpense}:${it.result}" }
+        call.respondText(
+            "$perCostCenter#${dto.unassignedIncome}:${dto.unassignedExpense}:${dto.unassignedResult}" +
+                "#${dto.totalIncome}:${dto.totalExpense}:${dto.result}",
+        )
+    }
+    get("/test/get-entry-cost-centers/{id}") {
+        val service = AccountingService(call)
+        val dto = service.getJournalEntry(call.parameters["id"]!!)
+        // Per posting: ledgerAccountId:costCenterId:costCenterCode:costCenterName, pipe-joined.
+        val postingCostCenters =
+            dto.postings.joinToString("|") { "${it.ledgerAccountId}:${it.costCenterId}:${it.costCenterCode}:${it.costCenterName}" }
+        call.respondText(postingCostCenters)
     }
     get("/test/list-ledger-accounts") {
         val service = AccountingService(call)
@@ -2196,6 +2725,7 @@ private suspend fun readJournalEntryInput(call: ApplicationCall): JournalEntryIn
                     side = PostingSide.valueOf(parts[1]),
                     amount = BigDecimal(parts[2]),
                     sphere = GemeinnuetzigkeitSphere.valueOf(parts[3]),
+                    costCenterId = parts.getOrNull(4)?.takeIf { it.isNotBlank() },
                 )
             }
     return JournalEntryInput(
@@ -2213,8 +2743,9 @@ private suspend fun readJournalEntryInput(call: ApplicationCall): JournalEntryIn
 private fun cleanUpAccountingTestData(
     memberIds: List<Uuid>,
     ledgerAccountIds: List<Uuid>,
+    costCenterIds: List<Uuid> = emptyList(),
 ) {
-    if (memberIds.isEmpty() && ledgerAccountIds.isEmpty()) return
+    if (memberIds.isEmpty() && ledgerAccountIds.isEmpty() && costCenterIds.isEmpty()) return
     transaction {
         val journalEntryIds =
             if (memberIds.isNotEmpty()) {
@@ -2228,11 +2759,17 @@ private fun cleanUpAccountingTestData(
         if (ledgerAccountIds.isNotEmpty()) {
             PostingTable.deleteWhere { PostingTable.ledgerAccountId inList ledgerAccountIds }
         }
+        if (costCenterIds.isNotEmpty()) {
+            PostingTable.deleteWhere { PostingTable.costCenterId inList costCenterIds }
+        }
         if (journalEntryIds.isNotEmpty()) {
             JournalEntryTable.deleteWhere { JournalEntryTable.id inList journalEntryIds }
         }
         if (ledgerAccountIds.isNotEmpty()) {
             LedgerAccountTable.deleteWhere { LedgerAccountTable.id inList ledgerAccountIds }
+        }
+        if (costCenterIds.isNotEmpty()) {
+            CostCenterTable.deleteWhere { CostCenterTable.id inList costCenterIds }
         }
         if (memberIds.isNotEmpty()) {
             AccountTable.deleteWhere { AccountTable.memberId inList memberIds }
