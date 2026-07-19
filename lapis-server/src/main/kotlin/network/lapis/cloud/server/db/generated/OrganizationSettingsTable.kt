@@ -20,6 +20,7 @@ public object OrganizationSettingsTable : Table("organization_settings") {
     public val taxExemptionAuthority: Column<String?> = varchar("tax_exemption_authority", 300).nullable()
     public val taxExemptionDate: Column<LocalDate?> = date("tax_exemption_date").nullable()
     public val isPoliticalParty: Column<Boolean> = bool("is_political_party")
+    public val postalMailEnabled: Column<Boolean> = bool("postal_mail_enabled")
 
     override val primaryKey: PrimaryKey = PrimaryKey(id)
 }

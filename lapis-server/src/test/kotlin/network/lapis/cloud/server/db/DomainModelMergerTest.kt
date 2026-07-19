@@ -35,26 +35,26 @@ class DomainModelMergerTest :
         // ── Test 1: merging the real 12 domain scripts ───────────────────────────────────
 
         test(
-            "merging the real 12 domain scripts succeeds and the uml-to-erm -> erm-to-exposed chain " +
+            "merging the real 13 domain scripts succeeds and the uml-to-erm -> erm-to-exposed chain " +
                 "produces exactly one Table file per distinct table name",
         ) {
             val scriptFiles =
                 requireNotNull(KumlModelLoader.kumlSourceDir.listFiles { f -> f.name.endsWith(".kuml.kts") }) {
                     "kUML source dir not found or not a directory: ${KumlModelLoader.kumlSourceDir.absolutePath}"
                 }.sortedBy { it.name }
-            scriptFiles shouldHaveSize 12
+            scriptFiles shouldHaveSize 13
 
             val diagrams = scriptFiles.map { KumlModelLoader.loadUmlDiagram(it) }
 
             val merged = DomainModelMerger.merge(diagrams)
 
-            // 45 distinct `"tableName" to "..."` values across the 12 .kuml.kts files (verified by
+            // 46 distinct `"tableName" to "..."` values across the 13 .kuml.kts files (verified by
             // grepping `grep -oh '"tableName" to "[a-z_]*"' lapis-server/src/main/kuml/*.kuml.kts |
-            // sort -u | wc -l`; 68 total «Entity» declarations minus 23 cross-domain-stub
-            // duplicates: member appears in 11 files (10 dropped, every domain stubs it),
+            // sort -u | wc -l`; 70 total «Entity» declarations minus 24 cross-domain-stub
+            // duplicates: member appears in 12 files (11 dropped, every domain stubs it),
             // motion/meeting/resolution each appear in 4 files (3 dropped each), committee appears
             // in 3 files (2 dropped), document and membership_tier each appear in 2 files (1
-            // dropped each) -> 10+3+3+3+2+1+1 = 23 dropped. 10-accounting.kuml.kts (V0.3.1) is what
+            // dropped each) -> 11+3+3+3+2+1+1 = 24 dropped. 10-accounting.kuml.kts (V0.3.1) is what
             // pushed member's count up by one file (its own Member stub) versus the pre-V0.3.1
             // 22-dropped baseline; it adds 4 real tables (ledger_account/journal_entry/posting from
             // V0.3.1, plus cost_center added in V0.3.6) and does not touch
@@ -63,7 +63,12 @@ class DomainModelMergerTest :
             // (organization_settings), with NO cross-domain Member stub at all (no FK to member) --
             // so it contributes +1 «Entity» declaration and +0 drops versus the V0.3.1 baseline
             // above (44 -> 45).
-            val distinctTableNames = 45
+            // 12-postal-mail.kuml.kts (V0.4.2) adds exactly one more real table
+            // (postal_delivery_log), WITH its own cross-domain Member stub (it has an FK to
+            // member) -- so it contributes +2 «Entity» declarations (the stub + the real table)
+            // and +1 drop (the stub merges into the existing member entity) versus the V0.4.1
+            // baseline above (45 -> 46).
+            val distinctTableNames = 46
 
             val result =
                 UmlToExposedViaErmScriptTransformer().transform(
@@ -131,6 +136,7 @@ class DomainModelMergerTest :
                     "PostingTable.kt",
                     "CostCenterTable.kt",
                     "OrganizationSettingsTable.kt",
+                    "PostalDeliveryLogTable.kt",
                 )
         }
 

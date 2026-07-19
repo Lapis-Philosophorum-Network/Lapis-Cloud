@@ -59,6 +59,7 @@ class OrganizationSettingsServiceTest :
                     it[taxExemptionAuthority] = null
                     it[taxExemptionDate] = null
                     it[isPoliticalParty] = false
+                    it[postalMailEnabled] = false
                 }
             }
         }
@@ -152,6 +153,31 @@ class OrganizationSettingsServiceTest :
                 afterUpdate.bodyAsText() shouldBe "true"
             }
         }
+
+        test("postalMailEnabled defaults to false, round-trips true through update -> get, and is ADMIN-only to set") {
+            testApplication {
+                application {
+                    install(StatusPages) {
+                        exception<ForbiddenException> { call, cause ->
+                            call.respondText(cause.message, status = HttpStatusCode.Forbidden)
+                        }
+                    }
+                    routing { registerOrgSettingsTestRoutes() }
+                }
+
+                val beforeUpdate = client.get("/test/get-postal-mail-enabled") { header("X-Member-Id", TREASURER_ID) }
+                beforeUpdate.bodyAsText() shouldBe "false"
+
+                val forbiddenBoard =
+                    client.post("/test/update?name=X&postalMailEnabled=true") { header("X-Member-Id", BOARD_ID) }
+                forbiddenBoard.status shouldBe HttpStatusCode.Forbidden
+
+                client.post("/test/update?name=Verein%20Y&postalMailEnabled=true") { header("X-Member-Id", ADMIN_ID) }
+
+                val afterUpdate = client.get("/test/get-postal-mail-enabled") { header("X-Member-Id", TREASURER_ID) }
+                afterUpdate.bodyAsText() shouldBe "true"
+            }
+        }
     })
 
 /** Shared throwaway routes for [OrganizationSettingsServiceTest] -- mirrors [AccountingServiceTest]'s own idiom. */
@@ -164,6 +190,10 @@ private fun Route.registerOrgSettingsTestRoutes() {
     get("/test/get-is-political-party") {
         val service = OrganizationSettingsService(call)
         call.respondText(service.getOrganizationSettings().isPoliticalParty.toString())
+    }
+    get("/test/get-postal-mail-enabled") {
+        val service = OrganizationSettingsService(call)
+        call.respondText(service.getOrganizationSettings().postalMailEnabled.toString())
     }
     post("/test/update") {
         val service = OrganizationSettingsService(call)
@@ -181,6 +211,7 @@ private fun Route.registerOrgSettingsTestRoutes() {
                     taxExemptionAuthority = q["taxExemptionAuthority"],
                     taxExemptionDate = q["taxExemptionDate"]?.let { LocalDate.parse(it) },
                     isPoliticalParty = q["isPoliticalParty"]?.toBoolean() ?: false,
+                    postalMailEnabled = q["postalMailEnabled"]?.toBoolean() ?: false,
                 ),
             )
         call.respondText("${dto.name}:${dto.street}:${dto.taxExemptionAuthority}:${dto.taxExemptionDate}")

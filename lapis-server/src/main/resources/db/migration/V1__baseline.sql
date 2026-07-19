@@ -21,6 +21,8 @@ CREATE TABLE document_folder (
 -- data. Exactly one row by convention (see 11-organization-settings.kuml.kts file header) --
 -- seeded unconditionally below (not via DevSeedData, which is opt-in/demo-gated and must never
 -- gate a real capability like letterhead data existing at all).
+-- postal_mail_enabled (V0.4.2): explicit opt-in gate for Letterxpress postal-mail dispatch, see
+-- that column's comment in 11-organization-settings.kuml.kts -- AVV requirement.
 CREATE TABLE organization_settings (
     id UUID NOT NULL PRIMARY KEY,
     name VARCHAR(300) NOT NULL,
@@ -32,7 +34,8 @@ CREATE TABLE organization_settings (
     bank_bic VARCHAR(11) NULL,
     tax_exemption_authority VARCHAR(300) NULL,
     tax_exemption_date DATE NULL,
-    is_political_party BOOLEAN NOT NULL DEFAULT FALSE
+    is_political_party BOOLEAN NOT NULL DEFAULT FALSE,
+    postal_mail_enabled BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 CREATE TABLE committee (
@@ -512,6 +515,18 @@ CREATE TABLE election_ballot_selection (
     option_id UUID NOT NULL
 );
 
+-- V0.4.2 Letterxpress postal-mail dispatch: one row per physical-letter dispatch attempt.
+CREATE TABLE postal_delivery_log (
+    id UUID NOT NULL PRIMARY KEY,
+    document_reference VARCHAR(300) NOT NULL,
+    dispatched_at TIMESTAMP NOT NULL,
+    status VARCHAR(6) NOT NULL,
+    provider_reference VARCHAR(200) NULL,
+    error_message VARCHAR(1000) NULL,
+    recipient_member_id UUID NOT NULL,
+    CHECK (status IN ('QUEUED', 'SENT', 'FAILED'))
+);
+
 -- Foreign Keys
 
 ALTER TABLE member ADD CONSTRAINT fk_member_membership_tier_id FOREIGN KEY (membership_tier_id) REFERENCES membership_tier(id);
@@ -607,6 +622,7 @@ ALTER TABLE journal_entry ADD CONSTRAINT fk_journal_entry_donor_member_id FOREIG
 ALTER TABLE posting ADD CONSTRAINT fk_posting_journal_entry_id FOREIGN KEY (journal_entry_id) REFERENCES journal_entry(id);
 ALTER TABLE posting ADD CONSTRAINT fk_posting_ledger_account_id FOREIGN KEY (ledger_account_id) REFERENCES ledger_account(id);
 ALTER TABLE posting ADD CONSTRAINT fk_posting_cost_center_id FOREIGN KEY (cost_center_id) REFERENCES cost_center(id);
+ALTER TABLE postal_delivery_log ADD CONSTRAINT fk_postal_delivery_log_recipient_member_id FOREIGN KEY (recipient_member_id) REFERENCES member(id);
 
 -- Indexes
 
@@ -680,6 +696,7 @@ CREATE INDEX idx_journal_entry_status ON journal_entry (status);
 CREATE INDEX idx_posting_journal_entry ON posting (journal_entry_id);
 CREATE INDEX idx_posting_ledger_account ON posting (ledger_account_id);
 CREATE UNIQUE INDEX uq_cost_center_code ON cost_center (code);
+CREATE INDEX idx_postal_delivery_log_recipient ON postal_delivery_log (recipient_member_id);
 
 -- V0.4.1 Serienbrief/PDF engine: exactly one organization_settings row must exist from first
 -- migration onward, in every environment (not just LAPIS_SEED_DEMO_DATA=true demo deployments) --

@@ -17,6 +17,7 @@ import io.ktor.server.routing.get
 import io.ktor.server.routing.routing
 import network.lapis.cloud.server.db.DatabaseConfig
 import network.lapis.cloud.server.db.DevSeedData
+import network.lapis.cloud.server.postal.LetterxpressPostalMailProvider
 import network.lapis.cloud.server.routes.registerDocumentRoutes
 import network.lapis.cloud.server.routes.registerDsgvoRoutes
 import network.lapis.cloud.server.routes.registerMailmergeRoutes
@@ -31,6 +32,7 @@ import network.lapis.cloud.server.rpc.MailingService
 import network.lapis.cloud.server.rpc.MemberService
 import network.lapis.cloud.server.rpc.OrganizationSettingsService
 import network.lapis.cloud.server.rpc.PingService
+import network.lapis.cloud.server.rpc.PostalMailService
 import network.lapis.cloud.server.rpc.SystemicConsensusService
 import network.lapis.cloud.server.security.ForbiddenException
 import network.lapis.cloud.server.security.UnauthenticatedException
@@ -46,6 +48,7 @@ import network.lapis.cloud.shared.rpc.IMailingService
 import network.lapis.cloud.shared.rpc.IMemberService
 import network.lapis.cloud.shared.rpc.IOrganizationSettingsService
 import network.lapis.cloud.shared.rpc.IPingService
+import network.lapis.cloud.shared.rpc.IPostalMailService
 import network.lapis.cloud.shared.rpc.ISystemicConsensusService
 import java.io.File
 
@@ -65,6 +68,12 @@ fun Application.module() {
 
     val documentStorageRoot = File(System.getenv("LAPIS_DOCUMENT_STORAGE_ROOT") ?: "build/document-storage")
     documentStorageRoot.mkdirs()
+
+    // V0.4.2 Letterxpress postal-mail dispatch -- see LetterxpressPostalMailProvider KDoc for the
+    // sandbox/live-mode default and the "wire format not verified" disclosure. Constructed once
+    // here (not per-request) with its own env-var-derived defaults, same lifecycle as
+    // documentStorageRoot.
+    val postalMailProvider = LetterxpressPostalMailProvider()
 
     install(CallLogging)
     install(Compression)
@@ -93,6 +102,7 @@ fun Application.module() {
         registerService(ISystemicConsensusService::class) { call -> SystemicConsensusService(call) }
         registerService(IAccountingService::class) { call -> AccountingService(call) }
         registerService(IOrganizationSettingsService::class) { call -> OrganizationSettingsService(call) }
+        registerService(IPostalMailService::class) { call -> PostalMailService(call, documentStorageRoot, postalMailProvider) }
     }
 
     routing {

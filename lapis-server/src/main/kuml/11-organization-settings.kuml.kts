@@ -18,6 +18,11 @@
 // neither a cross-domain Member stub nor a PersonalDataRegistry.noPersonalDataAllowlist entry
 // (PersonalDataCoverageTest's information_schema walk only inspects FKs that reference
 // member(id); this table has none).
+//
+// V0.4.2 (Letterxpress postal-mail dispatch) adds one more field: `postalMailEnabled` -- an
+// explicit opt-in gate for the new postal-dispatch path, NOT NULL, defaults to FALSE. See that
+// attribute's own comment below and `network.lapis.cloud.server.rpc.PostalMailService` KDoc for
+// the runtime gate it backs.
 import dev.kuml.profile.erm.ermMappingProfile
 import dev.kuml.uml.Multiplicity
 import dev.kuml.uml.dsl.applyProfile
@@ -82,6 +87,18 @@ classDiagram(name = "OrganizationSettings") {
         attribute(name = "isPoliticalParty", type = "Boolean") {
             defaultValue = "FALSE"
             stereotype("Column") { "columnName" to "is_political_party" }
+        }
+        // V0.4.2 Letterxpress postal-mail dispatch: explicit opt-in gate, NOT NULL, defaults to
+        // FALSE. Postal dispatch sends a member's postal address (PII) to a third-party data
+        // processor (Letterxpress) -- enabling this in real operation requires the association/
+        // party to have a Data Processing Agreement (Auftragsverarbeitungsvertrag/AVV) with
+        // Letterxpress in place FIRST (organizational/legal precondition, not something code can
+        // enforce). ADMIN-only to set, same tier as every other OrganizationSettings field (via
+        // updateOrganizationSettings). See network.lapis.cloud.server.rpc.PostalMailService
+        // KDoc for the runtime gate this backs.
+        attribute(name = "postalMailEnabled", type = "Boolean") {
+            defaultValue = "FALSE"
+            stereotype("Column") { "columnName" to "postal_mail_enabled" }
         }
     }
 }

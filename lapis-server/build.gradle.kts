@@ -1,5 +1,10 @@
 plugins {
     alias(libs.plugins.kotlin.jvm)
+    // V0.4.2 Letterxpress postal-mail dispatch: first `@Serializable` classes declared directly in
+    // this module (LetterxpressPostalMailProvider's request/response wire-shape data classes) --
+    // without the compiler plugin, `@Serializable` compiles but generates no serializer at runtime,
+    // failing with a SerializationException the first time one of these classes is (de)serialized.
+    alias(libs.plugins.kotlin.serialization)
     application
 }
 
@@ -27,6 +32,14 @@ dependencies {
     implementation(libs.ktor.server.status.pages)
     implementation(libs.logback.classic)
 
+    // V0.4.2 Letterxpress postal-mail dispatch — see gradle/libs.versions.toml for why these are
+    // new (first outbound-HTTP-client need in this repo). ktor.serialization.kotlinx.json is
+    // already declared above and is shared by the client- and server-side content-negotiation
+    // plugins alike.
+    implementation(libs.ktor.client.core)
+    implementation(libs.ktor.client.cio)
+    implementation(libs.ktor.client.content.negotiation)
+
     implementation(libs.exposed.core)
     implementation(libs.exposed.jdbc)
     implementation(libs.exposed.dao)
@@ -43,6 +56,9 @@ dependencies {
     testImplementation(libs.kotest.assertions.core)
     testImplementation(libs.kotest.property)
     testImplementation(libs.h2)
+    // Test-only fake HTTP responder for LetterxpressPostalMailProviderTest — see
+    // gradle/libs.versions.toml.
+    testImplementation(libs.ktor.client.mock)
 
     // kUML MDA persistence pipeline (ADR-0016) — see gradle/libs.versions.toml for why these
     // are test-scoped only. Drives SchemaDriftTest: evaluates src/main/kuml/*.kuml.kts via

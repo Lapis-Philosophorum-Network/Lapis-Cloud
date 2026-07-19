@@ -25,6 +25,15 @@ import kotlinx.serialization.Serializable
  * `false` (default, gemeinnuetziger Verein, § 10b EStG deduction) or `true` (political party,
  * § 34g EStG tax credit) -- see `network.lapis.cloud.server.pdf.SpendenbescheinigungPdfGenerator`
  * KDoc for why this branch exists and what remains an unverified simplification.
+ *
+ * [postalMailEnabled] (V0.4.2 Letterxpress postal-mail dispatch) is the explicit opt-in gate for
+ * the whole postal-dispatch feature -- **defaults to `false`/off**. Postal dispatch sends a
+ * member's postal address (PII) to Letterxpress, a third-party data processor: enabling this in
+ * real operation requires the association/party to have a Data Processing Agreement
+ * (Auftragsverarbeitungsvertrag/AVV) with Letterxpress **in place first** -- an organizational/
+ * legal precondition this codebase cannot verify or enforce. ADMIN-only to set (same tier as every
+ * other field, via [network.lapis.cloud.shared.rpc.IOrganizationSettingsService.updateOrganizationSettings]).
+ * See `network.lapis.cloud.server.rpc.PostalMailService` KDoc for the runtime gate this backs.
  */
 @Serializable
 data class OrganizationSettingsDto(
@@ -39,6 +48,7 @@ data class OrganizationSettingsDto(
     val taxExemptionAuthority: String?,
     val taxExemptionDate: LocalDate?,
     val isPoliticalParty: Boolean = false,
+    val postalMailEnabled: Boolean = false,
 )
 
 /** Replaces every field of the single [OrganizationSettingsDto] row wholesale (no partial update). */
@@ -54,4 +64,6 @@ data class OrganizationSettingsInput(
     val taxExemptionAuthority: String? = null,
     val taxExemptionDate: LocalDate? = null,
     val isPoliticalParty: Boolean = false,
+    /** See [OrganizationSettingsDto.postalMailEnabled] KDoc -- AVV requirement applies here too. */
+    val postalMailEnabled: Boolean = false,
 )

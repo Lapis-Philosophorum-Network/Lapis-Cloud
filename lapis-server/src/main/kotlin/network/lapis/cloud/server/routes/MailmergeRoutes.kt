@@ -101,9 +101,15 @@ private const val MAX_BODY_TEXT_LENGTH = 20_000
  * fixed -- the primary access path for Treasurer/Board remains these dedicated routes, not the
  * generic Document browser, so the restriction does not block the main workflow.
  *
- * **Out of scope this wave**: any Letterxpress/Pingen/postal-dispatch API integration (V0.4.2,
- * separate wave) -- these routes only ever produce PDF bytes and expose them over HTTP, ready for
- * that later wave to pick up and dispatch. No bulk/batch mail-merge UI, no KVision client screens.
+ * **V0.4.2 (Letterxpress postal-mail dispatch)** reuses [generateBeitragsrechnung]/
+ * [generateSpendenbescheinigung]/[loadMailmergeMember]/[loadOrganizationSettingsDto]/
+ * [requireCompleteAddress] (all `internal`, not `private`, for exactly this reason) from
+ * [network.lapis.cloud.server.rpc.PostalMailService] rather than duplicating PDF generation --
+ * see that class's KDoc. Einladung postal dispatch does NOT reuse [generateEinladung] (which
+ * renders one combined multi-page PDF for all recipients at once); it calls
+ * [network.lapis.cloud.server.pdf.EinladungPdfGenerator.generate] directly, once per recipient.
+ *
+ * **Out of scope this wave**: no bulk/batch mail-merge UI, no KVision client screens.
  */
 fun Route.registerMailmergeRoutes(storageRoot: File) {
     get("/api/mailmerge/contributions/{contributionId}/invoice.pdf") {
@@ -115,8 +121,8 @@ fun Route.registerMailmergeRoutes(storageRoot: File) {
         val current = resolveCurrentMember(call)
         current.requireRole(*FINANCIAL_DOC_ROLES)
         try {
-            val (bytes, fileName) = generateBeitragsrechnung(contributionId, storageRoot, current.memberId)
-            call.respondPdf(bytes, fileName)
+            val doc = generateBeitragsrechnung(contributionId, storageRoot, current.memberId)
+            call.respondPdf(doc.bytes, doc.fileName)
         } catch (e: NotFoundException) {
             call.respond(HttpStatusCode.NotFound, e.message)
         } catch (e: ConflictException) {
@@ -133,8 +139,8 @@ fun Route.registerMailmergeRoutes(storageRoot: File) {
         val current = resolveCurrentMember(call)
         current.requireRole(*FINANCIAL_DOC_ROLES)
         try {
-            val (bytes, fileName) = generateSpendenbescheinigung(journalEntryId, storageRoot, current.memberId)
-            call.respondPdf(bytes, fileName)
+            val doc = generateSpendenbescheinigung(journalEntryId, storageRoot, current.memberId)
+            call.respondPdf(doc.bytes, doc.fileName)
         } catch (e: NotFoundException) {
             call.respond(HttpStatusCode.NotFound, e.message)
         } catch (e: ConflictException) {
@@ -217,11 +223,23 @@ fun Route.registerMailmergeRoutes(storageRoot: File) {
     }
 }
 
-private fun generateBeitragsrechnung(
+/**
+ * One PDF produced by [generateBeitragsrechnung]/[generateSpendenbescheinigung], plus the
+ * already-resolved recipient [MemberDto] -- V0.4.2's [network.lapis.cloud.server.rpc.PostalMailService]
+ * reuses these two generators for postal dispatch and needs the recipient's address without a
+ * duplicate DB lookup.
+ */
+internal data class GeneratedMailmergeDocument(
+    val bytes: ByteArray,
+    val fileName: String,
+    val recipient: MemberDto,
+)
+
+internal fun generateBeitragsrechnung(
     contributionId: Uuid,
     storageRoot: File,
     uploadedBy: Uuid,
-): Pair<ByteArray, String> =
+): GeneratedMailmergeDocument =
     transaction {
         val row =
             ContributionTable
@@ -264,14 +282,14 @@ private fun generateBeitragsrechnung(
             uploadedBy = uploadedBy,
             accessLevel = DocumentAccessLevel.ADMIN_ONLY,
         )
-        bytes to fileName
+        GeneratedMailmergeDocument(bytes, fileName, member)
     }
 
-private fun generateSpendenbescheinigung(
+internal fun generateSpendenbescheinigung(
     journalEntryId: Uuid,
     storageRoot: File,
     uploadedBy: Uuid,
-): Pair<ByteArray, String> =
+): GeneratedMailmergeDocument =
     transaction {
         val entryRow =
             JournalEntryTable
@@ -338,7 +356,7 @@ private fun generateSpendenbescheinigung(
             uploadedBy = uploadedBy,
             accessLevel = DocumentAccessLevel.ADMIN_ONLY,
         )
-        bytes to fileName
+        GeneratedMailmergeDocument(bytes, fileName, donor)
     }
 
 private fun generateEinladung(
@@ -359,7 +377,7 @@ private fun generateEinladung(
     }
 
 /** Left-joins [AccountTable] (a member may have no account row at all) -- `role` defaults to `MEMBER` when absent; irrelevant to PDF content either way. */
-private fun loadMailmergeMember(memberId: Uuid): MemberDto? =
+internal fun loadMailmergeMember(memberId: Uuid): MemberDto? =
     (MemberTable leftJoin AccountTable)
         .selectAll()
         .where { MemberTable.id eq memberId }
@@ -403,7 +421,7 @@ private val FILENAME_UNSAFE_CHARS = charArrayOf('"', '\\', '/', ':', '*', '?', '
 private const val FILENAME_MAX_LENGTH = 100
 
 /** See [registerMailmergeRoutes] KDoc "Completeness guards". */
-private fun requireCompleteAddress(member: MemberDto) {
+internal fun requireCompleteAddress(member: MemberDto) {
     if (member.street == null || member.postalCode == null || member.city == null || member.country == null) {
         throw ConflictException("Member ${member.id} has no complete postal address on file")
     }
@@ -411,7 +429,9 @@ private fun requireCompleteAddress(member: MemberDto) {
 
 // Delegates to the single shared mapper (network.lapis.cloud.server.rpc.toOrganizationSettingsDto)
 // -- see that function's KDoc for why the field-by-field mapping is not duplicated here anymore.
-private fun loadOrganizationSettingsDto(): OrganizationSettingsDto =
+// internal (not private): network.lapis.cloud.server.rpc.PostalMailService (V0.4.2) reuses this
+// too, to avoid a third field-by-field mapping.
+internal fun loadOrganizationSettingsDto(): OrganizationSettingsDto =
     OrganizationSettingsTable
         .selectAll()
         .where { OrganizationSettingsTable.id eq ORGANIZATION_SETTINGS_ID }
