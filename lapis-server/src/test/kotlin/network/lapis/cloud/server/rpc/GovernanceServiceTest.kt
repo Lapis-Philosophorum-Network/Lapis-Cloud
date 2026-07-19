@@ -26,6 +26,7 @@ import network.lapis.cloud.server.db.DevSeedData
 import network.lapis.cloud.server.db.generated.AccountTable
 import network.lapis.cloud.server.db.generated.AgendaItemTable
 import network.lapis.cloud.server.db.generated.AttendanceTable
+import network.lapis.cloud.server.db.generated.BoardMembershipTable
 import network.lapis.cloud.server.db.generated.CommitteeMembershipTable
 import network.lapis.cloud.server.db.generated.CommitteeTable
 import network.lapis.cloud.server.db.generated.LtrBalanceTable
@@ -33,6 +34,7 @@ import network.lapis.cloud.server.db.generated.MeetingTable
 import network.lapis.cloud.server.db.generated.MemberTable
 import network.lapis.cloud.server.db.generated.MotionTable
 import network.lapis.cloud.server.db.generated.ResolutionTable
+import network.lapis.cloud.server.db.generated.TransparenzregisterReminderTable
 import network.lapis.cloud.server.db.generated.VoteBallotTable
 import network.lapis.cloud.server.db.generated.VoteOptionTable
 import network.lapis.cloud.server.db.generated.VoteTable
@@ -1704,6 +1706,17 @@ private fun cleanUpGovernanceTestData(
             CommitteeTable.deleteWhere { CommitteeTable.id inList committeeIds }
         }
         if (memberIds.isNotEmpty()) {
+            // V0.5.2: addCommitteeMember/endCommitteeMembership on an EXECUTIVE_BOARD Committee
+            // (several tests in this file use one, see createTestCommittee helpers) now hook into
+            // BoardMembershipEvents.recordBoardJoin/recordBoardLeave, auto-creating
+            // board_membership/transparenzregister_reminder rows -- both carry a member_id FK that
+            // must be cleared before MemberTable rows are deleted, same as
+            // cleanUpElectionTestData/cleanUpBoardMembershipTestData already do.
+            TransparenzregisterReminderTable.update({ TransparenzregisterReminderTable.resolvedBy inList memberIds }) {
+                it[resolvedBy] = null
+            }
+            TransparenzregisterReminderTable.deleteWhere { TransparenzregisterReminderTable.memberId inList memberIds }
+            BoardMembershipTable.deleteWhere { BoardMembershipTable.memberId inList memberIds }
             LtrBalanceTable.deleteWhere { LtrBalanceTable.memberId inList memberIds }
             AccountTable.deleteWhere { AccountTable.memberId inList memberIds }
             MemberTable.deleteWhere { MemberTable.id inList memberIds }

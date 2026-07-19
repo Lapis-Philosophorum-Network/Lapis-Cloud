@@ -22,6 +22,11 @@ enum class AccountRole { MEMBER, BOARD, TREASURER, ADMIN }
  * mail-merge a member's postal address) and reused as-is by V0.4.2's later postal (Letterxpress)
  * dispatch. All default to `null` so existing call sites stay source-compatible. Not every member
  * has provided an address yet, and an email-only member may never need one.
+ *
+ * [dateOfBirth]/[nationality] (V0.5.2) are the two beneficial-owner fields a Transparenzregister
+ * (§20 GwG) entry requires beyond name/residence (already covered by the address fields above) --
+ * see `network.lapis.cloud.shared.domain.BeneficialOwnerDataGapDto`. Both default to `null` for the
+ * same source-compatibility reason as the address fields; not every member is a board member.
  */
 @Serializable
 data class MemberDto(
@@ -35,6 +40,8 @@ data class MemberDto(
     val postalCode: String? = null,
     val city: String? = null,
     val country: String? = null,
+    val dateOfBirth: LocalDate? = null,
+    val nationality: String? = null,
 )
 
 /**

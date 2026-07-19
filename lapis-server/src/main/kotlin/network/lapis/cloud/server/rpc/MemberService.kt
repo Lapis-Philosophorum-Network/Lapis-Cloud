@@ -1,6 +1,7 @@
 package network.lapis.cloud.server.rpc
 
 import io.ktor.server.application.ApplicationCall
+import kotlinx.datetime.LocalDate
 import network.lapis.cloud.server.db.generated.AccountTable
 import network.lapis.cloud.server.db.generated.MemberTable
 import network.lapis.cloud.server.security.ForbiddenException
@@ -72,6 +73,29 @@ class MemberService(
                 .toMemberDto()
         }
     }
+
+    override suspend fun updateMemberBeneficialOwnerData(
+        memberId: String,
+        dateOfBirth: LocalDate?,
+        nationality: String?,
+    ): MemberDto {
+        val current = resolveCurrentMember(call)
+        val targetId = runCatching { Uuid.parse(memberId) }.getOrElse { throw NotFoundException("Member $memberId not found") }
+        if (targetId != current.memberId && !current.isPrivileged) throw ForbiddenException()
+        return transaction {
+            val updated =
+                MemberTable.update({ MemberTable.id eq targetId }) {
+                    it[MemberTable.dateOfBirth] = dateOfBirth
+                    it[MemberTable.nationality] = nationality
+                }
+            if (updated == 0) throw NotFoundException("Member $memberId not found")
+            (MemberTable innerJoin AccountTable)
+                .selectAll()
+                .where { MemberTable.id eq targetId }
+                .single()
+                .toMemberDto()
+        }
+    }
 }
 
 fun ResultRow.toMemberDto(): MemberDto =
@@ -86,4 +110,6 @@ fun ResultRow.toMemberDto(): MemberDto =
         postalCode = this[MemberTable.postalCode],
         city = this[MemberTable.city],
         country = this[MemberTable.country],
+        dateOfBirth = this[MemberTable.dateOfBirth],
+        nationality = this[MemberTable.nationality],
     )

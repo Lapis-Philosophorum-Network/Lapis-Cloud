@@ -7,6 +7,7 @@ import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import network.lapis.cloud.server.db.generated.AgendaItemTable
 import network.lapis.cloud.server.db.generated.AttendanceTable
+import network.lapis.cloud.server.db.generated.BoardMembershipTable
 import network.lapis.cloud.server.db.generated.CommitteeMembershipTable
 import network.lapis.cloud.server.db.generated.CommitteeTable
 import network.lapis.cloud.server.db.generated.MeetingTable
@@ -32,6 +33,7 @@ import network.lapis.cloud.shared.domain.CommitteeDto
 import network.lapis.cloud.shared.domain.CommitteeInput
 import network.lapis.cloud.shared.domain.CommitteeMembershipDto
 import network.lapis.cloud.shared.domain.CommitteeMembershipInput
+import network.lapis.cloud.shared.domain.CommitteeType
 import network.lapis.cloud.shared.domain.MeetingDetailDto
 import network.lapis.cloud.shared.domain.MeetingDto
 import network.lapis.cloud.shared.domain.MeetingInput
@@ -195,8 +197,9 @@ class GovernanceService(
         val gId = committeeId.toCommitteeUuid()
         val memberId = input.memberId.toMemberUuid()
         return transaction {
-            CommitteeTable.selectAll().where { CommitteeTable.id eq gId }.singleOrNull()
-                ?: throw NotFoundException("Committee $committeeId not found")
+            val committeeRow =
+                CommitteeTable.selectAll().where { CommitteeTable.id eq gId }.singleOrNull()
+                    ?: throw NotFoundException("Committee $committeeId not found")
             val activeExists =
                 CommitteeMembershipTable
                     .selectAll()
@@ -219,6 +222,14 @@ class GovernanceService(
                 it[since] = input.since
                 it[until] = null
             }
+            // V0.5.2 §20 GwG: seating into an EXECUTIVE_BOARD Committee via this governance/
+            // co-option path is exactly the same real-world Vorstandsaenderung as an
+            // ElectionService.tally winner seating -- keep the Transparenzregister
+            // beneficial-owner roster/reminder mechanism in step, guarded on the Committee's
+            // type (NOT isPoliticalParty, see BoardMembershipEvents KDoc).
+            if (committeeRow[CommitteeTable.type] == CommitteeType.EXECUTIVE_BOARD) {
+                BoardMembershipEvents.recordBoardJoin(memberId, input.role, input.since, nowLocalDateTime())
+            }
             (CommitteeMembershipTable innerJoin MemberTable)
                 .selectAll()
                 .where { CommitteeMembershipTable.id eq id }
@@ -235,11 +246,38 @@ class GovernanceService(
         current.requireRole(*BOARD_ROLES)
         val id = membershipId.toMembershipUuid()
         return transaction {
+            val membershipRow =
+                CommitteeMembershipTable.selectAll().where { CommitteeMembershipTable.id eq id }.singleOrNull()
+                    ?: throw NotFoundException("CommitteeMembership $membershipId not found")
             val updated =
                 CommitteeMembershipTable.update({ CommitteeMembershipTable.id eq id }) {
                     it[CommitteeMembershipTable.until] = until
                 }
             if (updated == 0) throw NotFoundException("CommitteeMembership $membershipId not found")
+            // V0.5.2 §20 GwG: mirror image of the addCommitteeMember hook above -- ending a
+            // membership in an EXECUTIVE_BOARD Committee via this governance path (removal,
+            // resignation processed through the ordinary Committee-membership flow rather than
+            // BoardMembershipService.endBoardMembership) is a genuine Vorstandsaenderung too. Only
+            // acts if a corresponding open BoardMembershipTable row actually exists for this member
+            // -- it may not, e.g. if the seat was never tracked there in the first place.
+            val committeeType =
+                CommitteeTable
+                    .selectAll()
+                    .where { CommitteeTable.id eq membershipRow[CommitteeMembershipTable.committeeId] }
+                    .single()[CommitteeTable.type]
+            if (committeeType == CommitteeType.EXECUTIVE_BOARD) {
+                val openBoardMembershipId =
+                    BoardMembershipTable
+                        .selectAll()
+                        .where {
+                            (BoardMembershipTable.memberId eq membershipRow[CommitteeMembershipTable.memberId]) and
+                                (BoardMembershipTable.endedAt.isNull())
+                        }.singleOrNull()
+                        ?.get(BoardMembershipTable.id)
+                if (openBoardMembershipId != null) {
+                    BoardMembershipEvents.recordBoardLeave(openBoardMembershipId, until, nowLocalDateTime())
+                }
+            }
             (CommitteeMembershipTable innerJoin MemberTable)
                 .selectAll()
                 .where { CommitteeMembershipTable.id eq id }

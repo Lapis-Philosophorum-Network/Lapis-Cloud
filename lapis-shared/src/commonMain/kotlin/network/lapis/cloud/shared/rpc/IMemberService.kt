@@ -1,6 +1,7 @@
 package network.lapis.cloud.shared.rpc
 
 import dev.kilua.rpc.annotations.RpcService
+import kotlinx.datetime.LocalDate
 import network.lapis.cloud.shared.domain.MemberDto
 import network.lapis.cloud.shared.domain.MemberSummaryDto
 
@@ -41,5 +42,21 @@ interface IMemberService {
         postalCode: String?,
         city: String?,
         country: String?,
+    ): MemberDto
+
+    /**
+     * V0.5.2: the only production write path for [MemberDto.dateOfBirth]/[MemberDto.nationality]
+     * -- the two beneficial-owner fields a Transparenzregister (§20 GwG) entry requires beyond the
+     * address fields [updateMemberAddress] already covers (see
+     * `network.lapis.cloud.shared.domain.BeneficialOwnerDataGapDto`). Same self-or-privileged
+     * authorization as [updateMemberAddress]. Both fields are nullable and passed together; passing
+     * `null` for a field clears it. Throws `ForbiddenException` if the caller is neither the target
+     * member nor privileged, `NotFoundException` if `memberId` does not resolve to an existing
+     * member.
+     */
+    suspend fun updateMemberBeneficialOwnerData(
+        memberId: String,
+        dateOfBirth: LocalDate?,
+        nationality: String?,
     ): MemberDto
 }

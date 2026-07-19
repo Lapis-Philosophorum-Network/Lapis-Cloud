@@ -98,6 +98,8 @@ CREATE TABLE member (
     postal_code VARCHAR(20) NULL,
     city VARCHAR(200) NULL,
     country VARCHAR(100) NULL,
+    date_of_birth DATE NULL,
+    nationality VARCHAR(100) NULL,
     membership_tier_id UUID NULL,
     CHECK (status IN ('ANTRAG', 'AKTIV', 'GAST', 'AUSGETRETEN'))
 );
@@ -551,6 +553,31 @@ CREATE TABLE postal_delivery_log (
     CHECK (status IN ('QUEUED', 'SENT', 'FAILED'))
 );
 
+-- V0.5.2 Transparenzregister (§20 GwG) beneficial-owner reminders. board_membership is a
+-- Transparenzregister-facing beneficial-owner roster, parallel to (not a replacement of)
+-- committee_membership -- see 13-transparenzregister.kuml.kts file header.
+CREATE TABLE board_membership (
+    id UUID NOT NULL PRIMARY KEY,
+    committee_role VARCHAR(12) NOT NULL,
+    started_at DATE NOT NULL,
+    ended_at DATE NULL,
+    member_id UUID NOT NULL,
+    CHECK (committee_role IN ('CHAIR', 'DEPUTY_CHAIR', 'SECRETARY', 'MEMBER', 'ASSESSOR'))
+);
+
+CREATE TABLE transparenzregister_reminder (
+    id UUID NOT NULL PRIMARY KEY,
+    triggered_at TIMESTAMP NOT NULL,
+    committee_role VARCHAR(12) NOT NULL,
+    change_type VARCHAR(6) NOT NULL,
+    resolved BOOLEAN NOT NULL,
+    resolved_at TIMESTAMP NULL,
+    member_id UUID NOT NULL,
+    resolved_by UUID NULL,
+    CHECK (committee_role IN ('CHAIR', 'DEPUTY_CHAIR', 'SECRETARY', 'MEMBER', 'ASSESSOR')),
+    CHECK (change_type IN ('JOINED', 'LEFT'))
+);
+
 -- Foreign Keys
 
 ALTER TABLE member ADD CONSTRAINT fk_member_membership_tier_id FOREIGN KEY (membership_tier_id) REFERENCES membership_tier(id);
@@ -648,6 +675,9 @@ ALTER TABLE posting ADD CONSTRAINT fk_posting_journal_entry_id FOREIGN KEY (jour
 ALTER TABLE posting ADD CONSTRAINT fk_posting_ledger_account_id FOREIGN KEY (ledger_account_id) REFERENCES ledger_account(id);
 ALTER TABLE posting ADD CONSTRAINT fk_posting_cost_center_id FOREIGN KEY (cost_center_id) REFERENCES cost_center(id);
 ALTER TABLE postal_delivery_log ADD CONSTRAINT fk_postal_delivery_log_recipient_member_id FOREIGN KEY (recipient_member_id) REFERENCES member(id);
+ALTER TABLE board_membership ADD CONSTRAINT fk_board_membership_member_id FOREIGN KEY (member_id) REFERENCES member(id);
+ALTER TABLE transparenzregister_reminder ADD CONSTRAINT fk_transparenzregister_reminder_member_id FOREIGN KEY (member_id) REFERENCES member(id);
+ALTER TABLE transparenzregister_reminder ADD CONSTRAINT fk_transparenzregister_reminder_resolved_by FOREIGN KEY (resolved_by) REFERENCES member(id);
 
 -- Indexes
 
@@ -722,6 +752,9 @@ CREATE INDEX idx_posting_journal_entry ON posting (journal_entry_id);
 CREATE INDEX idx_posting_ledger_account ON posting (ledger_account_id);
 CREATE UNIQUE INDEX uq_cost_center_code ON cost_center (code);
 CREATE INDEX idx_postal_delivery_log_recipient ON postal_delivery_log (recipient_member_id);
+CREATE INDEX idx_board_membership_member ON board_membership (member_id);
+CREATE INDEX idx_transparenzregister_reminder_member ON transparenzregister_reminder (member_id);
+CREATE INDEX idx_transparenzregister_reminder_resolved ON transparenzregister_reminder (resolved);
 
 -- V0.4.1 Serienbrief/PDF engine: exactly one organization_settings row must exist from first
 -- migration onward, in every environment (not just LAPIS_SEED_DEMO_DATA=true demo deployments) --

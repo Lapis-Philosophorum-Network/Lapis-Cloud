@@ -25,6 +25,7 @@ import kotlinx.datetime.LocalDateTime
 import network.lapis.cloud.server.db.DatabaseConfig
 import network.lapis.cloud.server.db.DevSeedData
 import network.lapis.cloud.server.db.generated.AccountTable
+import network.lapis.cloud.server.db.generated.BoardMembershipTable
 import network.lapis.cloud.server.db.generated.CommitteeMembershipTable
 import network.lapis.cloud.server.db.generated.CommitteeTable
 import network.lapis.cloud.server.db.generated.ElectionBallotSelectionTable
@@ -40,6 +41,7 @@ import network.lapis.cloud.server.db.generated.MeetingTable
 import network.lapis.cloud.server.db.generated.MemberTable
 import network.lapis.cloud.server.db.generated.MotionTable
 import network.lapis.cloud.server.db.generated.ResolutionTable
+import network.lapis.cloud.server.db.generated.TransparenzregisterReminderTable
 import network.lapis.cloud.server.security.ForbiddenException
 import network.lapis.cloud.server.security.UnauthenticatedException
 import network.lapis.cloud.shared.domain.AccountRole
@@ -1086,6 +1088,16 @@ private fun cleanUpElectionTestData(
             CommitteeTable.deleteWhere { CommitteeTable.id inList committeeIds }
         }
         if (memberIds.isNotEmpty()) {
+            // V0.5.2: personnel Electionen with an EXECUTIVE_BOARD targetCommittee (the default in
+            // this file's own createTestCommittee helper) auto-create board_membership/
+            // transparenzregister_reminder rows for the winner via
+            // BoardMembershipEvents.recordBoardJoin (ElectionService.tally) -- both carry a
+            // member_id FK that must be cleared before MemberTable rows are deleted.
+            TransparenzregisterReminderTable.update({ TransparenzregisterReminderTable.resolvedBy inList memberIds }) {
+                it[resolvedBy] = null
+            }
+            TransparenzregisterReminderTable.deleteWhere { TransparenzregisterReminderTable.memberId inList memberIds }
+            BoardMembershipTable.deleteWhere { BoardMembershipTable.memberId inList memberIds }
             AccountTable.deleteWhere { AccountTable.memberId inList memberIds }
             MemberTable.deleteWhere { MemberTable.id inList memberIds }
         }

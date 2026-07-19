@@ -76,6 +76,18 @@ class SchemaDriftTest :
             }
         }
 
+        test("member.date_of_birth/nationality are nullable (V0.5.2 Transparenzregister beneficial-owner fields)") {
+            val entity = model.entities.single { it.name == "member" }
+            val real = transaction { introspectTable("member") }
+
+            listOf("date_of_birth", "nationality").forEach { column ->
+                withClue("column '$column'") {
+                    entity.attributeByName(column)?.nullable shouldBe true
+                    real.columns.getValue(column).nullable shouldBe true
+                }
+            }
+        }
+
         test("account table shape matches the real migrated schema") {
             val entity = model.entities.single { it.name == "account" }
             val real = transaction { introspectTable("account") }

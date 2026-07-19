@@ -77,13 +77,24 @@ interface IGovernanceService {
         activeOnly: Boolean = true,
     ): List<CommitteeMembershipDto>
 
-    /** Role: BOARD/ADMIN. */
+    /**
+     * Role: BOARD/ADMIN. V0.5.2: when `committeeId` names a `CommitteeType.EXECUTIVE_BOARD`
+     * Committee, this is a real Vorstandsaenderung (a co-option outside an election) and also
+     * hooks into `network.lapis.cloud.server.rpc.BoardMembershipEvents.recordBoardJoin` --
+     * see that object's KDoc, and `network.lapis.cloud.shared.domain.BoardChangeType` for the full
+     * §20 GwG Transparenzregister reminder rationale.
+     */
     suspend fun addCommitteeMember(
         committeeId: String,
         input: CommitteeMembershipInput,
     ): CommitteeMembershipDto
 
-    /** Role: BOARD/ADMIN. */
+    /**
+     * Role: BOARD/ADMIN. V0.5.2: mirror image of [addCommitteeMember] -- ending a membership in an
+     * `EXECUTIVE_BOARD` Committee also hooks into
+     * `network.lapis.cloud.server.rpc.BoardMembershipEvents.recordBoardLeave` when a corresponding
+     * open board membership exists.
+     */
     suspend fun endCommitteeMembership(
         membershipId: String,
         until: LocalDate,

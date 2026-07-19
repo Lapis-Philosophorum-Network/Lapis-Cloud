@@ -32,17 +32,17 @@ import io.kotest.matchers.string.shouldContain
 class DomainModelMergerTest :
     FunSpec({
 
-        // ── Test 1: merging the real 12 domain scripts ───────────────────────────────────
+        // ── Test 1: merging the real 14 domain scripts ───────────────────────────────────
 
         test(
-            "merging the real 13 domain scripts succeeds and the uml-to-erm -> erm-to-exposed chain " +
+            "merging the real 14 domain scripts succeeds and the uml-to-erm -> erm-to-exposed chain " +
                 "produces exactly one Table file per distinct table name",
         ) {
             val scriptFiles =
                 requireNotNull(KumlModelLoader.kumlSourceDir.listFiles { f -> f.name.endsWith(".kuml.kts") }) {
                     "kUML source dir not found or not a directory: ${KumlModelLoader.kumlSourceDir.absolutePath}"
                 }.sortedBy { it.name }
-            scriptFiles shouldHaveSize 13
+            scriptFiles shouldHaveSize 14
 
             val diagrams = scriptFiles.map { KumlModelLoader.loadUmlDiagram(it) }
 
@@ -71,7 +71,12 @@ class DomainModelMergerTest :
             // 10-accounting.kuml.kts (V0.5.1 §25 PartG) adds exactly one more real table
             // (external_donor) on top of its own already-counted Member stub -- so it contributes
             // +1 «Entity» declaration and +0 drops versus the V0.4.2 baseline above (46 -> 47).
-            val distinctTableNames = 47
+            // 13-transparenzregister.kuml.kts (V0.5.2 §20 GwG) adds exactly two more real tables
+            // (board_membership, transparenzregister_reminder), WITH its own cross-domain Member
+            // stub (it has an FK to member) -- so it contributes +3 «Entity» declarations (the stub
+            // + the two real tables) and +1 drop (the stub merges into the existing member entity)
+            // versus the V0.5.1 baseline above (47 -> 49).
+            val distinctTableNames = 49
 
             val result =
                 UmlToExposedViaErmScriptTransformer().transform(
@@ -141,6 +146,8 @@ class DomainModelMergerTest :
                     "ExternalDonorTable.kt",
                     "OrganizationSettingsTable.kt",
                     "PostalDeliveryLogTable.kt",
+                    "BoardMembershipTable.kt",
+                    "TransparenzregisterReminderTable.kt",
                 )
         }
 

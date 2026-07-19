@@ -22,6 +22,8 @@ public object MemberTable : Table("member") {
     public val postalCode: Column<String?> = varchar("postal_code", 20).nullable()
     public val city: Column<String?> = varchar("city", 200).nullable()
     public val country: Column<String?> = varchar("country", 100).nullable()
+    public val dateOfBirth: Column<LocalDate?> = date("date_of_birth").nullable()
+    public val nationality: Column<String?> = varchar("nationality", 100).nullable()
     public val membershipTierId: Column<Uuid?> = optReference("membership_tier_id", MembershipTierTable.id)
 
     override val primaryKey: PrimaryKey = PrimaryKey(id)

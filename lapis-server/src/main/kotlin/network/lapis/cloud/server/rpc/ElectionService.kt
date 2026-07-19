@@ -699,6 +699,14 @@ class ElectionService(
                         electionRow[ElectionTable.targetCommitteeId]
                             ?: throw ConflictException("Election $electionId has no targetCommitteeId to seat winners into")
                     val targetRole = electionRow[ElectionTable.targetRole] ?: CommitteeRole.MEMBER
+                    // V0.5.2 Transparenzregister (§20 GwG): this Election is the ONLY path that
+                    // seats winners into a targetCommittee (the YES_NO branch above seats nobody),
+                    // so it is also the only tally-time hook needed to keep the Transparenzregister
+                    // beneficial-owner roster (BoardMembershipEvents.recordBoardJoin, see that
+                    // object's KDoc) in step with the real Vorstand. Gated on the targetCommittee's
+                    // type, NOT on isPoliticalParty -- §20 GwG applies to every Verein/Partei.
+                    val targetCommitteeType =
+                        CommitteeTable.selectAll().where { CommitteeTable.id eq targetCommitteeId }.single()[CommitteeTable.type]
                     val candidacyIdByOptionId = optionRows.associate { it[ElectionOptionTable.id] to it[ElectionOptionTable.candidacyId] }
                     val today =
                         Clock.System
@@ -739,6 +747,9 @@ class ElectionService(
                             it[role] = targetRole
                             it[since] = today
                             it[until] = null
+                        }
+                        if (targetCommitteeType == CommitteeType.EXECUTIVE_BOARD) {
+                            BoardMembershipEvents.recordBoardJoin(winnerMemberId, targetRole, today, nowLocalDateTime())
                         }
                     }
                 }

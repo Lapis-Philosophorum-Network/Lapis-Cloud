@@ -8,6 +8,13 @@
 // see 02 Projekte/Lapis Cloud V0.4.md scope guidance. All four fields are nullable: not every
 // member has provided a postal address yet, and an email-only member may never need one.
 //
+// V0.5.2: `member` gains two further nullable beneficial-owner PII fields, dateOfBirth and
+// nationality -- required content for a Transparenzregister (§20 GwG) beneficial-owner entry (see
+// 13-transparenzregister.kuml.kts), which the pre-V0.5.2 schema had no way to express. Both
+// nullable: not every member is a board member, and a board member's data may not be complete yet
+// (see BeneficialOwnerDataGapDto in the Transparenzregister domain). Treated as PII exactly like
+// the V0.4.1 postal-address fields -- see FoundationPersonalData for export/erasure coverage.
+//
 // This is the versioned source-of-truth *model* for the schema shape (ADR-0016), verified
 // against both the real Flyway-migrated H2 schema and the hand-written Exposed Table objects
 // (network.lapis.cloud.server.db.tables.FoundationTables.kt) by SchemaDriftTest. Per ADR-0016's
@@ -95,6 +102,15 @@ classDiagram(name = "Foundation") {
         attribute(name = "country", type = "String") {
             multiplicity = Multiplicity(0, 1)
             stereotype("Column") { "columnName" to "country"; "sqlType" to "VARCHAR(100)" }
+        }
+        // V0.5.2 Transparenzregister beneficial-owner fields -- see file header. Both nullable.
+        attribute(name = "dateOfBirth", type = "LocalDate") {
+            multiplicity = Multiplicity(0, 1)
+            stereotype("Column") { "columnName" to "date_of_birth" }
+        }
+        attribute(name = "nationality", type = "String") {
+            multiplicity = Multiplicity(0, 1)
+            stereotype("Column") { "columnName" to "nationality"; "sqlType" to "VARCHAR(100)" }
         }
     }
 

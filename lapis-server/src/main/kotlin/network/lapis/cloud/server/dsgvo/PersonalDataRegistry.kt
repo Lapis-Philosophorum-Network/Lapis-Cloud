@@ -30,6 +30,7 @@ object PersonalDataRegistry {
             SystemicConsensusPersonalData,
             AccountingPersonalData,
             PostalMailPersonalData,
+            BoardMembershipPersonalData,
         )
 
     /**

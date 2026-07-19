@@ -41,6 +41,10 @@ object FoundationPersonalData : PersonalDataContributor {
             put("postalCode", memberRow[MemberTable.postalCode])
             put("city", memberRow[MemberTable.city])
             put("country", memberRow[MemberTable.country])
+            // V0.5.2 Transparenzregister beneficial-owner fields -- PII, exported alongside the
+            // V0.4.1 postal address.
+            put("dateOfBirth", memberRow[MemberTable.dateOfBirth]?.toString())
+            put("nationality", memberRow[MemberTable.nationality])
 
             val accountRow = AccountTable.selectAll().where { AccountTable.memberId eq memberId }.singleOrNull()
             if (accountRow != null) {
@@ -66,6 +70,9 @@ object FoundationPersonalData : PersonalDataContributor {
                 it[postalCode] = null
                 it[city] = null
                 it[country] = null
+                // V0.5.2 Transparenzregister beneficial-owner fields -- PII, nulled out the same way.
+                it[dateOfBirth] = null
+                it[nationality] = null
             }
         val accountsDeleted = AccountTable.deleteWhere { AccountTable.memberId eq memberId }
         return listOf(
