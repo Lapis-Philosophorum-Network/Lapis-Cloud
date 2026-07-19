@@ -644,8 +644,9 @@ philosophy:
 **`getKassenbuch`** (role: TREASURER/BOARD/ADMIN, same as every other statement method) returns the
 `KassenbuchDto` for one `LedgerAccount` over `[from, to]` (`from == null` means "since inception"),
 only `POSTED` postings contributing -- same "DRAFT is provisional" rule as `getGeneralLedgerAccount`.
-Rejects with `BadRequestException` if the account exists but is not `isCashRegister` (wrong kind of
-resource for this endpoint), and `NotFoundException` if it does not exist at all -- mirrors
+Rejects with `ConflictException` if the account exists but is not `isCashRegister` (wrong kind of
+resource for this endpoint -- requires a DB lookup of persisted state to evaluate, same tier as the
+other existing-entity-wrong-state checks), and `NotFoundException` if it does not exist at all -- mirrors
 `getGeneralLedgerAccount`'s existing not-found behavior. `Posting.sphere` stays mandatory even on
 cash-account lines (unchanged V0.3.3 rule, informational only there) and is deliberately NOT
 surfaced in `KassenbuchLineDto` -- the Kassenbuch is a cash-audit view, not a Gemeinnützigkeit-sphere

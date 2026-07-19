@@ -238,9 +238,13 @@ data class KassenbuchLineDto(
 
 /**
  * The Kassenbuch (cash book, V0.3.5) for one [LedgerAccountDto.isCashRegister] account,
- * chronologically ordered -- see [KassenbuchLineDto] KDoc. [openingBalance] is always `0` in this
- * wave, same as [GeneralLedgerDto.openingBalance]; [closingBalance] equals the last
- * [KassenbuchLineDto.runningBalance], or [openingBalance] if [lines] is empty. This is a
+ * chronologically ordered -- see [KassenbuchLineDto] KDoc. [openingBalance] is the cumulative
+ * running balance of the last full-history posting strictly before `from` (or `0` if `from` is
+ * null/inception, or no such posting exists); [closingBalance] equals the last returned
+ * [KassenbuchLineDto.runningBalance] within `[from, to]`, or [openingBalance] if [lines] is empty.
+ * `kassenbuchNumber`/running balances are always computed over the account's FULL posted history
+ * first, then narrowed to `[from, to]` -- never numbered/balanced over a filtered subset -- so a
+ * posting's `kassenbuchNumber` never changes depending on the query window. This is a
  * GoBD-informed view (foundational for V0.5's full GoBD bundle) -- cryptographic tamper-evidence,
  * retention enforcement, and TSE integration are explicitly out of scope this wave, see
  * `10-accounting.kuml.kts` file header.

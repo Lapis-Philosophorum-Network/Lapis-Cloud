@@ -761,9 +761,13 @@ class AccountingService(
      * cash-register account. See that function's KDoc for the race it closes.
      */
     private fun lockCashRegisterAccounts(accountIds: Set<Uuid>) {
+        // orderBy(id) gives every concurrent transaction the same lock-acquisition order for a
+        // multi-cash-account entry -- without it, two transactions locking the same account set in
+        // different physical scan order could each hold one lock and wait on the other, deadlocking.
         LedgerAccountTable
             .selectAll()
             .where { LedgerAccountTable.id inList accountIds }
+            .orderBy(LedgerAccountTable.id)
             .forUpdate()
             .toList()
     }

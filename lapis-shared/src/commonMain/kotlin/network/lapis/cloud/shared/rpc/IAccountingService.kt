@@ -144,10 +144,12 @@ interface IAccountingService {
      * [network.lapis.cloud.shared.domain.LedgerAccountDto.isCashRegister] account over
      * `[from, to]` (both inclusive; `from == null` means "since inception") -- see [KassenbuchDto]
      * KDoc. Only [JournalEntryStatus.POSTED] postings contribute -- same "DRAFT is provisional"
-     * rule as [getGeneralLedgerAccount]. Rejects with `BadRequestException` if [ledgerAccountId]
+     * rule as [getGeneralLedgerAccount]. Rejects with `ConflictException` if [ledgerAccountId]
      * names an existing account that is not [network.lapis.cloud.shared.domain.LedgerAccountDto
-     * .isCashRegister] (wrong kind of resource for this endpoint), and `NotFoundException` if it
-     * does not exist at all -- mirrors [getGeneralLedgerAccount]'s existing not-found behavior.
+     * .isCashRegister] (wrong kind of resource for this endpoint -- requires a DB lookup of the
+     * account's persisted state to evaluate, same tier as [getGeneralLedgerAccount]'s other
+     * existing-entity-wrong-state checks), and `NotFoundException` if it does not exist at all --
+     * mirrors [getGeneralLedgerAccount]'s existing not-found behavior.
      */
     suspend fun getKassenbuch(
         ledgerAccountId: String,
