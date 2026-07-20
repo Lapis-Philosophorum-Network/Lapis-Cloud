@@ -4,13 +4,14 @@
 :toc-placement: preamble
 :icons: font
 
-image::docs/images/lc-banner.png[Lapis Cloud — federated membership management with meritocratic governance,link=https://github.com/Lapis-Philosophorum-Network/Lapis-Cloud]
+image::docs/images/lc-banner.png[Lapis Cloud — federated membership management with meritocratic governance,link=https://github.com/lapisproject-dev/Lapis-Cloud]
 
 [.lead]
 *Standard membership management, libertarian-extended.* +
 Full association and party administration as the foundation, meritocratic governance as the differentiator.
 
-image:https://img.shields.io/github/license/Lapis-Philosophorum-Network/Lapis-Cloud[Apache 2.0]
+image:https://github.com/lapisproject-dev/Lapis-Cloud/actions/workflows/ci.yml/badge.svg?branch=master[CI,link=https://github.com/lapisproject-dev/Lapis-Cloud/actions/workflows/ci.yml]
+image:https://img.shields.io/github/license/lapisproject-dev/Lapis-Cloud[Apache 2.0]
 
 == About Lapis Cloud
 
@@ -39,9 +40,10 @@ this repository. This README describes only the technical scope.
 
 == Related Projects
 
-* **Lapis Net** — a fully decentralized P2P sister project, sharing the same libertarian core principles
-  (meritocratic scoring, self-organization, voluntary association) but differing in implementation
-  (P2P nodes instead of federated servers, cryptographic trust instead of server federation).
+* https://github.com/lapisproject-dev/Lapis-Net[Lapis Net] — a fully decentralized P2P sister
+  project, sharing the same libertarian core principles (meritocratic scoring, self-organization,
+  voluntary association) but differing in implementation (P2P nodes instead of federated servers,
+  cryptographic trust instead of server federation).
 * **PZB** (https://gitlab.com/pdv7/pzb) — the existing predecessor repository. Kept as a **reference**
   (architecture decisions, code patterns) but not adopted 1:1 — Lapis Cloud is
   a clean reimplementation.
@@ -60,12 +62,35 @@ this repository. This README describes only the technical scope.
 * **AI assistance / agentic layer**: https://koog.ai[Koog] (JetBrains, Kotlin-native agent framework,
   multi-LLM without lock-in)
 
-NOTE: The Gradle multi-module structure (`lapis-shared`/`lapis-server`/`lapis-client`) and Kilua RPC
-wiring are in place (V0.1.1). Since V0.1.5, contribution management, document storage, and
-communication (mailing lists, direct messages) are implemented as the first functional areas — on top
-of a member Foundation stub, since the full member master-data model (V0.1.2-V0.1.4) is still
-pending. See link:docs/architecture/domain-model.adoc[domain model documentation] and `CLAUDE.md`
-for details.
+== Status
+
+As of *V0.5.2*, five major waves are complete and released (see `CHANGELOG.md` for full detail):
+
+* **V0.1 — Project foundation & standard membership management**: Gradle multi-module structure,
+  Ktor server, KVision client, Kilua RPC wiring, CI/CD, member master data, join/leave workflow,
+  membership tiers, contribution management, document storage, communication (mailing lists,
+  direct messages), GDPR basics.
+* **V0.2 — Governance foundation**: committee/working-group and meeting management (agenda,
+  motions, resolution log), meritocratic voting, democratic elections, and Systemisches
+  Konsensieren (systemic consensus-building) as voting modes.
+* **V0.3 — Accounting core**: SKR42 chart of accounts with double-entry bookkeeping, GuV/Bilanz/
+  Jahresabschluss derivation, the four-sphere Gemeinnützigkeit (non-profit) separation, §55/§62 AO
+  Mittelverwendungsrechnung and Rücklagenbildung, a GoBD-informed Kassenbuch, and cost-center
+  accounting.
+* **V0.4 — Mail-merge & postal mail**: a PDF mail-merge engine (membership dues invoices, §50 EStDV
+  donation receipts, invitations) and a Letterxpress-based postal-dispatch path for members without
+  email.
+* **V0.5 — Compliance bundle**: a §25 PartG donation-acceptance check for political parties, and
+  §20 GwG Transparenzregister board-change reminders with a beneficial-owner data completeness
+  report.
+
+Every wave went through this project's mandatory plan → implement → independent review →
+independent security audit pipeline before merging. Known limitations (Letterxpress wire format
+not verified against live docs, no Sammelbestätigung aggregation, no full GoBD tamper-evidence/TSE,
+federation not yet built) are tracked in `CHANGELOG.md`. See
+link:docs/architecture/domain-model.adoc[domain model documentation] (currently covers the V0.1.5
+Contributions/Documents/Communication slice — not yet updated for V0.2+) and `CLAUDE.md` for
+further detail.
 
 == Documentation Convention
 

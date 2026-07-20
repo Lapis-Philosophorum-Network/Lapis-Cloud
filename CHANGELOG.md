@@ -4,6 +4,21 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] — 2026-07-19
+
+### Added
+
+**§25 PartG donation-acceptance check** — a pure, DB-free `PartyDonationComplianceCalculator` (same idiom as `JournalEntryBalance`/`UseOfFundsCalculator`) returning ALLOWED/PROHIBITED verdicts plus additional-duty flags (anonymous-forwarding, prompt Bundestag report, annual Rechenschaftsbericht disclosure) for donations to political parties, with all thresholds as named constants explicitly flagged as current understanding requiring legal verification. The accounting model gains an `ExternalDonor` entity and `DonorCategory` enum so a `JournalEntry` can attribute a donation to a non-member donor (mutually exclusive with the existing `donorMemberId`). The check is hooked into `postJournalEntry`/`postDraftEntry`, gated strictly on `OrganizationSettings.isPoliticalParty`, hard-blocking PROHIBITED donations while never blocking ALLOWED-with-duties postings. A new read-only, TREASURER/BOARD/ADMIN-gated report lists open prompt-report and annual-disclosure duties for a given calendar year.
+
+**§20 GwG Transparenzregister board-change reminders** — a queryable board roster with history (`BoardMembership`: member, committee role, start/end), written in lockstep with the existing `CommitteeMembership` seating at election-tally time and via a new manual appoint/end-membership action for co-options, resignations, and recalls that don't go through a fresh election. `Member` gains the two missing beneficial-owner fields (date of birth, nationality), both nullable and covered by GDPR export/erasure. A persisted `TransparenzregisterReminder` log records every JOINED/LEFT board-change event, plus a read-only report of open reminders and members still missing beneficial-owner data — reminder/acknowledgement only, no automated filing to transparenzregister.de (no suitable public API exists). Unlike the PartG check, this duty is **not** gated on `isPoliticalParty` — §20 GwG transparency duties apply to every Verein/Partei.
+
+### Known limitations (tracked for later versions)
+
+- No automated filing to transparenzregister.de — reminders and reports only, filing itself stays a manual, human-triggered step.
+- Audit-log/GoBD tamper-evidence, retention enforcement, and TSE integration, plus a full backup/restore/data-export guarantee and full GDPR build-out (AVV, TOMs, DSFA, breach reporting), are not yet implemented — the original V0.5 scope for these was narrowed to the two donation/transparency compliance checks above; the rest remains open, tentatively folded into a later wave.
+- No LTR economy yet (internal crowdfunding, auction, direct transfer, politician profiles/ranking) — planned for V0.6.
+- Federation (multi-server operation) is not yet built — planned for V0.7.
+
 ## [0.4.0] — 2026-07-19
 
 ### Added
