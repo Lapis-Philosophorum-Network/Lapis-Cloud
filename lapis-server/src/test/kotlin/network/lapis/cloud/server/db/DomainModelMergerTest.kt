@@ -32,17 +32,17 @@ import io.kotest.matchers.string.shouldContain
 class DomainModelMergerTest :
     FunSpec({
 
-        // ── Test 1: merging the real 14 domain scripts ───────────────────────────────────
+        // ── Test 1: merging the real 17 domain scripts ───────────────────────────────────
 
         test(
-            "merging the real 15 domain scripts succeeds and the uml-to-erm -> erm-to-exposed chain " +
+            "merging the real 17 domain scripts succeeds and the uml-to-erm -> erm-to-exposed chain " +
                 "produces exactly one Table file per distinct table name",
         ) {
             val scriptFiles =
                 requireNotNull(KumlModelLoader.kumlSourceDir.listFiles { f -> f.name.endsWith(".kuml.kts") }) {
                     "kUML source dir not found or not a directory: ${KumlModelLoader.kumlSourceDir.absolutePath}"
                 }.sortedBy { it.name }
-            scriptFiles shouldHaveSize 16
+            scriptFiles shouldHaveSize 17
 
             val diagrams = scriptFiles.map { KumlModelLoader.loadUmlDiagram(it) }
 
@@ -87,7 +87,14 @@ class DomainModelMergerTest :
             // has an FK to member via backup_operation_log.actor_member_id) -- so it contributes +2
             // «Entity» declarations (the stub + the one real table) and +1 drop (the stub merges
             // into the existing member entity) versus the V0.5.3 baseline above (51 -> 52).
-            val distinctTableNames = 52
+            // 16-dsgvo-compliance.kuml.kts (V0.5.5 DSGVO-Vollausbau) adds exactly four more real
+            // tables (processing_agreement, technical_organizational_measure,
+            // data_protection_impact_assessment, data_breach_incident), WITH its own cross-domain
+            // Member AND Document stubs (processing_agreement.document_id FKs to document) -- so it
+            // contributes +6 «Entity» declarations (2 stubs + 4 real tables) and +2 drops (both
+            // stubs merge into the already-existing member/document entities) versus the V0.5.4
+            // baseline above (52 -> 56).
+            val distinctTableNames = 56
 
             val result =
                 UmlToExposedViaErmScriptTransformer().transform(
@@ -162,6 +169,10 @@ class DomainModelMergerTest :
                     "AuditLogChainStateTable.kt",
                     "AuditLogEntryTable.kt",
                     "BackupOperationLogTable.kt",
+                    "ProcessingAgreementTable.kt",
+                    "TechnicalOrganizationalMeasureTable.kt",
+                    "DataProtectionImpactAssessmentTable.kt",
+                    "DataBreachIncidentTable.kt",
                 )
         }
 

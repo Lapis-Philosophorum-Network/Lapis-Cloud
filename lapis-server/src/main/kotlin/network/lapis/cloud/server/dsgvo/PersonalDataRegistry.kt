@@ -33,6 +33,7 @@ object PersonalDataRegistry {
             BoardMembershipPersonalData,
             AuditLogPersonalData,
             BackupOperationPersonalData,
+            DsgvoCompliancePersonalData,
         )
 
     /**

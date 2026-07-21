@@ -31,6 +31,10 @@ dependencies {
     implementation(libs.ktor.server.auto.head.response)
     implementation(libs.ktor.server.status.pages)
     implementation(libs.logback.classic)
+    // V0.5.5 DSGVO-Vollausbau: first kotlin-logging use in this module -- house rule (CLAUDE.md
+    // "Kotlin-Code-Konvention") is kotlin-logging exclusively, never java.util.logging/direct
+    // SLF4J/println. logback-classic above is its SLF4J runtime backend.
+    implementation(libs.kotlin.logging.jvm)
 
     // V0.4.2 Letterxpress postal-mail dispatch — see gradle/libs.versions.toml for why these are
     // new (first outbound-HTTP-client need in this repo). ktor.serialization.kotlinx.json is

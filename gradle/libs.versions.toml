@@ -3,6 +3,7 @@ kotlin                  = "2.4.10"
 kvision                 = "9.6.0"
 ktor                    = "3.5.1"
 logback                 = "1.5.38"
+kotlin-logging          = "7.0.7"
 kotest                  = "6.2.2"
 ktlint-plugin           = "14.2.0"
 ksp                     = "2.3.10"
@@ -53,6 +54,10 @@ ktor-client-content-negotiation = { module = "io.ktor:ktor-client-content-negoti
 # more fundamentally, house rule -- unit tests never call a real third-party API).
 ktor-client-mock                 = { module = "io.ktor:ktor-client-mock", version.ref = "ktor" }
 logback-classic                 = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
+# House rule (CLAUDE.md "Kotlin-Code-Konvention"): logging exclusively via kotlin-logging, never
+# java.util.logging/direct SLF4J/println. kotlin-logging-jvm is the JVM-target artifact of the
+# multiplatform io.github.oshai:kotlin-logging library; logback-classic above is its SLF4J backend.
+kotlin-logging-jvm              = { module = "io.github.oshai:kotlin-logging-jvm", version.ref = "kotlin-logging" }
 kotest-runner-junit5            = { module = "io.kotest:kotest-runner-junit5", version.ref = "kotest" }
 kotest-assertions-core          = { module = "io.kotest:kotest-assertions-core", version.ref = "kotest" }
 kotest-property                 = { module = "io.kotest:kotest-property", version.ref = "kotest" }

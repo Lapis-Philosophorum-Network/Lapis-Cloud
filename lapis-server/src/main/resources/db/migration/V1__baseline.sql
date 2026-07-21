@@ -628,6 +628,87 @@ CREATE TABLE backup_operation_log (
     CHECK (status IN ('SUCCEEDED', 'FAILED'))
 );
 
+-- V0.5.5 DSGVO-Vollausbau: AVV-Register/TOMs/DSFA-Vorlage/Datenpannenmeldung (see
+-- 16-dsgvo-compliance.kuml.kts file header for the full domain rationale and legal-verification
+-- disclaimer). Documentation-/workflow-tool support for a human-made legal decision -- avv_status,
+-- dpia_required, authority_notification_required are always human input, never computed.
+CREATE TABLE processing_agreement (
+    id UUID NOT NULL PRIMARY KEY,
+    processor_name VARCHAR(300) NOT NULL,
+    processing_purpose TEXT NOT NULL,
+    data_categories VARCHAR(2000) NOT NULL,
+    avv_status VARCHAR(6) NOT NULL,
+    signed_date DATE NULL,
+    review_due_date DATE NULL,
+    document_id UUID NULL,
+    notes VARCHAR(2000) NULL,
+    created_at TIMESTAMP NOT NULL,
+    created_by UUID NOT NULL,
+    updated_at TIMESTAMP NULL,
+    updated_by UUID NULL,
+    CHECK (avv_status IN ('NONE', 'DRAFT', 'SIGNED'))
+);
+
+CREATE TABLE technical_organizational_measure (
+    id UUID NOT NULL PRIMARY KEY,
+    category VARCHAR(23) NOT NULL,
+    title VARCHAR(300) NOT NULL,
+    description TEXT NOT NULL,
+    version INT NOT NULL DEFAULT 1,
+    created_at TIMESTAMP NOT NULL,
+    created_by UUID NOT NULL,
+    updated_at TIMESTAMP NULL,
+    updated_by UUID NULL,
+    CHECK (
+        category IN (
+            'PHYSICAL_ACCESS_CONTROL', 'SYSTEM_ACCESS_CONTROL', 'DATA_ACCESS_CONTROL', 'TRANSFER_CONTROL',
+            'INPUT_CONTROL', 'ORDER_CONTROL', 'AVAILABILITY_CONTROL', 'SEPARATION_CONTROL'
+        )
+    )
+);
+
+CREATE TABLE data_protection_impact_assessment (
+    id UUID NOT NULL PRIMARY KEY,
+    title VARCHAR(300) NOT NULL,
+    processing_description TEXT NOT NULL,
+    necessity_proportionality TEXT NULL,
+    risk_likelihood VARCHAR(6) NULL,
+    risk_severity VARCHAR(6) NULL,
+    risk_assessment TEXT NULL,
+    mitigation_measures TEXT NULL,
+    dpia_required BOOLEAN NULL,
+    outcome_rationale TEXT NULL,
+    status VARCHAR(19) NOT NULL,
+    version INT NOT NULL DEFAULT 1,
+    created_at TIMESTAMP NOT NULL,
+    created_by UUID NOT NULL,
+    updated_at TIMESTAMP NULL,
+    updated_by UUID NULL,
+    CHECK (risk_likelihood IN ('LOW', 'MEDIUM', 'HIGH')),
+    CHECK (risk_severity IN ('LOW', 'MEDIUM', 'HIGH')),
+    CHECK (status IN ('DRAFT', 'COMPLETED', 'OUTDATED_REVIEW_DUE'))
+);
+
+CREATE TABLE data_breach_incident (
+    id UUID NOT NULL PRIMARY KEY,
+    discovered_at TIMESTAMP NOT NULL,
+    description TEXT NOT NULL,
+    affected_data_categories VARCHAR(2000) NOT NULL,
+    estimated_affected_persons INT NULL,
+    risk_assessment TEXT NULL,
+    risk_level VARCHAR(6) NULL,
+    authority_notification_required BOOLEAN NULL,
+    authority_notified_at TIMESTAMP NULL,
+    data_subjects_notified_at TIMESTAMP NULL,
+    status VARCHAR(24) NOT NULL,
+    reported_at TIMESTAMP NOT NULL,
+    reported_by UUID NOT NULL,
+    updated_at TIMESTAMP NULL,
+    updated_by UUID NULL,
+    CHECK (risk_level IN ('LOW', 'MEDIUM', 'HIGH')),
+    CHECK (status IN ('REPORTED', 'UNDER_ASSESSMENT', 'NOTIFIED_AUTHORITY', 'NO_NOTIFICATION_REQUIRED', 'CLOSED'))
+);
+
 -- Foreign Keys
 
 ALTER TABLE member ADD CONSTRAINT fk_member_membership_tier_id FOREIGN KEY (membership_tier_id) REFERENCES membership_tier(id);
@@ -730,6 +811,15 @@ ALTER TABLE transparenzregister_reminder ADD CONSTRAINT fk_transparenzregister_r
 ALTER TABLE transparenzregister_reminder ADD CONSTRAINT fk_transparenzregister_reminder_resolved_by FOREIGN KEY (resolved_by) REFERENCES member(id);
 ALTER TABLE audit_log_entry ADD CONSTRAINT fk_audit_log_entry_actor_member_id FOREIGN KEY (actor_member_id) REFERENCES member(id);
 ALTER TABLE backup_operation_log ADD CONSTRAINT fk_backup_operation_log_actor_member_id FOREIGN KEY (actor_member_id) REFERENCES member(id);
+ALTER TABLE processing_agreement ADD CONSTRAINT fk_processing_agreement_document_id FOREIGN KEY (document_id) REFERENCES document(id);
+ALTER TABLE processing_agreement ADD CONSTRAINT fk_processing_agreement_created_by FOREIGN KEY (created_by) REFERENCES member(id);
+ALTER TABLE processing_agreement ADD CONSTRAINT fk_processing_agreement_updated_by FOREIGN KEY (updated_by) REFERENCES member(id);
+ALTER TABLE technical_organizational_measure ADD CONSTRAINT fk_tom_created_by FOREIGN KEY (created_by) REFERENCES member(id);
+ALTER TABLE technical_organizational_measure ADD CONSTRAINT fk_tom_updated_by FOREIGN KEY (updated_by) REFERENCES member(id);
+ALTER TABLE data_protection_impact_assessment ADD CONSTRAINT fk_dpia_created_by FOREIGN KEY (created_by) REFERENCES member(id);
+ALTER TABLE data_protection_impact_assessment ADD CONSTRAINT fk_dpia_updated_by FOREIGN KEY (updated_by) REFERENCES member(id);
+ALTER TABLE data_breach_incident ADD CONSTRAINT fk_data_breach_incident_reported_by FOREIGN KEY (reported_by) REFERENCES member(id);
+ALTER TABLE data_breach_incident ADD CONSTRAINT fk_data_breach_incident_updated_by FOREIGN KEY (updated_by) REFERENCES member(id);
 
 -- Indexes
 
@@ -811,6 +901,12 @@ CREATE UNIQUE INDEX uq_audit_log_entry_sequence ON audit_log_entry (sequence_num
 CREATE INDEX idx_audit_log_entry_entity_id ON audit_log_entry (entity_id);
 CREATE INDEX idx_audit_log_entry_occurred_at ON audit_log_entry (occurred_at);
 CREATE INDEX idx_backup_operation_log_actor ON backup_operation_log (actor_member_id);
+CREATE INDEX idx_processing_agreement_status ON processing_agreement (avv_status);
+CREATE INDEX idx_processing_agreement_created_by ON processing_agreement (created_by);
+CREATE INDEX idx_tom_category ON technical_organizational_measure (category);
+CREATE INDEX idx_dpia_status ON data_protection_impact_assessment (status);
+CREATE INDEX idx_breach_status ON data_breach_incident (status);
+CREATE INDEX idx_breach_reported_by ON data_breach_incident (reported_by);
 
 -- V0.4.1 Serienbrief/PDF engine: exactly one organization_settings row must exist from first
 -- migration onward, in every environment (not just LAPIS_SEED_DEMO_DATA=true demo deployments) --

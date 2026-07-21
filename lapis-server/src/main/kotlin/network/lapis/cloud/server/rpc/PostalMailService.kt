@@ -1,5 +1,6 @@
 package network.lapis.cloud.server.rpc
 
+import io.github.oshai.kotlinlogging.KotlinLogging
 import io.ktor.server.application.ApplicationCall
 import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.TimeZone
@@ -99,12 +100,28 @@ private const val MAX_POSTAL_INVITATION_RECIPIENTS = 50
  * [PostalDeliveryStatus.SENT] or [PostalDeliveryStatus.FAILED]. A [PostalDispatchOutcome.Failed]
  * outcome is a legitimate business outcome, not a precondition violation -- the RPC call still
  * returns normally (a [PostalDeliveryLogDto] with `status=FAILED`) rather than throwing.
+ *
+ * ## AVV-register advisory (V0.5.5)
+ *
+ * [requirePostalMailEnabled] additionally logs a non-blocking WARN when `postalMailEnabled` is
+ * `true` but the AVV-register (`network.lapis.cloud.server.rpc.DsgvoComplianceService`,
+ * `processing_agreement`) has no [network.lapis.cloud.shared.domain.AvvStatus.SIGNED], non-expired
+ * row for "Letterxpress". **Deliberately non-blocking, a judgement call**: `postalMailEnabled`
+ * itself already encodes an ADMIN's attestation that a Data Processing Agreement is in place (see
+ * this class's own "The `postalMailEnabled` gate" KDoc above); a hard register check here would
+ * introduce a new fail-closed risk (blocking a legitimate, already-paid-for dispatch merely because
+ * the register row was never entered) for no corresponding legal benefit the opt-in gate does not
+ * already provide, and would needlessly complicate what is currently a single boolean precondition.
+ * The check is wrapped in `runCatching` so a query/table error can never abort a dispatch that would
+ * otherwise have succeeded -- this is advisory logging, not a new precondition.
  */
 class PostalMailService(
     private val call: ApplicationCall,
     private val storageRoot: File,
     private val postalMailProvider: PostalMailProvider,
 ) : IPostalMailService {
+    private val logger = KotlinLogging.logger {}
+
     override suspend fun dispatchBeitragsrechnungByPost(contributionId: String): PostalDeliveryLogDto {
         val current = resolveCurrentMember(call)
         current.requireRole(*FINANCIAL_DISPATCH_ROLES)
@@ -194,6 +211,24 @@ class PostalMailService(
                     "requires a Data Processing Agreement (Auftragsverarbeitungsvertrag/AVV) with Letterxpress to " +
                     "be in place first; see OrganizationSettingsDto.postalMailEnabled KDoc",
             )
+        }
+        warnIfNoActiveLetterxpressAgreement()
+    }
+
+    /** See class KDoc "AVV-register advisory (V0.5.5)". Never throws, never blocks dispatch. */
+    private fun warnIfNoActiveLetterxpressAgreement() {
+        runCatching {
+            DsgvoComplianceService(call).hasActiveProcessingAgreement("Letterxpress")
+        }.onSuccess { hasActiveAgreement ->
+            if (!hasActiveAgreement) {
+                logger.warn {
+                    "Postal mail dispatch is proceeding with postalMailEnabled=true, but no SIGNED/non-expired " +
+                        "processing_agreement row exists for 'Letterxpress' in the AVV register -- advisory only, " +
+                        "dispatch is not blocked (see PostalMailService class KDoc)"
+                }
+            }
+        }.onFailure { cause ->
+            logger.warn(cause) { "AVV-register advisory check for 'Letterxpress' failed -- dispatch proceeds unaffected" }
         }
     }
 

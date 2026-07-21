@@ -29,6 +29,7 @@ import network.lapis.cloud.server.rpc.BoardMembershipService
 import network.lapis.cloud.server.rpc.ContributionService
 import network.lapis.cloud.server.rpc.DirectMessageService
 import network.lapis.cloud.server.rpc.DocumentService
+import network.lapis.cloud.server.rpc.DsgvoComplianceService
 import network.lapis.cloud.server.rpc.DsgvoService
 import network.lapis.cloud.server.rpc.ElectionService
 import network.lapis.cloud.server.rpc.GovernanceService
@@ -48,6 +49,7 @@ import network.lapis.cloud.shared.rpc.IBoardMembershipService
 import network.lapis.cloud.shared.rpc.IContributionService
 import network.lapis.cloud.shared.rpc.IDirectMessageService
 import network.lapis.cloud.shared.rpc.IDocumentService
+import network.lapis.cloud.shared.rpc.IDsgvoComplianceService
 import network.lapis.cloud.shared.rpc.IDsgvoService
 import network.lapis.cloud.shared.rpc.IElectionService
 import network.lapis.cloud.shared.rpc.IGovernanceService
@@ -113,6 +115,7 @@ fun Application.module() {
         registerService(IBoardMembershipService::class) { call -> BoardMembershipService(call) }
         registerService(IAuditLogService::class) { call -> AuditLogService(call) }
         registerService(IBackupService::class) { call -> BackupService(call) }
+        registerService(IDsgvoComplianceService::class) { call -> DsgvoComplianceService(call) }
     }
 
     routing {
