@@ -10,6 +10,7 @@ import network.lapis.cloud.server.db.generated.AttendanceTable
 import network.lapis.cloud.server.db.generated.BoardMembershipTable
 import network.lapis.cloud.server.db.generated.CommitteeMembershipTable
 import network.lapis.cloud.server.db.generated.CommitteeTable
+import network.lapis.cloud.server.db.generated.LtrLedgerEntryTable
 import network.lapis.cloud.server.db.generated.MeetingTable
 import network.lapis.cloud.server.db.generated.MemberTable
 import network.lapis.cloud.server.db.generated.MotionTable
@@ -17,8 +18,8 @@ import network.lapis.cloud.server.db.generated.ResolutionTable
 import network.lapis.cloud.server.db.generated.VoteBallotTable
 import network.lapis.cloud.server.db.generated.VoteOptionTable
 import network.lapis.cloud.server.db.generated.VoteTable
+import network.lapis.cloud.server.economy.LedgerBackedLtrBalanceProvider
 import network.lapis.cloud.server.economy.LtrBalanceProvider
-import network.lapis.cloud.server.economy.PlaceholderLtrBalanceProvider
 import network.lapis.cloud.server.security.ForbiddenException
 import network.lapis.cloud.server.security.canRecordForMeeting
 import network.lapis.cloud.server.security.canSubmitMotion
@@ -34,6 +35,8 @@ import network.lapis.cloud.shared.domain.CommitteeInput
 import network.lapis.cloud.shared.domain.CommitteeMembershipDto
 import network.lapis.cloud.shared.domain.CommitteeMembershipInput
 import network.lapis.cloud.shared.domain.CommitteeType
+import network.lapis.cloud.shared.domain.LtrLedgerEntryType
+import network.lapis.cloud.shared.domain.LtrLedgerReferenceType
 import network.lapis.cloud.shared.domain.MeetingDetailDto
 import network.lapis.cloud.shared.domain.MeetingDto
 import network.lapis.cloud.shared.domain.MeetingInput
@@ -106,14 +109,14 @@ private const val MAX_OPTION_LABEL_LENGTH = 200
  * [MeetingTable]/[CommitteeMembershipTable] via `member`) still use a plain `innerJoin`.
  *
  * Meritokratische Voteen (V0.2.3): [ltrBalanceProvider] defaults to
- * [PlaceholderLtrBalanceProvider] so `Application.module`'s single-arg
- * `GovernanceService(call)` construction is unaffected; V0.6's ledger-backed implementation only
- * has to change that one default, not every call site. See [LtrBalanceProvider] KDoc for the
- * read-only-in-this-wave boundary.
+ * [LedgerBackedLtrBalanceProvider] (V0.6.1 swapped in the real ledger-backed implementation
+ * here — the only call-site change the seam was designed for, see [LtrBalanceProvider] KDoc) so
+ * `Application.module`'s single-arg `GovernanceService(call)` construction is unaffected. See
+ * [LtrBalanceProvider] KDoc for the read-only boundary this service relies on.
  */
 class GovernanceService(
     private val call: ApplicationCall,
-    private val ltrBalanceProvider: LtrBalanceProvider = PlaceholderLtrBalanceProvider(),
+    private val ltrBalanceProvider: LtrBalanceProvider = LedgerBackedLtrBalanceProvider(),
 ) : IGovernanceService {
     override suspend fun listCommittees(activeOnly: Boolean): List<CommitteeDto> {
         resolveCurrentMember(call)
@@ -820,10 +823,14 @@ class GovernanceService(
             if (stake.scale() > 2) throw ConflictException("stakeLtr must have at most 2 decimal places")
             val normalizedStake = stake.setScale(2, RoundingMode.UNNECESSARY)
             if (normalizedStake < MIN_STAKE_LTR) throw ConflictException("stakeLtr must be at least $MIN_STAKE_LTR")
-            val freeBalance = ltrBalanceProvider.freeBalance(current.memberId)
-            if (normalizedStake > freeBalance) {
-                throw ConflictException("stakeLtr $normalizedStake exceeds free LTR balance $freeBalance")
-            }
+            // Serializes this debit-causing read-then-write against every other LTR-debiting call
+            // for this same member (e.g. a concurrent castVoteBallot on a DIFFERENT Vote, a
+            // concurrent recast of THIS SAME ballot from a second request, or a concurrent
+            // CrowdfundingService.submitProject) -- see LtrBalanceProvider.lockForDebit KDoc for
+            // the TOCTOU this closes. Must happen before both the existing-ballot read and the
+            // freeBalance read below, so a concurrent recast of this same ballot always observes
+            // the previous cast's debit before this transaction decides the new one.
+            ltrBalanceProvider.lockForDebit(current.memberId)
 
             val now = nowLocalDateTime()
             val existing =
@@ -832,6 +839,27 @@ class GovernanceService(
                     .where {
                         (VoteBallotTable.voteId eq abId) and (VoteBallotTable.memberId eq current.memberId)
                     }.singleOrNull()
+
+            // A recast (existing != null) only needs to debit the INCREASE over its own previous
+            // stake -- that previous stake's debit already sits in the ledger from the earlier
+            // cast below, still binding that portion of the member's balance. A same-or-lower
+            // recast is accepted without releasing the difference: no release path exists yet for
+            // a bound Vote stake (recast-down, closeVote settling below the full stake, or
+            // abortVote) -- same "bound, not released this wave" limitation
+            // LtrLedgerEntryType.VOTE_STAKE's own KDoc documents, mirroring the already-accepted
+            // PROJECT_STAKE_RELEASE gap CrowdfundingService.submitProject has.
+            val previousStake = existing?.get(VoteBallotTable.stakeLtr) ?: ZERO_LTR
+            val additionalDebit = normalizedStake - previousStake
+            if (additionalDebit > ZERO_LTR) {
+                val freeBalance = ltrBalanceProvider.freeBalance(current.memberId)
+                if (additionalDebit > freeBalance) {
+                    throw ConflictException(
+                        "stakeLtr $normalizedStake exceeds free LTR balance $freeBalance " +
+                            "(additional stake required: $additionalDebit)",
+                    )
+                }
+            }
+
             val id =
                 if (existing == null) {
                     val newId = Uuid.random()
@@ -855,6 +883,27 @@ class GovernanceService(
                     }
                     existingId
                 }
+
+            // The actual debiting ledger row LtrBalanceProvider.kt's KDoc has always documented
+            // castVoteBallot as writing -- previously missing entirely (security fix), which left
+            // freeBalance blind to open Vote stakes and allowed the same LTR to be staked on
+            // unlimited concurrent Votes and spent again via CrowdfundingService.submitProject.
+            // Only written when the bound amount actually grows (see additionalDebit above); a
+            // pure option change at the same stake, or a recast-down, writes nothing.
+            if (additionalDebit > ZERO_LTR) {
+                LtrLedgerEntryTable.insert {
+                    it[LtrLedgerEntryTable.id] = Uuid.random()
+                    it[memberId] = current.memberId
+                    it[entryType] = LtrLedgerEntryType.VOTE_STAKE
+                    it[amountLtr] = additionalDebit.negate()
+                    it[referenceType] = LtrLedgerReferenceType.VOTE
+                    it[referenceId] = abId
+                    it[note] = "LTR-Stake fuer Vote '${voteRow[VoteTable.title]}'"
+                    it[createdBy] = null
+                    it[createdAt] = now
+                }
+            }
+
             VoteBallotTable
                 .selectAll()
                 .where { VoteBallotTable.id eq id }

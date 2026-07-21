@@ -27,12 +27,14 @@ import network.lapis.cloud.server.rpc.AuditLogService
 import network.lapis.cloud.server.rpc.BackupService
 import network.lapis.cloud.server.rpc.BoardMembershipService
 import network.lapis.cloud.server.rpc.ContributionService
+import network.lapis.cloud.server.rpc.CrowdfundingService
 import network.lapis.cloud.server.rpc.DirectMessageService
 import network.lapis.cloud.server.rpc.DocumentService
 import network.lapis.cloud.server.rpc.DsgvoComplianceService
 import network.lapis.cloud.server.rpc.DsgvoService
 import network.lapis.cloud.server.rpc.ElectionService
 import network.lapis.cloud.server.rpc.GovernanceService
+import network.lapis.cloud.server.rpc.LtrLedgerService
 import network.lapis.cloud.server.rpc.MailingService
 import network.lapis.cloud.server.rpc.MemberService
 import network.lapis.cloud.server.rpc.OrganizationSettingsService
@@ -47,12 +49,14 @@ import network.lapis.cloud.shared.rpc.IAuditLogService
 import network.lapis.cloud.shared.rpc.IBackupService
 import network.lapis.cloud.shared.rpc.IBoardMembershipService
 import network.lapis.cloud.shared.rpc.IContributionService
+import network.lapis.cloud.shared.rpc.ICrowdfundingService
 import network.lapis.cloud.shared.rpc.IDirectMessageService
 import network.lapis.cloud.shared.rpc.IDocumentService
 import network.lapis.cloud.shared.rpc.IDsgvoComplianceService
 import network.lapis.cloud.shared.rpc.IDsgvoService
 import network.lapis.cloud.shared.rpc.IElectionService
 import network.lapis.cloud.shared.rpc.IGovernanceService
+import network.lapis.cloud.shared.rpc.ILtrLedgerService
 import network.lapis.cloud.shared.rpc.IMailingService
 import network.lapis.cloud.shared.rpc.IMemberService
 import network.lapis.cloud.shared.rpc.IOrganizationSettingsService
@@ -116,6 +120,8 @@ fun Application.module() {
         registerService(IAuditLogService::class) { call -> AuditLogService(call) }
         registerService(IBackupService::class) { call -> BackupService(call) }
         registerService(IDsgvoComplianceService::class) { call -> DsgvoComplianceService(call) }
+        registerService(ILtrLedgerService::class) { call -> LtrLedgerService(call) }
+        registerService(ICrowdfundingService::class) { call -> CrowdfundingService(call) }
     }
 
     routing {

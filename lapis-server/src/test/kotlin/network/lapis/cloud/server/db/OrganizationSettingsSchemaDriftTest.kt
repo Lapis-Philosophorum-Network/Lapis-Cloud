@@ -17,7 +17,7 @@ import java.io.File
  *
  * Verifies that `lapis-server/src/main/kuml/11-organization-settings.kuml.kts` is a faithful model
  * of both (a) the real, Flyway-migrated H2 schema (`organization_settings`), and (b) the generated
- * `OrganizationSettingsTable` Exposed object. Mirrors [LtrBalanceSchemaDriftTest] -- see
+ * `OrganizationSettingsTable` Exposed object. Mirrors [LtrLedgerSchemaDriftTest] -- see
  * [SchemaDriftTest]'s KDoc for the full designModelStrategy rationale.
  *
  * The domain-specific structural point this test pins: exactly one row exists, at the fixed

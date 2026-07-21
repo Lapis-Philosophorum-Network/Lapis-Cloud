@@ -41,11 +41,15 @@ private val ORGANIZATION_SETTINGS_SEED_ID = "00000000-0000-0000-0000-0000000000f
 /** Fixed sentinel id of the single `audit_log_chain_state` row Flyway seeds -- see `V1__baseline.sql`/`AuditLogRecorder`. */
 private val AUDIT_LOG_CHAIN_STATE_SEED_ID = "00000000-0000-0000-0000-0000000000f3"
 
+/** Fixed sentinel id of the single `crowdfunding_submission_gate` row Flyway seeds -- see `V1__baseline.sql`/`CrowdfundingService`. */
+private val CROWDFUNDING_SUBMISSION_GATE_SEED_ID = "00000000-0000-0000-0000-0000000000f4"
+
 /** Tables that Flyway itself seeds exactly one singleton row into -- see [OrganizationRestoreService.findNonSeedRows]. */
 private val SEEDED_SINGLETON_ROWS: Map<String, Pair<String, String>> =
     mapOf(
         "organization_settings" to ("id" to ORGANIZATION_SETTINGS_SEED_ID),
         "audit_log_chain_state" to ("id" to AUDIT_LOG_CHAIN_STATE_SEED_ID),
+        "crowdfunding_submission_gate" to ("id" to CROWDFUNDING_SUBMISSION_GATE_SEED_ID),
     )
 
 /** Result of a successful [OrganizationRestoreService.restore] call -- a failed restore throws instead of returning, see that method's KDoc. */

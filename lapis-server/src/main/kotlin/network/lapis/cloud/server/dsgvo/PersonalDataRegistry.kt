@@ -34,6 +34,7 @@ object PersonalDataRegistry {
             AuditLogPersonalData,
             BackupOperationPersonalData,
             DsgvoCompliancePersonalData,
+            CrowdfundingPersonalData,
         )
 
     /**

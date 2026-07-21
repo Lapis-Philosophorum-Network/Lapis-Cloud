@@ -31,7 +31,7 @@ import network.lapis.cloud.server.db.generated.AuditLogEntryTable
 import network.lapis.cloud.server.db.generated.BoardMembershipTable
 import network.lapis.cloud.server.db.generated.CommitteeMembershipTable
 import network.lapis.cloud.server.db.generated.CommitteeTable
-import network.lapis.cloud.server.db.generated.LtrBalanceTable
+import network.lapis.cloud.server.db.generated.LtrLedgerEntryTable
 import network.lapis.cloud.server.db.generated.MeetingTable
 import network.lapis.cloud.server.db.generated.MemberTable
 import network.lapis.cloud.server.db.generated.MotionTable
@@ -55,6 +55,7 @@ import network.lapis.cloud.shared.domain.CommitteeMembershipInput
 import network.lapis.cloud.shared.domain.CommitteeRole
 import network.lapis.cloud.shared.domain.CommitteeType
 import network.lapis.cloud.shared.domain.ErasureMode
+import network.lapis.cloud.shared.domain.LtrLedgerEntryType
 import network.lapis.cloud.shared.domain.MeetingFormat
 import network.lapis.cloud.shared.domain.MeetingInput
 import network.lapis.cloud.shared.domain.MeetingStatus
@@ -138,19 +139,29 @@ class GovernanceServiceTest :
         }
 
         /**
-         * Meritokratische Voteen (V0.2.3) tests seed [LtrBalanceTable] directly rather than
-         * going through a real ledger (V0.6 doesn't exist yet) — mirrors how these tests already
-         * seed Committee/Meeting/Member rows directly instead of using a UI flow.
+         * Meritokratische Voteen (V0.2.3) tests seed a [LtrLedgerEntryTable] MINT row directly
+         * rather than going through the real `LtrLedgerService` RPC surface (V0.6.1) — mirrors
+         * how these tests already seed Committee/Meeting/Member rows directly instead of using a
+         * UI flow. [LedgerBackedLtrBalanceProvider][network.lapis.cloud.server.economy
+         * .LedgerBackedLtrBalanceProvider] then derives `freeBalance` as `SUM(amount_ltr)`, so a
+         * single MINT of [balance] reproduces the exact same effective free balance the old
+         * `ltr_balance` snapshot row used to provide directly.
          */
         fun seedLtrBalance(
             memberId: Uuid,
             balance: BigDecimal,
         ) {
             transaction {
-                LtrBalanceTable.insert {
-                    it[LtrBalanceTable.memberId] = memberId
-                    it[balanceLtr] = balance
-                    it[updatedAt] = LocalDateTime(2026, 1, 1, 0, 0)
+                LtrLedgerEntryTable.insert {
+                    it[id] = Uuid.random()
+                    it[LtrLedgerEntryTable.memberId] = memberId
+                    it[entryType] = LtrLedgerEntryType.MINT
+                    it[amountLtr] = balance
+                    it[referenceType] = null
+                    it[referenceId] = null
+                    it[note] = "GovernanceServiceTest seed"
+                    it[createdBy] = null
+                    it[createdAt] = LocalDateTime(2026, 1, 1, 0, 0)
                 }
             }
         }
@@ -1847,7 +1858,7 @@ private fun Route.registerVoteTestRoutes() {
  * (`resolution.vote_id` -> `vote.id`, `vote.resolution_id` -> `resolution.id`) --
  * both FKs are nulled out before either table's rows are deleted, same reasoning as the compile-
  * time circular column reference in `GovernanceTables.kt` (breaking the cycle explicitly rather
- * than relying on delete order alone). [LtrBalanceTable] rows are matched by `memberIds` only
+ * than relying on delete order alone). [LtrLedgerEntryTable] rows are matched by `memberIds` only
  * (never scoped by Committee) since a balance is a property of the member, not of any Committee.
  */
 private fun cleanUpGovernanceTestData(
@@ -1929,7 +1940,7 @@ private fun cleanUpGovernanceTestData(
             }
             TransparenzregisterReminderTable.deleteWhere { TransparenzregisterReminderTable.memberId inList memberIds }
             BoardMembershipTable.deleteWhere { BoardMembershipTable.memberId inList memberIds }
-            LtrBalanceTable.deleteWhere { LtrBalanceTable.memberId inList memberIds }
+            LtrLedgerEntryTable.deleteWhere { LtrLedgerEntryTable.memberId inList memberIds }
             AccountTable.deleteWhere { AccountTable.memberId inList memberIds }
             MemberTable.deleteWhere { MemberTable.id inList memberIds }
         }

@@ -35,14 +35,14 @@ class DomainModelMergerTest :
         // ── Test 1: merging the real 17 domain scripts ───────────────────────────────────
 
         test(
-            "merging the real 17 domain scripts succeeds and the uml-to-erm -> erm-to-exposed chain " +
+            "merging the real 18 domain scripts succeeds and the uml-to-erm -> erm-to-exposed chain " +
                 "produces exactly one Table file per distinct table name",
         ) {
             val scriptFiles =
                 requireNotNull(KumlModelLoader.kumlSourceDir.listFiles { f -> f.name.endsWith(".kuml.kts") }) {
                     "kUML source dir not found or not a directory: ${KumlModelLoader.kumlSourceDir.absolutePath}"
                 }.sortedBy { it.name }
-            scriptFiles shouldHaveSize 17
+            scriptFiles shouldHaveSize 18
 
             val diagrams = scriptFiles.map { KumlModelLoader.loadUmlDiagram(it) }
 
@@ -94,7 +94,19 @@ class DomainModelMergerTest :
             // contributes +6 «Entity» declarations (2 stubs + 4 real tables) and +2 drops (both
             // stubs merge into the already-existing member/document entities) versus the V0.5.4
             // baseline above (52 -> 56).
-            val distinctTableNames = 56
+            // 08-ltr-balance.kuml.kts's V0.6.1 re-modelling (ltr_balance -> ltr_ledger_entry) does
+            // NOT change the distinct-table-name count versus the V0.5.5 baseline above: still
+            // exactly one real table plus its own Member stub, only the table's internal shape
+            // changed (see that file's own header).
+            // 17-crowdfunding.kuml.kts (V0.6.1 Internes Crowdfunding) adds exactly four more real
+            // tables (crowdfunding_project, crowdfunding_reaction, crowdfunding_distribution,
+            // crowdfunding_submission_gate), WITH its own cross-domain Member stub (submitter_
+            // member_id/reviewed_by on crowdfunding_project, member_id on crowdfunding_reaction,
+            // triggered_by on crowdfunding_distribution all resolve through it) -- so it
+            // contributes +5 «Entity» declarations (the stub + 4 real tables) and +1 drop (the
+            // stub merges into the already-existing member entity) versus the V0.5.5 baseline
+            // above (56 -> 60).
+            val distinctTableNames = 60
 
             val result =
                 UmlToExposedViaErmScriptTransformer().transform(
@@ -150,7 +162,7 @@ class DomainModelMergerTest :
                     "ElectionTallyApprovalTable.kt",
                     "ElectionBallotTable.kt",
                     "ElectionBallotSelectionTable.kt",
-                    "LtrBalanceTable.kt",
+                    "LtrLedgerEntryTable.kt",
                     "SystemicConsensusTable.kt",
                     "SystemicConsensusOptionTable.kt",
                     "SystemicConsensusEligibleVoterTable.kt",
@@ -173,6 +185,10 @@ class DomainModelMergerTest :
                     "TechnicalOrganizationalMeasureTable.kt",
                     "DataProtectionImpactAssessmentTable.kt",
                     "DataBreachIncidentTable.kt",
+                    "CrowdfundingProjectTable.kt",
+                    "CrowdfundingReactionTable.kt",
+                    "CrowdfundingDistributionTable.kt",
+                    "CrowdfundingSubmissionGateTable.kt",
                 )
         }
 

@@ -1,62 +1,79 @@
-// LTR-Balance domain — ltr_balance (created inside V8__meritokratische_voteen.sql, NOT its
-// own V-file: the migration's own header comment explains why — "ltr_balance -> ALTER TABLE
-// resolution (FK-Ziel vote existiert erst danach)" — i.e. ltr_balance's CREATE TABLE had to
-// land physically before the later `ALTER TABLE resolution ADD COLUMN vote_id ...` in the
-// same migration file, so it was folded into V8 rather than getting a dedicated V-number).
+// LTR-Ledger domain (V0.6.1, Internes Crowdfunding) -- RE-MODELLED, not merely re-generated.
 //
-// This is the versioned source-of-truth *model* for the schema shape (ADR-0016), verified
-// against both the real Flyway-migrated H2 schema and the hand-written Exposed Table object
-// (network.lapis.cloud.server.db.tables.LtrBalanceTable.kt) by LtrBalanceSchemaDriftTest. Per
-// ADR-0016's designModelStrategy option B, this is a verification-only artifact for now: the
-// hand-written Table object remains the actually-compiled/actually-imported source. See
-// docs/architecture/domain-model.adoc and CLAUDE.md's kUML-Repo-Konventionen (vault) for the full
-// rationale (enum-to-VARCHAR type-fidelity gap — not actually triggered in this domain, there are
-// no enum columns here — and the Kotlin-object-naming-override gap).
+// **Migration note**: this file previously modelled `ltr_balance` (see the module's own git
+// history for the pre-V0.6.1 shape) -- a single-row-per-member balance SNAPSHOT with no debit/
+// credit/reserve columns at all. That table's own KDoc/header comment explicitly flagged it as
+// provisional and named "V0.6 (LTR-Wirtschaft/Auktion/Price-Oracle)" as the wave that would
+// replace it with a real ledger. This is that wave (well, its first sub-wave, V0.6.1): `ltr_balance`
+// is DROPPED and replaced by `ltr_ledger_entry`, an append-only, signed-amount, per-member ledger.
+// `V1__baseline.sql` carries both the DROP and the new CREATE (see that file's own comment) --
+// there was never a production deployment of this schema to migrate forward incrementally, so a
+// destructive baseline edit is safe and preferred over a growing V2/V3/... migration chain per
+// this codebase's "V1__baseline.sql is ONE consolidated migration" convention (see CLAUDE.md).
 //
-// Explicitly, deliberately provisional table (per LtrBalanceTable.kt's own KDoc): just a balance
-// snapshot per member, no debit/credit/reserve ledger columns yet. V0.6 (LTR-Wirtschaft/Auktion/
-// Price-Oracle) replaces this with a real ledger — at that point this .kuml.kts file will need
-// RE-MODELLING (new entity shape, likely a proper Ledger/Transaction pair), not just
-// re-generation from the same shape. Noted here so a future agent doesn't mistake this file for a
-// stable, settled model.
+// **Why append-only signed-entry, not the double-entry Journal/Posting shape from
+// 10-accounting.kuml.kts**: deliberate, reviewer-flagged design contrast. LTR is an internal
+// participation/governance currency, not SKR49/GoBD-pflichtige EUR-Buchführung -- there is no
+// legal or fachlich reason to invent a "System-LTR-Pool" counter-account for every mint just to
+// satisfy a double-entry balance invariant that has no real-world referent here. A single signed
+// `amount_ltr` per entry (credit positive, debit negative) is the simplest structure that still
+// gives an auditable, append-only, `SUM(amount_ltr)`-derived balance -- no denormalized snapshot
+// column, consistent with this codebase's "derive from the ledger, don't cache a running total"
+// idiom already used for Kassenbuch/GeneralLedgerCalculator balances in 10-accounting.kuml.kts.
 //
-// The load-bearing modelling decision for this domain: member_id is simultaneously the PRIMARY
-// KEY and the FK to member — `PrimaryKey(memberId)` in the hand-written table, no separate
-// synthetic `id` column at all. UmlToErmTransformer's default synthetic-PK behaviour
-// (syntheticPkTemplate) only backs off when at least one ColumnTemplate already has
-// primaryKey=true (mapAttributeToColumn: `isPk = attr.name.equals("id", ignoreCase = true) ||
-// idStereo != null`) — so tagging member_id's attribute directly with the «Id» stereotype (not
-// «FK» alone, and NOT modelling it as a UML association) suppresses the synthetic `id` column
-// entirely, matching the real schema/hand-written table exactly.
+// **`entryType` (`LtrLedgerEntryType`) is additively extensible, not V0.6.1-closed**: `MINT`
+// (an ADMIN/BOARD/TREASURER grant, see network.lapis.cloud.server.rpc.LtrLedgerService),
+// `PROJECT_STAKE` (network.lapis.cloud.server.rpc.CrowdfundingService.submitProject binding LTR
+// into a Crowdfunding project's visibility weight, see 17-crowdfunding.kuml.kts) and `VOTE_STAKE`
+// (network.lapis.cloud.server.rpc.GovernanceService.castVoteBallot binding LTR into a Vote's
+// Vickrey-auction stake -- a security fix landed after this wave's initial cut: `freeBalance` was
+// blind to open vote stakes because castVoteBallot never wrote this row, letting the same LTR be
+// staked on unlimited concurrent votes AND spent again via submitProject) are the three entry
+// types actually written. `PROJECT_STAKE_RELEASE` is defined but DELIBERATELY UNUSED -- no path
+// exists yet to release a bound stake back to its member (e.g. on project rejection, a vote
+// recast-down, `closeVote` settling below the full stake, or `abortVote`); reserved so a later
+// wave can add that release path as a pure additive literal, no ledger restructuring needed.
+// V0.6.3 (direkte LTR-Peer-to-Peer-Uebertragung) is expected to add `PEER_TRANSFER_OUT`/
+// `PEER_TRANSFER_IN` the same way -- literal order is load-bearing once a schema-drift test pins
+// it (cheap to extend, expensive to reorder, same note every other domain enum in this codebase
+// carries).
 //
-// This also means member_id cannot be modelled as a UML association at all here: verified by
-// reading UmlToErmTransformer.addForeignKey (kuml-transform-uml-to-erm) directly — every
-// association-derived FK column is unconditionally created with `primaryKey = false` (line ~597,
-// no override mechanism of any kind), so an association could never produce a column that is also
-// the primary key. Modelling member_id as a plain «Column» UUID attribute carrying BOTH «Id» and
-// an explicit columnName tag is therefore the only way to reproduce this exact shape — consistent
-// with (and an even more direct case of) the plain-«Column»-attribute fallback already used
-// throughout document/communication/dsgvo/governance/vote/election for FK-name-mismatch cases;
-// here the reason isn't a name mismatch but a structural one (PK-that-is-also-FK). The real FK
-// target (member) is still independently pinned via LtrBalanceSchemaDriftTest's
-// information_schema introspection against the live H2-migrated schema, exactly like every prior
-// plain-«Column»-FK case.
+// **`referenceType`/`referenceId` are a polymorphic, DB-FK-less opaque pointer** -- directly
+// mirrors `audit_log_entry.entity_type`/`entity_id` (14-audit-log.kuml.kts): no single FK
+// constraint could express "targets crowdfunding_project today, possibly an auction lot or a
+// peer member in a later wave", and this file (08, lower-numbered) would otherwise need a
+// forward reference into 17-crowdfunding.kuml.kts (higher-numbered) to declare a real FK. Both
+// are nullable together (`MINT` entries carry neither -- a grant is not "about" any other
+// entity). See 17-crowdfunding.kuml.kts's own header for the other side of this pointer.
 //
-// No enum columns in this domain. balance_ltr uses an explicit «Column».sqlType="DECIMAL(18,2)"
-// override to match the real schema/hand-written table's wider precision (DECIMAL(18,2), vs.
-// contribution.amountDue's narrower DECIMAL(12,2)) — UmlErmTypeMapper's bare "decimal" keyword
-// defaults to DECIMAL(19,2), so the override is required here for the same reason contribution's
-// amountDue needed one.
+// **member_id is now a real UML association** (unlike the old ltr_balance.member_id, which HAD
+// to be a plain «Column»+«Id» attribute because it doubled as the primary key -- see this file's
+// pre-V0.6.1 history for why). `ltr_ledger_entry` has its own synthetic `id` primary key instead
+// (many rows per member now, not one), so the ordinary association-derived FK naming applies
+// cleanly: association-to-`member` default is "member_id", which is exactly the desired column
+// name here -- no override needed, unlike `created_by` below.
 //
-// member_id's FK target is pinned via «Column».fkEntity (not an association — see above), which
-// is why this file, symmetrically, carries a minimal id-only Member stub (owned by Foundation)
-// purely so UmlToErmTransformer can resolve it within this single-file evaluation — same
-// cross-domain-stub pattern established by contribution/document/dsgvo's own Member stubs.
+// `created_by` (the ADMIN/BOARD/TREASURER who triggered a `MINT`, or null for a system-authored
+// `PROJECT_STAKE`) is a second, OPTIONAL FK to member on this same entity -- plain «Column»
+// UUID attribute with «Column».fkEntity, not an association (an association would collide with
+// the primary `member_id` association's class-derived default "member_id"; disambiguating via
+// role would still produce a less legible result than this codebase's established "actor-style
+// FK -> plain Column" idiom, e.g. journal_entry.created_by/motion.reviewed_by).
+//
+// This file, symmetrically, carries a minimal id-only Member stub (owned by Foundation) purely
+// so UmlToErmTransformer can resolve both the member_id association and the created_by «Column»
+// .fkEntity override within this single-file evaluation -- same cross-domain-stub pattern every
+// other domain in this codebase already establishes.
+//
+// amount_ltr uses an explicit «Column».sqlType="DECIMAL(18,2)" override, same precision as the
+// old balance_ltr column (and the same reason contribution.amountDue/ltr_balance.balance_ltr
+// needed one: UmlErmTypeMapper's bare "decimal" keyword defaults to DECIMAL(19,2)).
 import dev.kuml.profile.erm.ermMappingProfile
+import dev.kuml.uml.Multiplicity
 import dev.kuml.uml.dsl.applyProfile
 import dev.kuml.uml.dsl.stereotype
 
-classDiagram(name = "LtrBalance") {
+classDiagram(name = "LtrLedger") {
     applyProfile(ermMappingProfile)
 
     val member = classOf(name = "Member") {
@@ -67,23 +84,83 @@ classDiagram(name = "LtrBalance") {
         }
     }
 
-    val ltrBalance = classOf(name = "LtrBalance") {
-        stereotype("Entity") { "tableName" to "ltr_balance"; "kotlinObjectName" to "LtrBalanceTable" }
+    // Literal order is load-bearing: LtrLedgerSchemaDriftTest asserts ErmDataType.Enum.values in
+    // exactly this order, matching network.lapis.cloud.shared.domain.LtrLedgerEntryType. See file
+    // header for which literals this wave actually writes vs. reserves.
+    val ltrLedgerEntryType = enumOf(name = "LtrLedgerEntryType") {
+        literal(name = "MINT")
+        literal(name = "PROJECT_STAKE")
+        literal(name = "PROJECT_STAKE_RELEASE")
+        literal(name = "VOTE_STAKE")
+    }
 
-        // Real column is simultaneously PRIMARY KEY and FK -> member (id). Modelled as a plain
-        // «Column» UUID attribute carrying «Id» (not a UML association — see file header comment
-        // for why an association can never produce primaryKey=true here). FK target pinned via
-        // «Column».fkEntity, independently cross-checked via LtrBalanceSchemaDriftTest's
-        // information_schema introspection.
-        attribute(name = "memberId", type = "UUID") {
+    // Literal order is load-bearing, same reason as above. `CROWDFUNDING_PROJECT` is this wave's
+    // original literal, `VOTE` the security-fix addition for `VOTE_STAKE` above -- additively
+    // extended by later waves (auction lots, peer members, ...) exactly like AuditEntityType.
+    val ltrLedgerReferenceType = enumOf(name = "LtrLedgerReferenceType") {
+        literal(name = "CROWDFUNDING_PROJECT")
+        literal(name = "VOTE")
+    }
+
+    val ltrLedgerEntry = classOf(name = "LtrLedgerEntry") {
+        stereotype("Entity") { "tableName" to "ltr_ledger_entry"; "kotlinObjectName" to "LtrLedgerEntryTable" }
+        stereotype("Index") { "columns" to listOf("member_id"); "name" to "idx_ltr_ledger_entry_member" }
+        stereotype("Index") { "columns" to listOf("entry_type"); "name" to "idx_ltr_ledger_entry_type" }
+
+        attribute(name = "id", type = "UUID") {
             stereotype("Id")
-            stereotype("Column") { "columnName" to "member_id"; "fkEntity" to "Member" }
+            stereotype("Column") { "columnName" to "id" }
         }
-        attribute(name = "balanceLtr", type = "BigDecimal") {
-            stereotype("Column") { "columnName" to "balance_ltr"; "sqlType" to "DECIMAL(18,2)" }
+        attribute(name = "entryType", type = ltrLedgerEntryType) {
+            stereotype("Column") {
+                "columnName" to "entry_type"
+                "enumType" to "network.lapis.cloud.shared.domain.LtrLedgerEntryType"
+            }
         }
-        attribute(name = "updatedAt", type = "LocalDateTime") {
-            stereotype("Column") { "columnName" to "updated_at" }
+        // Signed: credit positive, debit negative. freeBalance(member) = SUM(amount_ltr) across
+        // every row for that member -- see file header for why this is deliberately NOT a
+        // double-entry Journal/Posting pair.
+        attribute(name = "amountLtr", type = "BigDecimal") {
+            stereotype("Column") { "columnName" to "amount_ltr"; "sqlType" to "DECIMAL(18,2)" }
         }
+        // Nullable together with referenceId -- MINT entries carry neither. See file header for
+        // the polymorphic-pointer rationale (mirrors audit_log_entry.entity_type/entity_id).
+        attribute(name = "referenceType", type = ltrLedgerReferenceType) {
+            multiplicity = Multiplicity(0, 1)
+            stereotype("Column") {
+                "columnName" to "reference_type"
+                "enumType" to "network.lapis.cloud.shared.domain.LtrLedgerReferenceType"
+            }
+        }
+        // Deliberately NO «Column».fkEntity / no association -- polymorphic pointer, target table
+        // depends on referenceType. See file header.
+        attribute(name = "referenceId", type = "UUID") {
+            multiplicity = Multiplicity(0, 1)
+            stereotype("Column") { "columnName" to "reference_id" }
+        }
+        attribute(name = "note", type = "String") {
+            multiplicity = Multiplicity(0, 1)
+            stereotype("Column") { "columnName" to "note"; "sqlType" to "VARCHAR(500)" }
+        }
+        // Real FK -> member (id), nullable. Plain «Column» UUID attribute — association-to-FK
+        // naming would derive "member_id", colliding with the primary member_id association
+        // below. See file header for the full rationale (same idiom as journal_entry.created_by/
+        // motion.reviewed_by).
+        attribute(name = "createdBy", type = "UUID") {
+            multiplicity = Multiplicity(0, 1)
+            stereotype("Column") { "columnName" to "created_by"; "fkEntity" to "Member" }
+        }
+        attribute(name = "createdAt", type = "LocalDateTime") {
+            stereotype("Column") { "columnName" to "created_at" }
+        }
+    }
+
+    // ltr_ledger_entry.member_id -> member (id): association-derived default matches ("member_id"),
+    // safe despite this entity ALSO having created_by, because that second FK is modelled as a
+    // plain «Column» attribute (see above), never as a competing association -- same reasoning
+    // attendance.member_id's own comment gives for coexisting with represented_by_member_id.
+    association(source = member, target = ltrLedgerEntry, id = "assoc-member-ltr_ledger_entry") {
+        source { multiplicity("1") }
+        target { multiplicity("0..*"); role = "memberId" }
     }
 }

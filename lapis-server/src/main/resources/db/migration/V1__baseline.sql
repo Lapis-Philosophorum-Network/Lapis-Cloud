@@ -184,10 +184,24 @@ CREATE TABLE committee_membership (
     CHECK (role IN ('CHAIR', 'DEPUTY_CHAIR', 'SECRETARY', 'MEMBER', 'ASSESSOR'))
 );
 
-CREATE TABLE ltr_balance (
-    member_id UUID NOT NULL PRIMARY KEY,
-    balance_ltr DECIMAL(18, 2) NOT NULL,
-    updated_at TIMESTAMP NOT NULL
+-- V0.6.1 Internes Crowdfunding: ltr_balance (a provisional balance SNAPSHOT, no ledger rows) is
+-- replaced by ltr_ledger_entry, an append-only, signed-amount, per-member ledger -- see
+-- 08-ltr-balance.kuml.kts file header for the full rationale. There was never a production
+-- deployment of the pre-V0.6.1 schema, so this baseline is edited destructively (DROP + CREATE
+-- inline) rather than adding a V2 migration -- consistent with this codebase's "V1__baseline.sql
+-- is ONE consolidated migration" convention.
+CREATE TABLE ltr_ledger_entry (
+    id UUID NOT NULL PRIMARY KEY,
+    entry_type VARCHAR(21) NOT NULL,
+    amount_ltr DECIMAL(18, 2) NOT NULL,
+    reference_type VARCHAR(20) NULL,
+    reference_id UUID NULL,
+    note VARCHAR(500) NULL,
+    created_by UUID NULL,
+    created_at TIMESTAMP NOT NULL,
+    member_id UUID NOT NULL,
+    CHECK (entry_type IN ('MINT', 'PROJECT_STAKE', 'PROJECT_STAKE_RELEASE', 'VOTE_STAKE')),
+    CHECK (reference_type IN ('CROWDFUNDING_PROJECT', 'VOTE'))
 );
 
 CREATE TABLE journal_entry (
@@ -709,6 +723,47 @@ CREATE TABLE data_breach_incident (
     CHECK (status IN ('REPORTED', 'UNDER_ASSESSMENT', 'NOTIFIED_AUTHORITY', 'NO_NOTIFICATION_REQUIRED', 'CLOSED'))
 );
 
+-- V0.6.1 Internes Crowdfunding (see 17-crowdfunding.kuml.kts file header for the full fachlich
+-- model). crowdfunding_submission_gate is a genesis-singleton lock row, mirroring
+-- organization_settings/audit_log_chain_state's own pattern -- seeded below.
+CREATE TABLE crowdfunding_project (
+    id UUID NOT NULL PRIMARY KEY,
+    title VARCHAR(200) NOT NULL,
+    description VARCHAR(4000) NOT NULL,
+    submitter_member_id UUID NOT NULL,
+    initial_weight_ltr DECIMAL(18, 2) NOT NULL,
+    status VARCHAR(8) NOT NULL,
+    rejection_reason VARCHAR(2000) NULL,
+    reviewed_by UUID NULL,
+    reviewed_at TIMESTAMP NULL,
+    submitted_at TIMESTAMP NOT NULL,
+    CHECK (status IN ('PENDING', 'APPROVED', 'REJECTED'))
+);
+
+CREATE TABLE crowdfunding_reaction (
+    id UUID NOT NULL PRIMARY KEY,
+    project_id UUID NOT NULL,
+    reaction_value VARCHAR(7) NOT NULL,
+    cast_at TIMESTAMP NOT NULL,
+    member_id UUID NOT NULL,
+    CHECK (reaction_value IN ('LIKE', 'DISLIKE'))
+);
+
+CREATE TABLE crowdfunding_distribution (
+    id UUID NOT NULL PRIMARY KEY,
+    project_id UUID NOT NULL,
+    period_start DATE NOT NULL,
+    period_end DATE NOT NULL,
+    basket_total_at_distribution INT NOT NULL,
+    amount_eur DECIMAL(12, 2) NOT NULL,
+    computed_at TIMESTAMP NOT NULL,
+    triggered_by UUID NOT NULL
+);
+
+CREATE TABLE crowdfunding_submission_gate (
+    id UUID NOT NULL PRIMARY KEY
+);
+
 -- Foreign Keys
 
 ALTER TABLE member ADD CONSTRAINT fk_member_membership_tier_id FOREIGN KEY (membership_tier_id) REFERENCES membership_tier(id);
@@ -784,7 +839,8 @@ ALTER TABLE election_ballot ADD CONSTRAINT fk_election_ballot_election_id FOREIG
 ALTER TABLE election_ballot ADD CONSTRAINT fk_election_ballot_member_id FOREIGN KEY (member_id) REFERENCES member(id);
 ALTER TABLE election_ballot_selection ADD CONSTRAINT fk_election_ballot_selection_ballot_id FOREIGN KEY (ballot_id) REFERENCES election_ballot(id);
 ALTER TABLE election_ballot_selection ADD CONSTRAINT fk_election_ballot_selection_option_id FOREIGN KEY (option_id) REFERENCES election_option(id);
-ALTER TABLE ltr_balance ADD CONSTRAINT fk_ltr_balance_member_id FOREIGN KEY (member_id) REFERENCES member(id);
+ALTER TABLE ltr_ledger_entry ADD CONSTRAINT fk_ltr_ledger_entry_created_by FOREIGN KEY (created_by) REFERENCES member(id);
+ALTER TABLE ltr_ledger_entry ADD CONSTRAINT fk_ltr_ledger_entry_member_id FOREIGN KEY (member_id) REFERENCES member(id);
 ALTER TABLE systemic_consensus ADD CONSTRAINT fk_systemic_consensus_opened_by FOREIGN KEY (opened_by) REFERENCES member(id);
 ALTER TABLE systemic_consensus ADD CONSTRAINT fk_systemic_consensus_motion_id FOREIGN KEY (motion_id) REFERENCES motion(id);
 ALTER TABLE systemic_consensus ADD CONSTRAINT fk_systemic_consensus_meeting_id FOREIGN KEY (meeting_id) REFERENCES meeting(id);
@@ -820,6 +876,12 @@ ALTER TABLE data_protection_impact_assessment ADD CONSTRAINT fk_dpia_created_by 
 ALTER TABLE data_protection_impact_assessment ADD CONSTRAINT fk_dpia_updated_by FOREIGN KEY (updated_by) REFERENCES member(id);
 ALTER TABLE data_breach_incident ADD CONSTRAINT fk_data_breach_incident_reported_by FOREIGN KEY (reported_by) REFERENCES member(id);
 ALTER TABLE data_breach_incident ADD CONSTRAINT fk_data_breach_incident_updated_by FOREIGN KEY (updated_by) REFERENCES member(id);
+ALTER TABLE crowdfunding_project ADD CONSTRAINT fk_crowdfunding_project_submitter_member_id FOREIGN KEY (submitter_member_id) REFERENCES member(id);
+ALTER TABLE crowdfunding_project ADD CONSTRAINT fk_crowdfunding_project_reviewed_by FOREIGN KEY (reviewed_by) REFERENCES member(id);
+ALTER TABLE crowdfunding_reaction ADD CONSTRAINT fk_crowdfunding_reaction_project_id FOREIGN KEY (project_id) REFERENCES crowdfunding_project(id);
+ALTER TABLE crowdfunding_reaction ADD CONSTRAINT fk_crowdfunding_reaction_member_id FOREIGN KEY (member_id) REFERENCES member(id);
+ALTER TABLE crowdfunding_distribution ADD CONSTRAINT fk_crowdfunding_distribution_project_id FOREIGN KEY (project_id) REFERENCES crowdfunding_project(id);
+ALTER TABLE crowdfunding_distribution ADD CONSTRAINT fk_crowdfunding_distribution_triggered_by FOREIGN KEY (triggered_by) REFERENCES member(id);
 
 -- Indexes
 
@@ -907,6 +969,13 @@ CREATE INDEX idx_tom_category ON technical_organizational_measure (category);
 CREATE INDEX idx_dpia_status ON data_protection_impact_assessment (status);
 CREATE INDEX idx_breach_status ON data_breach_incident (status);
 CREATE INDEX idx_breach_reported_by ON data_breach_incident (reported_by);
+CREATE INDEX idx_ltr_ledger_entry_member ON ltr_ledger_entry (member_id);
+CREATE INDEX idx_ltr_ledger_entry_type ON ltr_ledger_entry (entry_type);
+CREATE INDEX idx_crowdfunding_project_status ON crowdfunding_project (status);
+CREATE INDEX idx_crowdfunding_project_submitter ON crowdfunding_project (submitter_member_id);
+CREATE UNIQUE INDEX uq_crowdfunding_reaction_project_member ON crowdfunding_reaction (project_id, member_id);
+CREATE INDEX idx_crowdfunding_reaction_project ON crowdfunding_reaction (project_id);
+CREATE UNIQUE INDEX uq_crowdfunding_distribution_project_period ON crowdfunding_distribution (project_id, period_start, period_end);
 
 -- V0.4.1 Serienbrief/PDF engine: exactly one organization_settings row must exist from first
 -- migration onward, in every environment (not just LAPIS_SEED_DEMO_DATA=true demo deployments) --
@@ -924,4 +993,14 @@ VALUES ('00000000-0000-0000-0000-0000000000f2', 'Verein/Partei (bitte in Organis
 -- organization_settings's own '...-f2'. last_entry_hash starts NULL (no entry written yet).
 INSERT INTO audit_log_chain_state (id, last_sequence_number, last_entry_hash)
 VALUES ('00000000-0000-0000-0000-0000000000f3', 0, NULL);
+
+-- V0.6.1 Internes Crowdfunding: exactly one crowdfunding_submission_gate row must exist from
+-- first migration onward -- the genesis-singleton row CrowdfundingService.submitProject locks
+-- (SELECT ... FOR UPDATE) to serialize concurrent project submissions against the same decaying
+-- top-weight entry hurdle. Fixed sentinel id, next unused '...-0000-0000000000fN' slot after
+-- audit_log_chain_state's own '...-f3'. No other columns -- see 17-crowdfunding.kuml.kts file
+-- header. Also registered in OrganizationRestoreService.SEEDED_SINGLETON_ROWS so a fresh restore
+-- target is not mistaken for "already holds data".
+INSERT INTO crowdfunding_submission_gate (id)
+VALUES ('00000000-0000-0000-0000-0000000000f4');
 

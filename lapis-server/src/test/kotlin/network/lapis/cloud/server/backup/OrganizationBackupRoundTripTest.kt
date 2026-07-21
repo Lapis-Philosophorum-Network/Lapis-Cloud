@@ -15,7 +15,7 @@ import network.lapis.cloud.server.db.generated.DocumentTable
 import network.lapis.cloud.server.db.generated.DocumentVersionTable
 import network.lapis.cloud.server.db.generated.JournalEntryTable
 import network.lapis.cloud.server.db.generated.LedgerAccountTable
-import network.lapis.cloud.server.db.generated.LtrBalanceTable
+import network.lapis.cloud.server.db.generated.LtrLedgerEntryTable
 import network.lapis.cloud.server.db.generated.MemberTable
 import network.lapis.cloud.server.db.generated.MembershipTierTable
 import network.lapis.cloud.server.db.generated.OrganizationSettingsTable
@@ -31,6 +31,7 @@ import network.lapis.cloud.shared.domain.DocumentAccessLevel
 import network.lapis.cloud.shared.domain.GemeinnuetzigkeitSphere
 import network.lapis.cloud.shared.domain.JournalEntryStatus
 import network.lapis.cloud.shared.domain.LedgerAccountType
+import network.lapis.cloud.shared.domain.LtrLedgerEntryType
 import network.lapis.cloud.shared.domain.MemberStatus
 import network.lapis.cloud.shared.domain.PostingSide
 import org.jetbrains.exposed.v1.core.eq
@@ -170,10 +171,16 @@ class OrganizationBackupRoundTripTest :
                     it[PostingTable.costCenterId] = costCenterId
                 }
 
-                LtrBalanceTable.insert {
-                    it[memberId] = adminId
-                    it[balanceLtr] = BigDecimal("1000.50")
-                    it[updatedAt] = LocalDateTime(2027, 1, 4, 8, 0)
+                LtrLedgerEntryTable.insert {
+                    it[id] = Uuid.random()
+                    it[LtrLedgerEntryTable.memberId] = adminId
+                    it[entryType] = LtrLedgerEntryType.MINT
+                    it[amountLtr] = BigDecimal("1000.50")
+                    it[referenceType] = null
+                    it[referenceId] = null
+                    it[note] = "Roundtrip-Testdaten"
+                    it[createdBy] = null
+                    it[createdAt] = LocalDateTime(2027, 1, 4, 8, 0)
                 }
 
                 // Mutates the Flyway-seeded organization_settings singleton row away from its
