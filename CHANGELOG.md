@@ -4,6 +4,25 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.1] — 2026-07-21
+
+### Added
+
+Completes the V0.5 compliance bundle that 0.5.0 deliberately narrowed in scope — the three remaining items from that release's "known limitations" list.
+
+**GoBD audit log** — a hash-chained (SHA-256), append-only `AuditLogEntry` log written in the same transaction as the business mutation it records, serialized via a genesis-singleton `AuditLogChainState` row (`SELECT ... FOR UPDATE`). Covers the JournalEntry lifecycle (draft/post), Resolution creation, BoardMembership changes, and PartyDonationCompliance verdicts for postings that actually committed. Deliberately out of scope: ledger/cost-center master-data CRUD, DSGVO erasure (has its own separate, unchanged `dsgvo_audit_log`), and any retention/archival policy. Read access is TREASURER/BOARD/ADMIN-gated with capped pagination; before/after snapshots are excluded from a member's own GDPR export.
+
+**Full-organization backup/restore/export** — an ADMIN-only, streamed ZIP export/restore covering every table in the schema (discovered dynamically via `information_schema`, not a hand-maintained list — any table a future domain wave adds is automatically in scope) plus document blobs. Export streams row-by-row without materializing the database in memory; restore is upsert-based, gated by a formatVersion + SHA-256 schema-checksum compatibility check and a non-empty-target pre-flight guard against accidental cross-organization merges. Zip-Slip is guarded on both the export and restore paths. Infrastructure-level backup (`pg_dump`/WAL archiving) remains explicitly out of scope — an operations concern, not solved here.
+
+**DSGVO-Vollausbau (AVV, TOMs, DSFA, Datenpannenmeldung)** — four record-keeping/workflow tools, none of them automated legal advice: an AVV register for third-party processors (status/dates/document reference, coupled to the existing postal-mail opt-in only as a non-blocking advisory log, never a hard gate); TOM documentation across the eight Art. 32 / Anlage §64 BDSG categories; a DPIA template where the required-or-not verdict is always a stored human judgment (a `DpiaRiskMatrix` helper only renders a display band, it never decides); and a data-breach-incident workflow that surfaces the Art. 33 72-hour clock as a read-time warning without ever auto-filing a notification. Authorization is ADMIN-only for AVV/TOM writes, BOARD/ADMIN for DPIA/breach read and write.
+
+### Known limitations (tracked for later versions)
+
+- No LTR economy yet (internal crowdfunding, auction, direct transfer, politician profiles/ranking) — planned for V0.6.
+- Federation (multi-server operation) is not yet built — planned for V0.7.
+- Audit log's hash chain is plain SHA-256 (no HMAC/external anchoring) and immutability is enforced only at the application layer (no DB-level UPDATE/DELETE grant restriction) — both accepted, documented residual risks, not defects against this wave's own requirements.
+- Backup/restore has no decompression-ratio/zip-bomb cap beyond the 512 MiB compressed-upload limit — low severity given the actor is already ADMIN-only.
+
 ## [0.5.0] — 2026-07-19
 
 ### Added

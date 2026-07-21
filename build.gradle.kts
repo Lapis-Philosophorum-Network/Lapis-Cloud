@@ -10,7 +10,7 @@ plugins {
 
 allprojects {
     group = "network.lapis.cloud"
-    version = "0.5.0"
+    version = "0.5.1"
 }
 
 // Apply ktlint to every subproject that carries a Kotlin JVM or Kotlin
