@@ -32,17 +32,17 @@ import io.kotest.matchers.string.shouldContain
 class DomainModelMergerTest :
     FunSpec({
 
-        // ── Test 1: merging the real 17 domain scripts ───────────────────────────────────
+        // ── Test 1: merging the real 19 domain scripts ───────────────────────────────────
 
         test(
-            "merging the real 18 domain scripts succeeds and the uml-to-erm -> erm-to-exposed chain " +
+            "merging the real 19 domain scripts succeeds and the uml-to-erm -> erm-to-exposed chain " +
                 "produces exactly one Table file per distinct table name",
         ) {
             val scriptFiles =
                 requireNotNull(KumlModelLoader.kumlSourceDir.listFiles { f -> f.name.endsWith(".kuml.kts") }) {
                     "kUML source dir not found or not a directory: ${KumlModelLoader.kumlSourceDir.absolutePath}"
                 }.sortedBy { it.name }
-            scriptFiles shouldHaveSize 18
+            scriptFiles shouldHaveSize 19
 
             val diagrams = scriptFiles.map { KumlModelLoader.loadUmlDiagram(it) }
 
@@ -106,7 +106,13 @@ class DomainModelMergerTest :
             // contributes +5 «Entity» declarations (the stub + 4 real tables) and +1 drop (the
             // stub merges into the already-existing member entity) versus the V0.5.5 baseline
             // above (56 -> 60).
-            val distinctTableNames = 60
+            // 18-peer-transfer.kuml.kts (V0.6.3 direkte LTR-Peer-to-Peer-Uebertragung) adds exactly
+            // one more real table (peer_transfer), WITH its own cross-domain Member stub
+            // (sender_member_id/recipient_member_id/initiated_by all resolve through it) -- so it
+            // contributes +2 «Entity» declarations (the stub + the one real table) and +1 drop (the
+            // stub merges into the already-existing member entity) versus the V0.6.1 baseline
+            // above (60 -> 61).
+            val distinctTableNames = 61
 
             val result =
                 UmlToExposedViaErmScriptTransformer().transform(
@@ -189,6 +195,7 @@ class DomainModelMergerTest :
                     "CrowdfundingReactionTable.kt",
                     "CrowdfundingDistributionTable.kt",
                     "CrowdfundingSubmissionGateTable.kt",
+                    "PeerTransferTable.kt",
                 )
         }
 

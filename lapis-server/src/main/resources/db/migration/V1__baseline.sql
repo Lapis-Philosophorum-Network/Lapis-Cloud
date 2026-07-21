@@ -200,8 +200,8 @@ CREATE TABLE ltr_ledger_entry (
     created_by UUID NULL,
     created_at TIMESTAMP NOT NULL,
     member_id UUID NOT NULL,
-    CHECK (entry_type IN ('MINT', 'PROJECT_STAKE', 'PROJECT_STAKE_RELEASE', 'VOTE_STAKE')),
-    CHECK (reference_type IN ('CROWDFUNDING_PROJECT', 'VOTE'))
+    CHECK (entry_type IN ('MINT', 'PROJECT_STAKE', 'PROJECT_STAKE_RELEASE', 'VOTE_STAKE', 'PEER_TRANSFER_OUT', 'PEER_TRANSFER_IN')),
+    CHECK (reference_type IN ('CROWDFUNDING_PROJECT', 'VOTE', 'PEER_TRANSFER'))
 );
 
 CREATE TABLE journal_entry (
@@ -764,6 +764,22 @@ CREATE TABLE crowdfunding_submission_gate (
     id UUID NOT NULL PRIMARY KEY
 );
 
+-- V0.6.3 direkte LTR-Peer-to-Peer-Uebertragung (see 18-peer-transfer.kuml.kts file header for the
+-- full fachlich model). Split from ltr_ledger_entry: this table carries the fachlich detail
+-- (self-reported characterization, optional purpose), ltr_ledger_entry carries only the generic
+-- signed booking effect (PEER_TRANSFER_OUT/PEER_TRANSFER_IN, referenceType=PEER_TRANSFER).
+CREATE TABLE peer_transfer (
+    id UUID NOT NULL PRIMARY KEY,
+    amount_ltr DECIMAL(18, 2) NOT NULL,
+    characterization VARCHAR(13) NOT NULL,
+    purpose VARCHAR(500) NULL,
+    sender_member_id UUID NOT NULL,
+    recipient_member_id UUID NOT NULL,
+    initiated_by UUID NULL,
+    created_at TIMESTAMP NOT NULL,
+    CHECK (characterization IN ('SCHENKUNG', 'HONORAR', 'PRIVATVERKAUF', 'SONSTIGES'))
+);
+
 -- Foreign Keys
 
 ALTER TABLE member ADD CONSTRAINT fk_member_membership_tier_id FOREIGN KEY (membership_tier_id) REFERENCES membership_tier(id);
@@ -882,6 +898,9 @@ ALTER TABLE crowdfunding_reaction ADD CONSTRAINT fk_crowdfunding_reaction_projec
 ALTER TABLE crowdfunding_reaction ADD CONSTRAINT fk_crowdfunding_reaction_member_id FOREIGN KEY (member_id) REFERENCES member(id);
 ALTER TABLE crowdfunding_distribution ADD CONSTRAINT fk_crowdfunding_distribution_project_id FOREIGN KEY (project_id) REFERENCES crowdfunding_project(id);
 ALTER TABLE crowdfunding_distribution ADD CONSTRAINT fk_crowdfunding_distribution_triggered_by FOREIGN KEY (triggered_by) REFERENCES member(id);
+ALTER TABLE peer_transfer ADD CONSTRAINT fk_peer_transfer_sender_member_id FOREIGN KEY (sender_member_id) REFERENCES member(id);
+ALTER TABLE peer_transfer ADD CONSTRAINT fk_peer_transfer_recipient_member_id FOREIGN KEY (recipient_member_id) REFERENCES member(id);
+ALTER TABLE peer_transfer ADD CONSTRAINT fk_peer_transfer_initiated_by FOREIGN KEY (initiated_by) REFERENCES member(id);
 
 -- Indexes
 
@@ -976,6 +995,8 @@ CREATE INDEX idx_crowdfunding_project_submitter ON crowdfunding_project (submitt
 CREATE UNIQUE INDEX uq_crowdfunding_reaction_project_member ON crowdfunding_reaction (project_id, member_id);
 CREATE INDEX idx_crowdfunding_reaction_project ON crowdfunding_reaction (project_id);
 CREATE UNIQUE INDEX uq_crowdfunding_distribution_project_period ON crowdfunding_distribution (project_id, period_start, period_end);
+CREATE INDEX idx_peer_transfer_sender ON peer_transfer (sender_member_id);
+CREATE INDEX idx_peer_transfer_recipient ON peer_transfer (recipient_member_id);
 
 -- V0.4.1 Serienbrief/PDF engine: exactly one organization_settings row must exist from first
 -- migration onward, in every environment (not just LAPIS_SEED_DEMO_DATA=true demo deployments) --

@@ -33,10 +33,20 @@
 // exists yet to release a bound stake back to its member (e.g. on project rejection, a vote
 // recast-down, `closeVote` settling below the full stake, or `abortVote`); reserved so a later
 // wave can add that release path as a pure additive literal, no ledger restructuring needed.
-// V0.6.3 (direkte LTR-Peer-to-Peer-Uebertragung) is expected to add `PEER_TRANSFER_OUT`/
-// `PEER_TRANSFER_IN` the same way -- literal order is load-bearing once a schema-drift test pins
-// it (cheap to extend, expensive to reorder, same note every other domain enum in this codebase
-// carries).
+// V0.6.3 (direkte LTR-Peer-to-Peer-Uebertragung) adds `PEER_TRANSFER_OUT`/`PEER_TRANSFER_IN` the
+// same additive way -- literal order is load-bearing (see LtrLedgerSchemaDriftTest, updated by
+// this wave), cheap to extend, expensive to reorder, same note every other domain enum in this
+// codebase carries. This wave ALSO additively extends `ltrLedgerReferenceType` below with
+// `PEER_TRANSFER`, and introduces a new, separate business entity (`PeerTransfer`, see
+// 18-peer-transfer.kuml.kts) rather than widening this file's own `ltr_ledger_entry` shape: the
+// concept document ("03 Bereiche/Lapis Cloud/Meritokratisches System und Libertaler.md", "Direkte
+// LTR-Übertragung (Peer-to-Peer-Transfer)") requires a stored, self-reported legal
+// characterization (Schenkung/Honorar/Privatverkauf/Sonstiges) plus an optional free-text purpose
+// per transfer -- neither has a home in this generic, polymorphic ledger row without widening its
+// column shape for every OTHER entry type too. Exactly the same "business table carries the
+// fachlich detail, ltr_ledger_entry carries only the generic signed booking effect via
+// referenceType/referenceId" split `CROWDFUNDING_PROJECT`/`PROJECT_STAKE` already established
+// (see 17-crowdfunding.kuml.kts).
 //
 // **`referenceType`/`referenceId` are a polymorphic, DB-FK-less opaque pointer** -- directly
 // mirrors `audit_log_entry.entity_type`/`entity_id` (14-audit-log.kuml.kts): no single FK
@@ -92,14 +102,18 @@ classDiagram(name = "LtrLedger") {
         literal(name = "PROJECT_STAKE")
         literal(name = "PROJECT_STAKE_RELEASE")
         literal(name = "VOTE_STAKE")
+        literal(name = "PEER_TRANSFER_OUT")
+        literal(name = "PEER_TRANSFER_IN")
     }
 
     // Literal order is load-bearing, same reason as above. `CROWDFUNDING_PROJECT` is this wave's
-    // original literal, `VOTE` the security-fix addition for `VOTE_STAKE` above -- additively
-    // extended by later waves (auction lots, peer members, ...) exactly like AuditEntityType.
+    // original literal, `VOTE` the security-fix addition for `VOTE_STAKE` above, `PEER_TRANSFER`
+    // the V0.6.3 addition for `PEER_TRANSFER_OUT`/`PEER_TRANSFER_IN` -- additively extended by
+    // later waves (auction lots, ...) exactly like AuditEntityType.
     val ltrLedgerReferenceType = enumOf(name = "LtrLedgerReferenceType") {
         literal(name = "CROWDFUNDING_PROJECT")
         literal(name = "VOTE")
+        literal(name = "PEER_TRANSFER")
     }
 
     val ltrLedgerEntry = classOf(name = "LtrLedgerEntry") {

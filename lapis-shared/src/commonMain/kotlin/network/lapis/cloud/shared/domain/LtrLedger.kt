@@ -30,16 +30,31 @@ enum class LtrLedgerEntryType {
      * analogous to [PROJECT_STAKE_RELEASE].
      */
     VOTE_STAKE,
+
+    /**
+     * [network.lapis.cloud.server.rpc.PeerTransferService.transferLtr]/
+     * [network.lapis.cloud.server.rpc.PeerTransferService.executeArbitrationTransfer] debiting
+     * the sender of a direct member-to-member LTR transfer (V0.6.3). Always paired, same
+     * transaction, same `peer_transfer.id` as `referenceId`, with a [PEER_TRANSFER_IN] entry
+     * crediting the recipient -- see `18-peer-transfer.kuml.kts` file header for the full
+     * fachlich model.
+     */
+    PEER_TRANSFER_OUT,
+
+    /** Credit half of the [PEER_TRANSFER_OUT] pair -- see that literal's KDoc. */
+    PEER_TRANSFER_IN,
 }
 
 /**
  * Polymorphic target-table discriminator for [LtrLedgerEntryDto.referenceId] -- mirrors
  * [AuditEntityType]'s own role for `audit_log_entry.entity_id`. [CROWDFUNDING_PROJECT] is this
- * wave's original literal, [VOTE] the security-fix addition for [LtrLedgerEntryType.VOTE_STAKE]
- * (see that literal's KDoc); additively extended by later waves (auction lots, peer members, ...).
+ * wave's original literal, [VOTE] the security-fix addition for [LtrLedgerEntryType.VOTE_STAKE],
+ * [PEER_TRANSFER] the V0.6.3 addition for [LtrLedgerEntryType.PEER_TRANSFER_OUT]/
+ * [LtrLedgerEntryType.PEER_TRANSFER_IN] (see that literal's KDoc); additively extended by later
+ * waves (auction lots, ...).
  */
 @Serializable
-enum class LtrLedgerReferenceType { CROWDFUNDING_PROJECT, VOTE }
+enum class LtrLedgerReferenceType { CROWDFUNDING_PROJECT, VOTE, PEER_TRANSFER }
 
 /**
  * One row of the append-only LTR ledger. [amountLtr] is signed: positive for a credit (e.g.

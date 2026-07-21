@@ -38,6 +38,7 @@ import network.lapis.cloud.server.rpc.LtrLedgerService
 import network.lapis.cloud.server.rpc.MailingService
 import network.lapis.cloud.server.rpc.MemberService
 import network.lapis.cloud.server.rpc.OrganizationSettingsService
+import network.lapis.cloud.server.rpc.PeerTransferService
 import network.lapis.cloud.server.rpc.PingService
 import network.lapis.cloud.server.rpc.PostalMailService
 import network.lapis.cloud.server.rpc.SystemicConsensusService
@@ -60,6 +61,7 @@ import network.lapis.cloud.shared.rpc.ILtrLedgerService
 import network.lapis.cloud.shared.rpc.IMailingService
 import network.lapis.cloud.shared.rpc.IMemberService
 import network.lapis.cloud.shared.rpc.IOrganizationSettingsService
+import network.lapis.cloud.shared.rpc.IPeerTransferService
 import network.lapis.cloud.shared.rpc.IPingService
 import network.lapis.cloud.shared.rpc.IPostalMailService
 import network.lapis.cloud.shared.rpc.ISystemicConsensusService
@@ -122,6 +124,7 @@ fun Application.module() {
         registerService(IDsgvoComplianceService::class) { call -> DsgvoComplianceService(call) }
         registerService(ILtrLedgerService::class) { call -> LtrLedgerService(call) }
         registerService(ICrowdfundingService::class) { call -> CrowdfundingService(call) }
+        registerService(IPeerTransferService::class) { call -> PeerTransferService(call) }
     }
 
     routing {

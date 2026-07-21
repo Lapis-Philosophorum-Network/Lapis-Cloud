@@ -108,13 +108,21 @@ class LtrLedgerSchemaDriftTest :
             entity.attributeByName("entry_type")?.type shouldBe
                 ErmDataType.Enum(
                     name = "LtrLedgerEntryType",
-                    values = listOf("MINT", "PROJECT_STAKE", "PROJECT_STAKE_RELEASE", "VOTE_STAKE"),
+                    values =
+                        listOf(
+                            "MINT",
+                            "PROJECT_STAKE",
+                            "PROJECT_STAKE_RELEASE",
+                            "VOTE_STAKE",
+                            "PEER_TRANSFER_OUT",
+                            "PEER_TRANSFER_IN",
+                        ),
                     externalFqName = "network.lapis.cloud.shared.domain.LtrLedgerEntryType",
                 )
             entity.attributeByName("reference_type")?.type shouldBe
                 ErmDataType.Enum(
                     name = "LtrLedgerReferenceType",
-                    values = listOf("CROWDFUNDING_PROJECT", "VOTE"),
+                    values = listOf("CROWDFUNDING_PROJECT", "VOTE", "PEER_TRANSFER"),
                     externalFqName = "network.lapis.cloud.shared.domain.LtrLedgerReferenceType",
                 )
         }
