@@ -22,9 +22,11 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.LocalDateTime
+import kotlinx.serialization.json.Json
 import network.lapis.cloud.server.db.DatabaseConfig
 import network.lapis.cloud.server.db.DevSeedData
 import network.lapis.cloud.server.db.generated.AccountTable
+import network.lapis.cloud.server.db.generated.AuditLogEntryTable
 import network.lapis.cloud.server.db.generated.BoardMembershipTable
 import network.lapis.cloud.server.db.generated.CommitteeMembershipTable
 import network.lapis.cloud.server.db.generated.CommitteeTable
@@ -45,6 +47,9 @@ import network.lapis.cloud.server.db.generated.TransparenzregisterReminderTable
 import network.lapis.cloud.server.security.ForbiddenException
 import network.lapis.cloud.server.security.UnauthenticatedException
 import network.lapis.cloud.shared.domain.AccountRole
+import network.lapis.cloud.shared.domain.AuditAction
+import network.lapis.cloud.shared.domain.AuditEntityType
+import network.lapis.cloud.shared.domain.BoardMembershipSnapshot
 import network.lapis.cloud.shared.domain.CandidacyInput
 import network.lapis.cloud.shared.domain.CommitteeRole
 import network.lapis.cloud.shared.domain.CommitteeType
@@ -58,6 +63,7 @@ import network.lapis.cloud.shared.domain.MeetingStatus
 import network.lapis.cloud.shared.domain.MemberStatus
 import network.lapis.cloud.shared.domain.MotionStatus
 import network.lapis.cloud.shared.domain.ResolutionMode
+import network.lapis.cloud.shared.domain.ResolutionSnapshot
 import network.lapis.cloud.shared.domain.ResolutionStatus
 import org.jetbrains.exposed.v1.core.and
 import org.jetbrains.exposed.v1.core.eq
@@ -421,6 +427,108 @@ class ElectionServiceTest :
                             }.count()
                     }
                 seated shouldBe 1L
+            }
+        }
+
+        test(
+            "V0.5.3 GoBD audit log: tally writes both a RESOLUTION CREATE (DEMOCRATIC) and a " +
+                "BOARD_MEMBERSHIP CREATE audit entry when seating an EXECUTIVE_BOARD winner -- fixes a review " +
+                "finding that only the administrative BoardMembershipService path was ever audited",
+        ) {
+            testApplication {
+                application {
+                    install(StatusPages) { installElectionExceptionHandlers() }
+                    routing { registerElectionTestRoutes() }
+                }
+
+                val hostCommittee = createTestCommittee("General Assembly AuditTally", CommitteeType.GENERAL_ASSEMBLY)
+                val targetCommittee = createTestCommittee("Executive Board AuditTally Ziel")
+                val chair = createTestMember("election-audit-chair@example.org")
+                addMember(hostCommittee, chair, CommitteeRole.CHAIR)
+                val candidate = createTestMember("election-audit-cand@example.org")
+                val voter = createTestMember("election-audit-voter@example.org")
+                val electionBoardMembers = (1..3).map { createTestMember("election-audit-wv$it@example.org") }
+
+                val meetingId = createTestMeeting(hostCommittee, LocalDateTime(2026, 5, 1, 18, 0))
+                val motionId = createTerminierterMotion(hostCommittee, meetingId, chair)
+
+                val opened =
+                    client
+                        .post(
+                            "/test/open-election/$motionId/SINGLE_CHOICE?targetCommitteeId=$targetCommittee&seatCount=1&secret=false",
+                        ) { header("X-Member-Id", chair.toString()) }
+                        .bodyAsText()
+                val electionId = opened.substringBefore(":")
+                client.post("/test/appoint-election-board/$electionId?memberIds=${electionBoardMembers.joinToString(",")}") {
+                    header("X-Member-Id", chair.toString())
+                }
+                client.post("/test/submit-candidacy/$electionId") { header("X-Member-Id", candidate.toString()) }
+                client.post("/test/release-kandidatenliste/$electionId") { header("X-Member-Id", chair.toString()) }
+                client.post("/test/open-voting/$electionId") { header("X-Member-Id", electionBoardMembers[0].toString()) }
+
+                val optionId =
+                    transaction {
+                        ElectionOptionTable.selectAll().where { ElectionOptionTable.electionId eq Uuid.parse(electionId) }.single()[
+                            ElectionOptionTable.id,
+                        ]
+                    }
+                client.post("/test/cast-election-ballot/$electionId?selectedOptionIds=$optionId") {
+                    header("X-Member-Id", voter.toString())
+                }
+                client.post("/test/close-voting/$electionId") { header("X-Member-Id", electionBoardMembers[0].toString()) }
+                client.post("/test/release-tally/$electionId") { header("X-Member-Id", electionBoardMembers[0].toString()) }
+                client.post("/test/release-tally/$electionId") { header("X-Member-Id", electionBoardMembers[1].toString()) }
+                client.post("/test/tally/$electionId") { header("X-Member-Id", electionBoardMembers[0].toString()) }
+
+                val resolution =
+                    transaction { ResolutionTable.selectAll().where { ResolutionTable.electionId eq Uuid.parse(electionId) }.single() }
+                val resolutionId = transaction { resolution[ResolutionTable.id] }
+
+                val resolutionRows =
+                    transaction {
+                        AuditLogEntryTable
+                            .selectAll()
+                            .where {
+                                (AuditLogEntryTable.entityType eq AuditEntityType.RESOLUTION) and
+                                    (AuditLogEntryTable.entityId eq resolutionId)
+                            }.toList()
+                    }
+                resolutionRows.size shouldBe 1
+                transaction { resolutionRows.single()[AuditLogEntryTable.action] } shouldBe AuditAction.CREATE
+                val resolutionSnapshot =
+                    transaction {
+                        Json.decodeFromString(
+                            ResolutionSnapshot.serializer(),
+                            resolutionRows.single()[AuditLogEntryTable.afterSnapshot]!!,
+                        )
+                    }
+                resolutionSnapshot.resolutionMode shouldBe ResolutionMode.DEMOCRATIC
+
+                val boardMembershipId =
+                    transaction {
+                        BoardMembershipTable.selectAll().where { BoardMembershipTable.memberId eq candidate }.single()[
+                            BoardMembershipTable.id,
+                        ]
+                    }
+                val boardMembershipRows =
+                    transaction {
+                        AuditLogEntryTable
+                            .selectAll()
+                            .where {
+                                (AuditLogEntryTable.entityType eq AuditEntityType.BOARD_MEMBERSHIP) and
+                                    (AuditLogEntryTable.entityId eq boardMembershipId)
+                            }.toList()
+                    }
+                boardMembershipRows.size shouldBe 1
+                transaction { boardMembershipRows.single()[AuditLogEntryTable.action] } shouldBe AuditAction.CREATE
+                val boardMembershipSnapshot =
+                    transaction {
+                        Json.decodeFromString(
+                            BoardMembershipSnapshot.serializer(),
+                            boardMembershipRows.single()[AuditLogEntryTable.afterSnapshot]!!,
+                        )
+                    }
+                boardMembershipSnapshot.memberId shouldBe candidate.toString()
             }
         }
 
@@ -1024,6 +1132,17 @@ private fun cleanUpElectionTestData(
 ) {
     if (committeeIds.isEmpty() && memberIds.isEmpty()) return
     transaction {
+        // V0.5.3 GoBD audit log: ElectionService.tally now writes AuditLogEntryTable rows
+        // (RESOLUTION + BOARD_MEMBERSHIP) referencing the tallying member via a real FK
+        // (actor_member_id) -- null it out first (audit_log_entry rows themselves are never
+        // deleted, see AuditLogRecorder KDoc) so the MemberTable delete below does not violate
+        // that FK, same fix cleanUpGovernanceTestData already applies.
+        if (memberIds.isNotEmpty()) {
+            AuditLogEntryTable.update({ AuditLogEntryTable.actorMemberId inList memberIds }) {
+                it[actorMemberId] = null
+            }
+        }
+
         val meetingIds =
             if (committeeIds.isEmpty()) {
                 emptyList()

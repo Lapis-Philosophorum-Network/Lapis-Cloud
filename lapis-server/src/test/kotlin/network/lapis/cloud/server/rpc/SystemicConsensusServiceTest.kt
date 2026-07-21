@@ -21,9 +21,11 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.LocalDateTime
+import kotlinx.serialization.json.Json
 import network.lapis.cloud.server.db.DatabaseConfig
 import network.lapis.cloud.server.db.DevSeedData
 import network.lapis.cloud.server.db.generated.AccountTable
+import network.lapis.cloud.server.db.generated.AuditLogEntryTable
 import network.lapis.cloud.server.db.generated.CommitteeMembershipTable
 import network.lapis.cloud.server.db.generated.CommitteeTable
 import network.lapis.cloud.server.db.generated.MeetingTable
@@ -39,6 +41,8 @@ import network.lapis.cloud.server.db.generated.SystemicConsensusTable
 import network.lapis.cloud.server.security.ForbiddenException
 import network.lapis.cloud.server.security.UnauthenticatedException
 import network.lapis.cloud.shared.domain.AccountRole
+import network.lapis.cloud.shared.domain.AuditAction
+import network.lapis.cloud.shared.domain.AuditEntityType
 import network.lapis.cloud.shared.domain.CommitteeRole
 import network.lapis.cloud.shared.domain.CommitteeType
 import network.lapis.cloud.shared.domain.MeetingFormat
@@ -46,6 +50,7 @@ import network.lapis.cloud.shared.domain.MeetingStatus
 import network.lapis.cloud.shared.domain.MemberStatus
 import network.lapis.cloud.shared.domain.MotionStatus
 import network.lapis.cloud.shared.domain.ResolutionMode
+import network.lapis.cloud.shared.domain.ResolutionSnapshot
 import network.lapis.cloud.shared.domain.ResolutionStatus
 import network.lapis.cloud.shared.domain.SystemicConsensusBallotInput
 import network.lapis.cloud.shared.domain.SystemicConsensusBindingness
@@ -339,6 +344,26 @@ class SystemicConsensusServiceTest :
 
                 val motionStatus = transaction { MotionTable.selectAll().where { MotionTable.id eq motionId }.single()[MotionTable.status] }
                 motionStatus shouldBe MotionStatus.RESOLVED
+
+                // V0.5.3 GoBD audit log: fixes a review finding that evaluate's Resolution write
+                // (the systemic-consensus-*decided* outcome, not just administrative recording) was
+                // never audited.
+                val auditRows =
+                    transaction {
+                        AuditLogEntryTable
+                            .selectAll()
+                            .where {
+                                (AuditLogEntryTable.entityType eq AuditEntityType.RESOLUTION) and
+                                    (AuditLogEntryTable.entityId eq Uuid.parse(resolutionId))
+                            }.toList()
+                    }
+                auditRows.size shouldBe 1
+                transaction { auditRows.single()[AuditLogEntryTable.action] } shouldBe AuditAction.CREATE
+                val auditSnapshot =
+                    transaction {
+                        Json.decodeFromString(ResolutionSnapshot.serializer(), auditRows.single()[AuditLogEntryTable.afterSnapshot]!!)
+                    }
+                auditSnapshot.resolutionMode shouldBe ResolutionMode.SYSTEMIC_CONSENSUS
             }
         }
 
@@ -870,6 +895,17 @@ private fun cleanUpSystemicConsensusTestData(
 ) {
     if (committeeIds.isEmpty() && memberIds.isEmpty()) return
     transaction {
+        // V0.5.3 GoBD audit log: SystemicConsensusService.evaluate now writes an AuditLogEntryTable
+        // row (RESOLUTION, BINDING only) referencing the evaluating member via a real FK
+        // (actor_member_id) -- null it out first (audit_log_entry rows themselves are never
+        // deleted, see AuditLogRecorder KDoc) so the MemberTable delete below does not violate
+        // that FK, same fix cleanUpGovernanceTestData/cleanUpElectionTestData already apply.
+        if (memberIds.isNotEmpty()) {
+            AuditLogEntryTable.update({ AuditLogEntryTable.actorMemberId inList memberIds }) {
+                it[actorMemberId] = null
+            }
+        }
+
         val meetingIds =
             if (committeeIds.isEmpty()) {
                 emptyList()

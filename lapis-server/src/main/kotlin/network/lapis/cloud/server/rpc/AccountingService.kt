@@ -7,6 +7,8 @@ import kotlinx.datetime.LocalDate
 import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
+import kotlinx.serialization.json.Json
+import network.lapis.cloud.server.audit.AuditLogRecorder
 import network.lapis.cloud.server.db.generated.CostCenterTable
 import network.lapis.cloud.server.db.generated.ExternalDonorTable
 import network.lapis.cloud.server.db.generated.JournalEntryTable
@@ -14,11 +16,14 @@ import network.lapis.cloud.server.db.generated.LedgerAccountTable
 import network.lapis.cloud.server.db.generated.MemberTable
 import network.lapis.cloud.server.db.generated.OrganizationSettingsTable
 import network.lapis.cloud.server.db.generated.PostingTable
+import network.lapis.cloud.server.security.CurrentMember
 import network.lapis.cloud.server.security.requireRole
 import network.lapis.cloud.server.security.resolveCurrentMember
 import network.lapis.cloud.shared.domain.AccountRole
 import network.lapis.cloud.shared.domain.AnnualFinancialStatementDto
 import network.lapis.cloud.shared.domain.AnonymousDonationDutyDto
+import network.lapis.cloud.shared.domain.AuditAction
+import network.lapis.cloud.shared.domain.AuditEntityType
 import network.lapis.cloud.shared.domain.BalanceSheetDto
 import network.lapis.cloud.shared.domain.CostCenterDto
 import network.lapis.cloud.shared.domain.CostCenterInput
@@ -36,14 +41,17 @@ import network.lapis.cloud.shared.domain.GeneralLedgerDto
 import network.lapis.cloud.shared.domain.IncomeStatementDto
 import network.lapis.cloud.shared.domain.JournalEntryDto
 import network.lapis.cloud.shared.domain.JournalEntryInput
+import network.lapis.cloud.shared.domain.JournalEntrySnapshot
 import network.lapis.cloud.shared.domain.JournalEntryStatus
 import network.lapis.cloud.shared.domain.KassenbuchDto
 import network.lapis.cloud.shared.domain.LedgerAccountDto
 import network.lapis.cloud.shared.domain.LedgerAccountInput
 import network.lapis.cloud.shared.domain.LedgerAccountType
+import network.lapis.cloud.shared.domain.PartyDonationVerdictSnapshot
 import network.lapis.cloud.shared.domain.PostingDto
 import network.lapis.cloud.shared.domain.PostingInput
 import network.lapis.cloud.shared.domain.PostingSide
+import network.lapis.cloud.shared.domain.PostingSnapshot
 import network.lapis.cloud.shared.domain.ReserveType
 import network.lapis.cloud.shared.domain.UseOfFundsStatementDto
 import network.lapis.cloud.shared.rpc.IAccountingService
@@ -279,6 +287,7 @@ class AccountingService(
             insertJournalEntry(
                 input,
                 current.memberId,
+                current.role,
                 JournalEntryStatus.DRAFT,
                 postedAt = null,
                 donorMemberId = donorMemberId,
@@ -306,21 +315,45 @@ class AccountingService(
             val effectiveDonorCategory =
                 requireDonorMutualExclusionAndCategory(donorMemberId, externalDonorId, input.donorCategory, externalDonorCategory)
             requireDonationIncomePosting(input.postings, effectiveDonorCategory)
+            var partyDonationVerdict: DonationComplianceResult? = null
+            var partyDonationAmount: BigDecimal? = null
+            var partyDonationPriorTotal: BigDecimal? = null
             if (effectiveDonorCategory != null && isPoliticalParty()) {
                 val donationAmount = donationIncomeAmount(input.postings)
                 val priorTotal =
                     priorPostedDonationTotalThisYear(donorMemberId, externalDonorId, input.entryDate.year, excludeEntryId = null)
-                requirePartyDonationAllowed(effectiveDonorCategory, donationAmount, priorTotal)
+                partyDonationVerdict = requirePartyDonationAllowed(effectiveDonorCategory, donationAmount, priorTotal)
+                partyDonationAmount = donationAmount
+                partyDonationPriorTotal = priorTotal
             }
-            insertJournalEntry(
-                input,
-                current.memberId,
-                JournalEntryStatus.POSTED,
-                postedAt = nowLocalDateTime(),
-                donorMemberId = donorMemberId,
-                externalDonorId = externalDonorId,
-                donorCategory = effectiveDonorCategory,
-            )
+            val dto =
+                insertJournalEntry(
+                    input,
+                    current.memberId,
+                    current.role,
+                    JournalEntryStatus.POSTED,
+                    postedAt = nowLocalDateTime(),
+                    donorMemberId = donorMemberId,
+                    externalDonorId = externalDonorId,
+                    donorCategory = effectiveDonorCategory,
+                )
+            // V0.5.3 GoBD audit log: only ever reached for an ALLOWED verdict -- a PROHIBITED
+            // attempt throws inside requirePartyDonationAllowed above and rolls the whole
+            // transaction back before insertJournalEntry (and therefore this) ever runs. See
+            // AuditLogRecorder/14-audit-log.kuml.kts file header for why abandoned/rejected
+            // attempts are a deliberate, documented gap in this wave's audit-log scope rather than
+            // an oversight.
+            if (effectiveDonorCategory != null && partyDonationVerdict != null) {
+                recordPartyDonationVerdictAudit(
+                    current,
+                    dto.id.toAccountingUuid("JournalEntry"),
+                    effectiveDonorCategory,
+                    partyDonationAmount!!,
+                    partyDonationPriorTotal!!,
+                    partyDonationVerdict.duties,
+                )
+            }
+            dto
         }
     }
 
@@ -356,6 +389,9 @@ class AccountingService(
             requireNonNegativeCashBalances(postings, cashAccountIds)
             val donorCategory = entryRow[JournalEntryTable.donorCategory]
             requireDonationIncomePosting(postings, donorCategory)
+            var partyDonationVerdict: DonationComplianceResult? = null
+            var partyDonationAmount: BigDecimal? = null
+            var partyDonationPriorTotal: BigDecimal? = null
             if (donorCategory != null && isPoliticalParty()) {
                 val donationAmount = donationIncomeAmount(postings)
                 val priorTotal =
@@ -365,12 +401,62 @@ class AccountingService(
                         entryRow[JournalEntryTable.entryDate].year,
                         excludeEntryId = entryId,
                     )
-                requirePartyDonationAllowed(donorCategory, donationAmount, priorTotal)
+                partyDonationVerdict = requirePartyDonationAllowed(donorCategory, donationAmount, priorTotal)
+                partyDonationAmount = donationAmount
+                partyDonationPriorTotal = priorTotal
             }
+
+            // V0.5.3 GoBD audit log: capture the DRAFT->POSTED transition. `now` is computed once
+            // and reused for both the DB write and the `after` snapshot so they can never disagree
+            // on the exact postedAt instant.
+            val now = nowLocalDateTime()
+            val beforeSnapshot =
+                JournalEntrySnapshot(
+                    entryDate = entryRow[JournalEntryTable.entryDate],
+                    description = entryRow[JournalEntryTable.description],
+                    voucherReference = entryRow[JournalEntryTable.voucherReference],
+                    status = JournalEntryStatus.DRAFT,
+                    postedAt = null,
+                    createdBy = entryRow[JournalEntryTable.createdBy].toString(),
+                    donorMemberId = entryRow[JournalEntryTable.donorMemberId]?.toString(),
+                    externalDonorId = entryRow[JournalEntryTable.externalDonorId]?.toString(),
+                    donorCategory = donorCategory,
+                    postings = postings.map { it.toAuditSnapshot() },
+                )
+
             JournalEntryTable.update({ JournalEntryTable.id eq entryId }) {
                 it[status] = JournalEntryStatus.POSTED
-                it[postedAt] = nowLocalDateTime()
+                it[postedAt] = now
             }
+
+            AuditLogRecorder.record(
+                actorMemberId = current.memberId,
+                actorRole = current.role,
+                entityType = AuditEntityType.JOURNAL_ENTRY,
+                entityId = entryId,
+                action = AuditAction.POST,
+                before = Json.encodeToString(JournalEntrySnapshot.serializer(), beforeSnapshot),
+                after =
+                    Json.encodeToString(
+                        JournalEntrySnapshot.serializer(),
+                        beforeSnapshot.copy(status = JournalEntryStatus.POSTED, postedAt = now),
+                    ),
+                occurredAt = now,
+            )
+            // Only ever reached for an ALLOWED verdict -- see postJournalEntry's own comment on
+            // the same pattern for the full rationale.
+            if (donorCategory != null && partyDonationVerdict != null) {
+                recordPartyDonationVerdictAudit(
+                    current,
+                    entryId,
+                    donorCategory,
+                    partyDonationAmount!!,
+                    partyDonationPriorTotal!!,
+                    partyDonationVerdict.duties,
+                    occurredAt = now,
+                )
+            }
+
             loadJournalEntry(entryId)
         }
     }
@@ -909,10 +995,17 @@ class AccountingService(
         }
     }
 
-    /** Inserts a new [JournalEntryTable] row plus its [PostingTable] rows in the caller's transaction. */
+    /**
+     * Inserts a new [JournalEntryTable] row plus its [PostingTable] rows in the caller's
+     * transaction, and (V0.5.3) appends a `CREATE` GoBD audit-log entry for it via
+     * [AuditLogRecorder] -- in the SAME transaction, as the last step before returning, so the
+     * mutation and its audit entry commit or roll back together. [actorRole] is only used for that
+     * audit entry (not persisted on [JournalEntryTable] itself).
+     */
     private fun insertJournalEntry(
         input: JournalEntryInput,
         createdBy: Uuid,
+        actorRole: AccountRole,
         status: JournalEntryStatus,
         postedAt: LocalDateTime?,
         donorMemberId: Uuid? = null,
@@ -944,7 +1037,78 @@ class AccountingService(
                 it[costCenterId] = posting.costCenterId?.toAccountingUuid("CostCenter")
             }
         }
-        return loadJournalEntry(id)
+        val dto = loadJournalEntry(id)
+        AuditLogRecorder.record(
+            actorMemberId = createdBy,
+            actorRole = actorRole,
+            entityType = AuditEntityType.JOURNAL_ENTRY,
+            entityId = id,
+            action = AuditAction.CREATE,
+            before = null,
+            after =
+                Json.encodeToString(
+                    JournalEntrySnapshot.serializer(),
+                    JournalEntrySnapshot(
+                        entryDate = input.entryDate,
+                        description = input.description,
+                        voucherReference = input.voucherReference,
+                        status = status,
+                        postedAt = postedAt,
+                        createdBy = createdBy.toString(),
+                        donorMemberId = donorMemberId?.toString(),
+                        externalDonorId = externalDonorId?.toString(),
+                        donorCategory = donorCategory,
+                        postings = input.postings.map { it.toAuditSnapshot() },
+                    ),
+                ),
+        )
+        return dto
+    }
+
+    /** [PostingInput] -> [PostingSnapshot], id-only for referenced entities (PII minimization, see [JournalEntrySnapshot] KDoc). */
+    private fun PostingInput.toAuditSnapshot(): PostingSnapshot =
+        PostingSnapshot(
+            ledgerAccountId = ledgerAccountId,
+            side = side,
+            amount = amount,
+            sphere = sphere,
+            costCenterId = costCenterId,
+        )
+
+    /**
+     * V0.5.3 GoBD audit log: records a `PARTY_DONATION_VERDICT` `CREATE` entry pointing at
+     * [journalEntryId] -- only ever called for an `ALLOWED` verdict, see [postJournalEntry]'s own
+     * comment for why a `PROHIBITED` attempt can never reach this point.
+     */
+    private fun recordPartyDonationVerdictAudit(
+        current: CurrentMember,
+        journalEntryId: Uuid,
+        donorCategory: DonorCategory,
+        donationAmount: BigDecimal,
+        priorPostedTotalThisYear: BigDecimal,
+        duties: Set<DonationDuty>,
+        occurredAt: LocalDateTime = nowLocalDateTime(),
+    ) {
+        AuditLogRecorder.record(
+            actorMemberId = current.memberId,
+            actorRole = current.role,
+            entityType = AuditEntityType.PARTY_DONATION_VERDICT,
+            entityId = journalEntryId,
+            action = AuditAction.CREATE,
+            before = null,
+            after =
+                Json.encodeToString(
+                    PartyDonationVerdictSnapshot.serializer(),
+                    PartyDonationVerdictSnapshot(
+                        donorCategory = donorCategory,
+                        donationAmount = donationAmount,
+                        priorPostedTotalThisYear = priorPostedTotalThisYear,
+                        verdict = "ALLOWED",
+                        duties = duties.toList(),
+                    ),
+                ),
+            occurredAt = occurredAt,
+        )
     }
 
     /** Throws [ConflictException] naming the imbalance reason if [postings] does not balance -- see [JournalEntryBalance]. */
@@ -1148,11 +1312,12 @@ class AccountingService(
         donorCategory: DonorCategory,
         donationAmount: BigDecimal,
         priorPostedTotalThisYear: BigDecimal,
-    ) {
+    ): DonationComplianceResult {
         val result = PartyDonationComplianceCalculator.check(donationAmount, donorCategory, priorPostedTotalThisYear)
         if (result.verdict == DonationVerdict.PROHIBITED) {
             throw ConflictException(result.reason ?: "Donation prohibited under §25 PartG (donorCategory=$donorCategory)")
         }
+        return result
     }
 
     /**

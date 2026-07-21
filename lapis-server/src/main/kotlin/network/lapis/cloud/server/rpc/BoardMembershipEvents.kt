@@ -2,9 +2,15 @@ package network.lapis.cloud.server.rpc
 
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.LocalDateTime
+import kotlinx.serialization.json.Json
+import network.lapis.cloud.server.audit.AuditLogRecorder
 import network.lapis.cloud.server.db.generated.BoardMembershipTable
 import network.lapis.cloud.server.db.generated.TransparenzregisterReminderTable
+import network.lapis.cloud.server.security.CurrentMember
+import network.lapis.cloud.shared.domain.AuditAction
+import network.lapis.cloud.shared.domain.AuditEntityType
 import network.lapis.cloud.shared.domain.BoardChangeType
+import network.lapis.cloud.shared.domain.BoardMembershipSnapshot
 import network.lapis.cloud.shared.domain.CommitteeRole
 import org.jetbrains.exposed.v1.core.and
 import org.jetbrains.exposed.v1.core.eq
@@ -150,4 +156,104 @@ object BoardMembershipEvents {
             it[resolvedBy] = null
         }
     }
+}
+
+/**
+ * V0.5.3 GoBD audit-log helper for a [BoardMembershipEvents.recordBoardJoin]-created
+ * [BoardMembershipTable] row -- CREATE, matching [BoardMembershipService.appointBoardMember]'s
+ * own audit shape. Widens Resolution-book-style audit coverage from just the administrative
+ * [BoardMembershipService.appointBoardMember] path to every [BoardMembershipEvents.recordBoardJoin]
+ * call site (`ElectionService.tally`'s `EXECUTIVE_BOARD` winner-seating and
+ * [GovernanceService.addCommitteeMember]'s co-option path too) -- fixes a V0.5.3-review finding
+ * that only the manually-typed administrative path was ever audited, while the vote-/election-
+ * decided Vorstandsaenderungen this codebase's own conventions flag as the higher-scrutiny case
+ * left no tamper-evident record at all. See `14-audit-log.kuml.kts` file header for the resulting
+ * widened scope statement.
+ *
+ * Deliberately NOT called from inside [BoardMembershipEvents.recordBoardJoin] itself, for the same
+ * deadlock-avoidance reason [auditResolutionCreate] documents: `ElectionService.tally` calls
+ * [BoardMembershipEvents.recordBoardJoin] from inside a winner-seating loop that is followed by
+ * further row-locking writes (`MotionTable.update`/`ElectionTable.update`) later in the same
+ * transaction. Every call site therefore invokes this helper itself, explicitly, as (part of) the
+ * true last locking operation of its own transaction -- see each call site for the exact placement.
+ *
+ * Only the freshly created row is audited here, matching the granularity
+ * [BoardMembershipService.appointBoardMember] already established -- a displaced single-holder
+ * incumbent's row closing inside [BoardMembershipEvents.recordBoardJoin] itself (CHAIR/
+ * DEPUTY_CHAIR/SECRETARY unseating) is a pre-existing gap in that established shape, not something
+ * this fix introduces or widens; broadening audit granularity beyond what
+ * [BoardMembershipService.appointBoardMember] already does is out of this fix's scope.
+ */
+internal fun auditBoardMembershipCreate(
+    boardMembershipId: Uuid,
+    memberId: Uuid,
+    committeeRole: CommitteeRole,
+    startedAt: LocalDate,
+    current: CurrentMember,
+) {
+    AuditLogRecorder.record(
+        actorMemberId = current.memberId,
+        actorRole = current.role,
+        entityType = AuditEntityType.BOARD_MEMBERSHIP,
+        entityId = boardMembershipId,
+        action = AuditAction.CREATE,
+        before = null,
+        after =
+            Json.encodeToString(
+                BoardMembershipSnapshot.serializer(),
+                BoardMembershipSnapshot(
+                    memberId = memberId.toString(),
+                    committeeRole = committeeRole,
+                    startedAt = startedAt,
+                    endedAt = null,
+                ),
+            ),
+    )
+}
+
+/**
+ * V0.5.3 GoBD audit-log helper for a [BoardMembershipEvents.recordBoardLeave]-ended
+ * [BoardMembershipTable] row -- UPDATE (`endedAt` null -> set), matching
+ * [BoardMembershipService.endBoardMembership]'s own audit shape. Widens coverage to
+ * [GovernanceService.endCommitteeMembership]'s `EXECUTIVE_BOARD` removal path, mirroring
+ * [auditBoardMembershipCreate]'s widened scope for the join side. Same deliberate
+ * not-called-from-inside-[BoardMembershipEvents.recordBoardLeave] reasoning as
+ * [auditBoardMembershipCreate] -- every call site invokes this itself as the true last locking
+ * operation of its own transaction.
+ */
+internal fun auditBoardMembershipEnd(
+    boardMembershipId: Uuid,
+    memberId: Uuid,
+    committeeRole: CommitteeRole,
+    startedAt: LocalDate,
+    endedAt: LocalDate,
+    current: CurrentMember,
+) {
+    AuditLogRecorder.record(
+        actorMemberId = current.memberId,
+        actorRole = current.role,
+        entityType = AuditEntityType.BOARD_MEMBERSHIP,
+        entityId = boardMembershipId,
+        action = AuditAction.UPDATE,
+        before =
+            Json.encodeToString(
+                BoardMembershipSnapshot.serializer(),
+                BoardMembershipSnapshot(
+                    memberId = memberId.toString(),
+                    committeeRole = committeeRole,
+                    startedAt = startedAt,
+                    endedAt = null,
+                ),
+            ),
+        after =
+            Json.encodeToString(
+                BoardMembershipSnapshot.serializer(),
+                BoardMembershipSnapshot(
+                    memberId = memberId.toString(),
+                    committeeRole = committeeRole,
+                    startedAt = startedAt,
+                    endedAt = endedAt,
+                ),
+            ),
+    )
 }

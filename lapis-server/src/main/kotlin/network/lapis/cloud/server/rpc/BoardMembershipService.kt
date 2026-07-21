@@ -71,6 +71,10 @@ class BoardMembershipService(
             MemberTable.selectAll().where { MemberTable.id eq memberId }.singleOrNull()
                 ?: throw NotFoundException("Member ${input.memberId} not found")
             val id = BoardMembershipEvents.recordBoardJoin(memberId, input.committeeRole, input.startedAt, nowLocalDateTime())
+            // V0.5.3 GoBD audit log: called last, after recordBoardJoin's own writes and before the
+            // final read-only select below, so this satisfies AuditLogRecorder's deadlock-avoidance
+            // contract -- see auditBoardMembershipCreate KDoc for the full call-site rationale.
+            auditBoardMembershipCreate(id, memberId, input.committeeRole, input.startedAt, current)
             loadBoardMembership(id)
         }
     }
@@ -83,7 +87,21 @@ class BoardMembershipService(
         current.requireRole(*BOARD_ADMIN_ROLES)
         val id = boardMembershipId.toUuidOrNotFound("BoardMembership")
         return transaction {
+            val beforeRow =
+                BoardMembershipTable.selectAll().where { BoardMembershipTable.id eq id }.singleOrNull()
+                    ?: throw NotFoundException("BoardMembership $boardMembershipId not found")
             BoardMembershipEvents.recordBoardLeave(id, endedAt, nowLocalDateTime())
+            // V0.5.3 GoBD audit log: called last, after recordBoardLeave's own writes and before the
+            // final read-only select below -- see auditBoardMembershipEnd KDoc for the full
+            // call-site rationale.
+            auditBoardMembershipEnd(
+                id,
+                beforeRow[BoardMembershipTable.memberId],
+                beforeRow[BoardMembershipTable.committeeRole],
+                beforeRow[BoardMembershipTable.startedAt],
+                endedAt,
+                current,
+            )
             loadBoardMembership(id)
         }
     }

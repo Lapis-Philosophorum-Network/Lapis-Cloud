@@ -21,11 +21,13 @@ import io.ktor.server.routing.routing
 import io.ktor.server.testing.testApplication
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.LocalDateTime
+import kotlinx.serialization.json.Json
 import network.lapis.cloud.server.db.DatabaseConfig
 import network.lapis.cloud.server.db.DevSeedData
 import network.lapis.cloud.server.db.generated.AccountTable
 import network.lapis.cloud.server.db.generated.AgendaItemTable
 import network.lapis.cloud.server.db.generated.AttendanceTable
+import network.lapis.cloud.server.db.generated.AuditLogEntryTable
 import network.lapis.cloud.server.db.generated.BoardMembershipTable
 import network.lapis.cloud.server.db.generated.CommitteeMembershipTable
 import network.lapis.cloud.server.db.generated.CommitteeTable
@@ -45,6 +47,9 @@ import network.lapis.cloud.shared.domain.AccountRole
 import network.lapis.cloud.shared.domain.AgendaItemInput
 import network.lapis.cloud.shared.domain.AttendanceInput
 import network.lapis.cloud.shared.domain.AttendanceStatus
+import network.lapis.cloud.shared.domain.AuditAction
+import network.lapis.cloud.shared.domain.AuditEntityType
+import network.lapis.cloud.shared.domain.BoardMembershipSnapshot
 import network.lapis.cloud.shared.domain.CommitteeInput
 import network.lapis.cloud.shared.domain.CommitteeMembershipInput
 import network.lapis.cloud.shared.domain.CommitteeRole
@@ -60,6 +65,7 @@ import network.lapis.cloud.shared.domain.MotionReviewDecision
 import network.lapis.cloud.shared.domain.MotionStatus
 import network.lapis.cloud.shared.domain.ResolutionInput
 import network.lapis.cloud.shared.domain.ResolutionMode
+import network.lapis.cloud.shared.domain.ResolutionSnapshot
 import network.lapis.cloud.shared.domain.ResolutionStatus
 import network.lapis.cloud.shared.domain.VoteBallotInput
 import network.lapis.cloud.shared.domain.VoteOpenInput
@@ -627,6 +633,197 @@ class GovernanceServiceTest :
                 val finalMotion =
                     client.get("/test/get-motion/$motionId") { header("X-Member-Id", chair.toString()) }.bodyAsText()
                 finalMotion shouldBe "${MotionStatus.RESOLVED.name}:$secondResolutionId"
+            }
+        }
+
+        test(
+            "V0.5.3 GoBD audit log: resolveMotion writes a RESOLUTION CREATE audit entry, not just " +
+                "recordResolution -- fixes a review finding that only the manual-recording call site was audited",
+        ) {
+            testApplication {
+                application {
+                    install(StatusPages) { installGovernanceExceptionHandlers() }
+                    routing {
+                        registerGovernanceTestRoutes()
+                        registerMotionTestRoutes()
+                    }
+                }
+
+                val committeeId =
+                    client
+                        .post(
+                            "/test/create-committee/Executive Board%20AuditResolveMotion/EXECUTIVE_BOARD/50",
+                        ) { header("X-Member-Id", BOARD_ID) }
+                        .bodyAsText()
+                createdCommitteeIds += Uuid.parse(committeeId)
+                val chair = createTestMember("audit-resolvemotion-chair@example.org")
+                client.post("/test/add-member/$committeeId/$chair/CHAIR") { header("X-Member-Id", BOARD_ID) }
+
+                val motionId =
+                    client
+                        .post("/test/submit-motion/$committeeId") { header("X-Member-Id", chair.toString()) }
+                        .bodyAsText()
+                        .substringBefore(":")
+                client.post("/test/review-motion/$motionId/ACCEPT") { header("X-Member-Id", chair.toString()) }
+                val meetingId =
+                    client
+                        .post("/test/create-meeting/$committeeId/2026/6/10/18") { header("X-Member-Id", chair.toString()) }
+                        .bodyAsText()
+                        .substringBefore(":")
+                client.post("/test/schedule-motion/$motionId/$meetingId/1") { header("X-Member-Id", chair.toString()) }
+
+                val resolved =
+                    client
+                        .post("/test/resolve-motion/$motionId/ADOPTED") { header("X-Member-Id", chair.toString()) }
+                        .bodyAsText()
+                val resolutionId = resolved.substringAfter(":")
+
+                val rows =
+                    transaction {
+                        AuditLogEntryTable
+                            .selectAll()
+                            .where {
+                                (AuditLogEntryTable.entityType eq AuditEntityType.RESOLUTION) and
+                                    (AuditLogEntryTable.entityId eq Uuid.parse(resolutionId))
+                            }.toList()
+                    }
+                rows.size shouldBe 1
+                transaction { rows.single()[AuditLogEntryTable.action] } shouldBe AuditAction.CREATE
+                transaction { rows.single()[AuditLogEntryTable.actorMemberId] } shouldBe chair
+                val snapshot =
+                    transaction {
+                        Json.decodeFromString(ResolutionSnapshot.serializer(), rows.single()[AuditLogEntryTable.afterSnapshot]!!)
+                    }
+                snapshot.resolutionMode shouldBe ResolutionMode.COMMITTEE_QUORUM
+                snapshot.status shouldBe ResolutionStatus.ADOPTED
+            }
+        }
+
+        test(
+            "V0.5.3 GoBD audit log: closeVote writes a RESOLUTION CREATE audit entry tagged MERITOCRATIC",
+        ) {
+            testApplication {
+                application {
+                    install(StatusPages) { installGovernanceExceptionHandlers() }
+                    routing {
+                        registerGovernanceTestRoutes()
+                        registerMotionTestRoutes()
+                        registerVoteTestRoutes()
+                    }
+                }
+
+                val committeeId =
+                    client
+                        .post(
+                            "/test/create-committee/Executive Board%20AuditCloseVote/EXECUTIVE_BOARD/50",
+                        ) { header("X-Member-Id", BOARD_ID) }
+                        .bodyAsText()
+                createdCommitteeIds += Uuid.parse(committeeId)
+                val chair = createTestMember("audit-closevote-chair@example.org")
+                val voter = createTestMember("audit-closevote-voter@example.org")
+                client.post("/test/add-member/$committeeId/$chair/CHAIR") { header("X-Member-Id", BOARD_ID) }
+                client.post("/test/add-member/$committeeId/$voter/MEMBER") { header("X-Member-Id", BOARD_ID) }
+                seedLtrBalance(voter, BigDecimal("50.00"))
+
+                val (motionId, _) = client.createTerminierterMotion(committeeId, chair, voter, 2026, 11, 20)
+                val opened =
+                    client.post("/test/open-vote/$motionId") { header("X-Member-Id", chair.toString()) }.bodyAsText()
+                val voteId = opened.substringBefore(":")
+                val jaOptionId =
+                    opened
+                        .split(":", limit = 3)[2]
+                        .split(";")
+                        .first { it.endsWith("=YES") }
+                        .substringBefore("=")
+                client.post("/test/cast-vote-ballot/$voteId/$jaOptionId/10.00") { header("X-Member-Id", voter.toString()) }
+
+                val closed =
+                    client.post("/test/close-vote/$voteId") { header("X-Member-Id", chair.toString()) }.bodyAsText()
+                val resolutionId = closed.split(":")[3]
+
+                val rows =
+                    transaction {
+                        AuditLogEntryTable
+                            .selectAll()
+                            .where {
+                                (AuditLogEntryTable.entityType eq AuditEntityType.RESOLUTION) and
+                                    (AuditLogEntryTable.entityId eq Uuid.parse(resolutionId))
+                            }.toList()
+                    }
+                rows.size shouldBe 1
+                transaction { rows.single()[AuditLogEntryTable.action] } shouldBe AuditAction.CREATE
+                val snapshot =
+                    transaction {
+                        Json.decodeFromString(ResolutionSnapshot.serializer(), rows.single()[AuditLogEntryTable.afterSnapshot]!!)
+                    }
+                snapshot.resolutionMode shouldBe ResolutionMode.MERITOCRATIC
+            }
+        }
+
+        test(
+            "V0.5.3 GoBD audit log: addCommitteeMember/endCommitteeMembership on an EXECUTIVE_BOARD Committee " +
+                "write BOARD_MEMBERSHIP CREATE/UPDATE audit entries, not just BoardMembershipService's own paths",
+        ) {
+            testApplication {
+                application {
+                    install(StatusPages) { installGovernanceExceptionHandlers() }
+                    routing { registerGovernanceTestRoutes() }
+                }
+
+                val committeeId =
+                    client
+                        .post(
+                            "/test/create-committee/Executive Board%20AuditCoOption/EXECUTIVE_BOARD/50",
+                        ) { header("X-Member-Id", BOARD_ID) }
+                        .bodyAsText()
+                createdCommitteeIds += Uuid.parse(committeeId)
+                val target = createTestMember("audit-cooption-target@example.org")
+
+                val membershipId =
+                    client
+                        .post("/test/add-member/$committeeId/$target/MEMBER") { header("X-Member-Id", BOARD_ID) }
+                        .bodyAsText()
+
+                val boardMembershipId =
+                    transaction {
+                        BoardMembershipTable.selectAll().where { BoardMembershipTable.memberId eq target }.single()[
+                            BoardMembershipTable.id,
+                        ]
+                    }
+
+                val createRows =
+                    transaction {
+                        AuditLogEntryTable
+                            .selectAll()
+                            .where {
+                                (AuditLogEntryTable.entityType eq AuditEntityType.BOARD_MEMBERSHIP) and
+                                    (AuditLogEntryTable.entityId eq boardMembershipId)
+                            }.toList()
+                    }
+                createRows.size shouldBe 1
+                transaction { createRows.single()[AuditLogEntryTable.action] } shouldBe AuditAction.CREATE
+
+                client.post("/test/end-membership/$membershipId/2026-04-01") { header("X-Member-Id", BOARD_ID) }
+
+                val updateRows =
+                    transaction {
+                        AuditLogEntryTable
+                            .selectAll()
+                            .where {
+                                (AuditLogEntryTable.entityType eq AuditEntityType.BOARD_MEMBERSHIP) and
+                                    (AuditLogEntryTable.entityId eq boardMembershipId) and
+                                    (AuditLogEntryTable.action eq AuditAction.UPDATE)
+                            }.toList()
+                    }
+                updateRows.size shouldBe 1
+                val afterSnapshot =
+                    transaction {
+                        Json.decodeFromString(
+                            BoardMembershipSnapshot.serializer(),
+                            updateRows.single()[AuditLogEntryTable.afterSnapshot]!!,
+                        )
+                    }
+                afterSnapshot.endedAt shouldBe LocalDate(2026, 4, 1)
             }
         }
 
@@ -1383,6 +1580,11 @@ private fun Route.registerGovernanceTestRoutes() {
             )
         call.respondText(m.id)
     }
+    post("/test/end-membership/{membershipId}/{until}") {
+        val service = GovernanceService(call)
+        val m = service.endCommitteeMembership(call.parameters["membershipId"]!!, LocalDate.parse(call.parameters["until"]!!))
+        call.respondText("${m.id}:${m.until}")
+    }
     post("/test/create-meeting/{committeeId}/{year}/{month}/{day}/{hour}") {
         val service = GovernanceService(call)
         val p = call.parameters
@@ -1654,6 +1856,16 @@ private fun cleanUpGovernanceTestData(
 ) {
     if (committeeIds.isEmpty() && memberIds.isEmpty()) return
     transaction {
+        // V0.5.3 GoBD audit log: recordResolution now writes an AuditLogEntryTable row per
+        // Resolution, referencing the recording member via a real FK (actor_member_id) --
+        // null it out first (audit_log_entry rows themselves are never deleted, see
+        // AuditLogRecorder KDoc) so the MemberTable delete below does not violate that FK.
+        if (memberIds.isNotEmpty()) {
+            AuditLogEntryTable.update({ AuditLogEntryTable.actorMemberId inList memberIds }) {
+                it[actorMemberId] = null
+            }
+        }
+
         val meetingIds =
             if (committeeIds.isEmpty()) {
                 emptyList()

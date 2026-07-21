@@ -578,6 +578,35 @@ CREATE TABLE transparenzregister_reminder (
     CHECK (change_type IN ('JOINED', 'LEFT'))
 );
 
+-- V0.5.3 GoBD-Revisionssicherheit: hash-chained, append-only audit log (see
+-- 14-audit-log.kuml.kts file header). audit_log_chain_state is a genesis-singleton row (exactly
+-- one row, seeded below), mirroring organization_settings's own pattern -- a SELECT ... FOR UPDATE
+-- on this one row is what serializes concurrent audit-log writers race-free, including for the
+-- very first ("genesis") entry.
+CREATE TABLE audit_log_chain_state (
+    id UUID NOT NULL PRIMARY KEY,
+    last_sequence_number BIGINT NOT NULL DEFAULT 0,
+    last_entry_hash VARCHAR(64) NULL
+);
+
+CREATE TABLE audit_log_entry (
+    id UUID NOT NULL PRIMARY KEY,
+    sequence_number BIGINT NOT NULL,
+    occurred_at TIMESTAMP NOT NULL,
+    actor_member_id UUID NULL,
+    actor_role VARCHAR(9) NULL,
+    entity_type VARCHAR(22) NOT NULL,
+    entity_id UUID NOT NULL,
+    action VARCHAR(6) NOT NULL,
+    before_snapshot TEXT NULL,
+    after_snapshot TEXT NULL,
+    entry_hash VARCHAR(64) NOT NULL,
+    previous_entry_hash VARCHAR(64) NULL,
+    CHECK (actor_role IN ('MEMBER', 'BOARD', 'TREASURER', 'ADMIN')),
+    CHECK (entity_type IN ('JOURNAL_ENTRY', 'PARTY_DONATION_VERDICT', 'RESOLUTION', 'BOARD_MEMBERSHIP')),
+    CHECK (action IN ('CREATE', 'UPDATE', 'POST'))
+);
+
 -- Foreign Keys
 
 ALTER TABLE member ADD CONSTRAINT fk_member_membership_tier_id FOREIGN KEY (membership_tier_id) REFERENCES membership_tier(id);
@@ -678,6 +707,7 @@ ALTER TABLE postal_delivery_log ADD CONSTRAINT fk_postal_delivery_log_recipient_
 ALTER TABLE board_membership ADD CONSTRAINT fk_board_membership_member_id FOREIGN KEY (member_id) REFERENCES member(id);
 ALTER TABLE transparenzregister_reminder ADD CONSTRAINT fk_transparenzregister_reminder_member_id FOREIGN KEY (member_id) REFERENCES member(id);
 ALTER TABLE transparenzregister_reminder ADD CONSTRAINT fk_transparenzregister_reminder_resolved_by FOREIGN KEY (resolved_by) REFERENCES member(id);
+ALTER TABLE audit_log_entry ADD CONSTRAINT fk_audit_log_entry_actor_member_id FOREIGN KEY (actor_member_id) REFERENCES member(id);
 
 -- Indexes
 
@@ -755,6 +785,9 @@ CREATE INDEX idx_postal_delivery_log_recipient ON postal_delivery_log (recipient
 CREATE INDEX idx_board_membership_member ON board_membership (member_id);
 CREATE INDEX idx_transparenzregister_reminder_member ON transparenzregister_reminder (member_id);
 CREATE INDEX idx_transparenzregister_reminder_resolved ON transparenzregister_reminder (resolved);
+CREATE UNIQUE INDEX uq_audit_log_entry_sequence ON audit_log_entry (sequence_number);
+CREATE INDEX idx_audit_log_entry_entity_id ON audit_log_entry (entity_id);
+CREATE INDEX idx_audit_log_entry_occurred_at ON audit_log_entry (occurred_at);
 
 -- V0.4.1 Serienbrief/PDF engine: exactly one organization_settings row must exist from first
 -- migration onward, in every environment (not just LAPIS_SEED_DEMO_DATA=true demo deployments) --
@@ -764,4 +797,12 @@ CREATE INDEX idx_transparenzregister_reminder_resolved ON transparenzregister_re
 -- ADMIN can (and should) overwrite every field via updateOrganizationSettings afterward.
 INSERT INTO organization_settings (id, name)
 VALUES ('00000000-0000-0000-0000-0000000000f2', 'Verein/Partei (bitte in Organisationseinstellungen konfigurieren)');
+
+-- V0.5.3 GoBD-Revisionssicherheit: exactly one audit_log_chain_state row must exist from first
+-- migration onward -- the genesis-singleton row AuditLogRecorder locks (SELECT ... FOR UPDATE) to
+-- serialize concurrent audit-log writers and assign gapless sequence numbers, including for the
+-- very first entry. Fixed sentinel id, next unused '...-0000-0000000000fN' slot after
+-- organization_settings's own '...-f2'. last_entry_hash starts NULL (no entry written yet).
+INSERT INTO audit_log_chain_state (id, last_sequence_number, last_entry_hash)
+VALUES ('00000000-0000-0000-0000-0000000000f3', 0, NULL);
 

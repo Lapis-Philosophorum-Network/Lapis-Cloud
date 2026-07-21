@@ -228,7 +228,12 @@ class GovernanceService(
             // beneficial-owner roster/reminder mechanism in step, guarded on the Committee's
             // type (NOT isPoliticalParty, see BoardMembershipEvents KDoc).
             if (committeeRow[CommitteeTable.type] == CommitteeType.EXECUTIVE_BOARD) {
-                BoardMembershipEvents.recordBoardJoin(memberId, input.role, input.since, nowLocalDateTime())
+                val boardMembershipId = BoardMembershipEvents.recordBoardJoin(memberId, input.role, input.since, nowLocalDateTime())
+                // V0.5.3 GoBD audit log: called last, after recordBoardJoin's own writes and before
+                // the final read-only select below -- see auditBoardMembershipCreate KDoc for the
+                // full call-site rationale (this is one of the two non-BoardMembershipService paths
+                // that widened its scope).
+                auditBoardMembershipCreate(boardMembershipId, memberId, input.role, input.since, current)
             }
             (CommitteeMembershipTable innerJoin MemberTable)
                 .selectAll()
@@ -266,16 +271,27 @@ class GovernanceService(
                     .where { CommitteeTable.id eq membershipRow[CommitteeMembershipTable.committeeId] }
                     .single()[CommitteeTable.type]
             if (committeeType == CommitteeType.EXECUTIVE_BOARD) {
-                val openBoardMembershipId =
+                val openBoardMembershipRow =
                     BoardMembershipTable
                         .selectAll()
                         .where {
                             (BoardMembershipTable.memberId eq membershipRow[CommitteeMembershipTable.memberId]) and
                                 (BoardMembershipTable.endedAt.isNull())
                         }.singleOrNull()
-                        ?.get(BoardMembershipTable.id)
-                if (openBoardMembershipId != null) {
+                if (openBoardMembershipRow != null) {
+                    val openBoardMembershipId = openBoardMembershipRow[BoardMembershipTable.id]
                     BoardMembershipEvents.recordBoardLeave(openBoardMembershipId, until, nowLocalDateTime())
+                    // V0.5.3 GoBD audit log: called last, after recordBoardLeave's own writes and
+                    // before the final read-only select below -- see auditBoardMembershipEnd KDoc
+                    // for the full call-site rationale.
+                    auditBoardMembershipEnd(
+                        openBoardMembershipId,
+                        openBoardMembershipRow[BoardMembershipTable.memberId],
+                        openBoardMembershipRow[BoardMembershipTable.committeeRole],
+                        openBoardMembershipRow[BoardMembershipTable.startedAt],
+                        until,
+                        current,
+                    )
                 }
             }
             (CommitteeMembershipTable innerJoin MemberTable)
@@ -456,7 +472,13 @@ class GovernanceService(
             val committeeId = requireMeetingCommitteeId(sId)
             if (!current.canRecordForMeeting(committeeId)) throw ForbiddenException()
             val meeting = loadMeeting(sId)
-            insertResolutionRow(sId, committeeId, meeting.scheduledAt.date, input, current)
+            val resolution = insertResolutionRow(sId, committeeId, meeting.scheduledAt.date, input, current)
+            // V0.5.3 GoBD audit log: CREATE only -- a Resolution is never mutated after recording
+            // (no update path exists in this codebase), see 14-audit-log.kuml.kts file header.
+            // This is the last database write of this transaction, satisfying AuditLogRecorder's
+            // deadlock-avoidance contract -- see auditResolutionCreate KDoc.
+            auditResolutionCreate(resolution, current)
+            resolution
         }
     }
 
@@ -689,6 +711,9 @@ class GovernanceService(
                 it[MotionTable.status] = newMotionStatus
                 it[MotionTable.resolutionId] = Uuid.parse(resolution.id)
             }
+            // V0.5.3 GoBD audit log: called last, after MotionTable.update, so this satisfies
+            // AuditLogRecorder's deadlock-avoidance contract -- see auditResolutionCreate KDoc.
+            auditResolutionCreate(resolution, current)
             loadMotion(aId)
         }
     }
@@ -950,6 +975,9 @@ class GovernanceService(
                 it[secondPriceLtr] = settlement.secondPrice
                 it[resolutionId] = Uuid.parse(resolution.id)
             }
+            // V0.5.3 GoBD audit log: called last, after VoteTable.update, so this satisfies
+            // AuditLogRecorder's deadlock-avoidance contract -- see auditResolutionCreate KDoc.
+            auditResolutionCreate(resolution, current)
             loadVote(abId)
         }
     }

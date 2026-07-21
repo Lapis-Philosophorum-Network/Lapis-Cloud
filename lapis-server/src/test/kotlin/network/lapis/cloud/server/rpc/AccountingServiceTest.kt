@@ -2,6 +2,7 @@ package network.lapis.cloud.server.rpc
 
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.post
@@ -21,9 +22,11 @@ import io.ktor.server.testing.testApplication
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.datetime.LocalDate
+import kotlinx.serialization.json.Json
 import network.lapis.cloud.server.db.DatabaseConfig
 import network.lapis.cloud.server.db.DevSeedData
 import network.lapis.cloud.server.db.generated.AccountTable
+import network.lapis.cloud.server.db.generated.AuditLogEntryTable
 import network.lapis.cloud.server.db.generated.CostCenterTable
 import network.lapis.cloud.server.db.generated.ExternalDonorTable
 import network.lapis.cloud.server.db.generated.JournalEntryTable
@@ -39,6 +42,7 @@ import network.lapis.cloud.shared.domain.DonorCategory
 import network.lapis.cloud.shared.domain.ExternalDonorInput
 import network.lapis.cloud.shared.domain.GemeinnuetzigkeitSphere
 import network.lapis.cloud.shared.domain.JournalEntryInput
+import network.lapis.cloud.shared.domain.JournalEntrySnapshot
 import network.lapis.cloud.shared.domain.JournalEntryStatus
 import network.lapis.cloud.shared.domain.LedgerAccountInput
 import network.lapis.cloud.shared.domain.LedgerAccountType
@@ -300,6 +304,69 @@ class AccountingServiceTest :
                 val body = response.bodyAsText().split(":")
                 body[1] shouldBe "POSTED"
                 body[2] shouldBe "2"
+            }
+        }
+
+        // Regression guard for a critical review finding (V0.5.3): before this fix,
+        // AuditLogEntryTable.beforeSnapshot/afterSnapshot were capped at VARCHAR(8000), and a
+        // JournalEntrySnapshot with roughly 44+ Postings already serializes past that -- since
+        // AuditLogRecorder.record() writes in the SAME transaction as the JournalEntry/Posting
+        // insert (see that object's KDoc), the oversized snapshot aborted the WHOLE transaction,
+        // silently rejecting a perfectly legitimate, balanced JournalEntry for a reason with
+        // nothing to do with accounting rules. The fix widened both columns to unbounded TEXT
+        // (`14-audit-log.kuml.kts`) instead of introducing a posting-count cap or truncating the
+        // snapshot (either of which would undermine GoBD Vollstaendigkeit) -- this test proves a
+        // 60-Posting entry (comfortably past the old cap) now posts successfully and that its
+        // full audit-log afterSnapshot really does carry all 60 Postings, not a truncated subset.
+        test(
+            "postJournalEntry with 60 postings (well past the old VARCHAR(8000) audit-snapshot cap) " +
+                "succeeds and the audit-log afterSnapshot carries all 60 postings",
+        ) {
+            testApplication {
+                application {
+                    install(StatusPages) { installAccountingExceptionHandlers() }
+                    routing { registerAccountingTestRoutes() }
+                }
+                val treasurer = createTestMember("acct-treasurer-manypostings@example.org", AccountRole.TREASURER)
+                val kasse = createLedgerAccount("9500", LedgerAccountType.ASSET)
+                val ertrag = createLedgerAccount("9501", LedgerAccountType.INCOME, accountClass = 2)
+
+                val postingCount = 60
+                val postings =
+                    (1..postingCount).map { i ->
+                        val side = if (i % 2 == 1) PostingSide.DEBIT else PostingSide.CREDIT
+                        val account = if (side == PostingSide.DEBIT) kasse else ertrag
+                        PostingInput(
+                            account.toString(),
+                            side,
+                            BigDecimal("1.00"),
+                            sphere = GemeinnuetzigkeitSphere.IDEELLER_BEREICH,
+                        )
+                    }
+                // postingCount is even, so DEBIT/CREDIT alternate 1:1 -- balanced (30 x 1.00 each side).
+                val response =
+                    client.post("/test/post-entry?${entryParams(LocalDate(2026, 3, 10), "Viele Buchungszeilen", postings)}") {
+                        header("X-Member-Id", treasurer.toString())
+                    }
+                response.status shouldBe HttpStatusCode.OK
+                val body = response.bodyAsText().split(":")
+                body[1] shouldBe "POSTED"
+                body[2] shouldBe postingCount.toString()
+                val entryId = Uuid.parse(body[0])
+
+                val afterSnapshotJson =
+                    transaction {
+                        AuditLogEntryTable
+                            .selectAll()
+                            .where { AuditLogEntryTable.entityId eq entryId }
+                            .single()[AuditLogEntryTable.afterSnapshot]
+                    }
+                afterSnapshotJson shouldNotBe null
+                // Comfortably past the old 8000-char VARCHAR cap -- proves this snapshot really
+                // would have overflowed it, not just "happens to still fit".
+                (afterSnapshotJson!!.length > 8000) shouldBe true
+                val snapshot = Json.decodeFromString(JournalEntrySnapshot.serializer(), afterSnapshotJson)
+                snapshot.postings.size shouldBe postingCount
             }
         }
 
@@ -3635,6 +3702,17 @@ private fun cleanUpAccountingTestData(
 ) {
     if (memberIds.isEmpty() && ledgerAccountIds.isEmpty() && costCenterIds.isEmpty() && externalDonorIds.isEmpty()) return
     transaction {
+        // V0.5.3 GoBD audit log: postJournalEntry/saveDraftEntry/postDraftEntry now write an
+        // AuditLogEntryTable row per mutation, referencing the acting member via a real FK
+        // (actor_member_id) -- null it out first (audit_log_entry rows themselves are never
+        // deleted, see AuditLogRecorder KDoc) so the MemberTable delete below does not violate
+        // that FK.
+        if (memberIds.isNotEmpty()) {
+            AuditLogEntryTable.update({ AuditLogEntryTable.actorMemberId inList memberIds }) {
+                it[actorMemberId] = null
+            }
+        }
+
         val journalEntryIds =
             if (memberIds.isNotEmpty()) {
                 JournalEntryTable.selectAll().where { JournalEntryTable.createdBy inList memberIds }.map { it[JournalEntryTable.id] }

@@ -22,6 +22,7 @@ import network.lapis.cloud.server.routes.registerDocumentRoutes
 import network.lapis.cloud.server.routes.registerDsgvoRoutes
 import network.lapis.cloud.server.routes.registerMailmergeRoutes
 import network.lapis.cloud.server.rpc.AccountingService
+import network.lapis.cloud.server.rpc.AuditLogService
 import network.lapis.cloud.server.rpc.BoardMembershipService
 import network.lapis.cloud.server.rpc.ContributionService
 import network.lapis.cloud.server.rpc.DirectMessageService
@@ -39,6 +40,7 @@ import network.lapis.cloud.server.security.ForbiddenException
 import network.lapis.cloud.server.security.UnauthenticatedException
 import network.lapis.cloud.shared.Greeting
 import network.lapis.cloud.shared.rpc.IAccountingService
+import network.lapis.cloud.shared.rpc.IAuditLogService
 import network.lapis.cloud.shared.rpc.IBoardMembershipService
 import network.lapis.cloud.shared.rpc.IContributionService
 import network.lapis.cloud.shared.rpc.IDirectMessageService
@@ -106,6 +108,7 @@ fun Application.module() {
         registerService(IOrganizationSettingsService::class) { call -> OrganizationSettingsService(call) }
         registerService(IPostalMailService::class) { call -> PostalMailService(call, documentStorageRoot, postalMailProvider) }
         registerService(IBoardMembershipService::class) { call -> BoardMembershipService(call) }
+        registerService(IAuditLogService::class) { call -> AuditLogService(call) }
     }
 
     routing {

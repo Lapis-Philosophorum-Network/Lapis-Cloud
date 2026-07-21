@@ -23,6 +23,7 @@ import kotlinx.datetime.LocalDateTime
 import network.lapis.cloud.server.db.DatabaseConfig
 import network.lapis.cloud.server.db.DevSeedData
 import network.lapis.cloud.server.db.generated.AccountTable
+import network.lapis.cloud.server.db.generated.AuditLogEntryTable
 import network.lapis.cloud.server.db.generated.BoardMembershipTable
 import network.lapis.cloud.server.db.generated.CommitteeMembershipTable
 import network.lapis.cloud.server.db.generated.CommitteeTable
@@ -626,6 +627,14 @@ private fun cleanUpBoardMembershipTestData(
     if (committeeIds.isEmpty() && memberIds.isEmpty()) return
     transaction {
         if (memberIds.isNotEmpty()) {
+            // V0.5.3 GoBD audit log: appointBoardMember/endBoardMembership now write an
+            // AuditLogEntryTable row per mutation, referencing the acting member via a real FK
+            // (actor_member_id) -- null it out first (audit_log_entry rows themselves are never
+            // deleted, see AuditLogRecorder KDoc) so the MemberTable delete below does not
+            // violate that FK.
+            AuditLogEntryTable.update({ AuditLogEntryTable.actorMemberId inList memberIds }) {
+                it[actorMemberId] = null
+            }
             TransparenzregisterReminderTable.update({ TransparenzregisterReminderTable.resolvedBy inList memberIds }) {
                 it[resolvedBy] = null
             }

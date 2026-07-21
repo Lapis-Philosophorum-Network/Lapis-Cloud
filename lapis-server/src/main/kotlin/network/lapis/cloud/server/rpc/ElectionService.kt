@@ -1,6 +1,7 @@
 package network.lapis.cloud.server.rpc
 
 import io.ktor.server.application.ApplicationCall
+import kotlinx.datetime.LocalDate
 import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.LocalTime
 import kotlinx.datetime.TimeZone
@@ -73,6 +74,20 @@ private const val RECEIPT_CODE_BYTES = 20 // 160 bits, comfortably above the >=1
 private const val RECEIPT_CODE_MAX_ATTEMPTS = 5
 
 private val secureRandom = SecureRandom()
+
+/**
+ * One [BoardMembershipEvents.recordBoardJoin] result from [ElectionService.tally]'s `EXECUTIVE_BOARD`
+ * winner-seating branch, collected during the seating loop and audited only once, right at the end
+ * of the transaction (after [network.lapis.cloud.server.db.generated.MotionTable]/
+ * [network.lapis.cloud.server.db.generated.ElectionTable] are updated) -- see [auditBoardMembershipCreate]
+ * KDoc for why the audit call itself cannot happen inside the loop.
+ */
+private data class SeatedBoardMembership(
+    val id: Uuid,
+    val memberId: Uuid,
+    val role: CommitteeRole,
+    val startedAt: LocalDate,
+)
 
 /**
  * Demokratische Electionen (V0.2.4): one-person-one-vote elections/ballots. Implements [IElectionService]
@@ -605,6 +620,9 @@ class ElectionService(
             val votesYes: Int
             val votesNo: Int
             val votesAbstain: Int
+            // V0.5.3 GoBD audit log: collected here, audited only at the very end of the
+            // transaction -- see SeatedBoardMembership KDoc.
+            val seatedBoardMemberships = mutableListOf<SeatedBoardMembership>()
 
             if (electionType == ElectionType.YES_NO) {
                 val ballots =
@@ -749,7 +767,9 @@ class ElectionService(
                             it[until] = null
                         }
                         if (targetCommitteeType == CommitteeType.EXECUTIVE_BOARD) {
-                            BoardMembershipEvents.recordBoardJoin(winnerMemberId, targetRole, today, nowLocalDateTime())
+                            val boardMembershipId =
+                                BoardMembershipEvents.recordBoardJoin(winnerMemberId, targetRole, today, nowLocalDateTime())
+                            seatedBoardMemberships += SeatedBoardMembership(boardMembershipId, winnerMemberId, targetRole, today)
                         }
                     }
                 }
@@ -795,6 +815,15 @@ class ElectionService(
                 it[tallyRunAt] = nowLocalDateTime()
                 it[ElectionTable.resolutionId] = Uuid.parse(resolution.id)
             }
+            // V0.5.3 GoBD audit log: called last, after every other row-locking write in this
+            // transaction (CommitteeMembershipTable/MotionTable/ElectionTable), so this satisfies
+            // AuditLogRecorder's deadlock-avoidance contract -- see auditBoardMembershipCreate/
+            // auditResolutionCreate KDoc for why these calls cannot happen earlier (inside the
+            // seating loop / inside insertResolutionRow).
+            seatedBoardMemberships.forEach {
+                auditBoardMembershipCreate(it.id, it.memberId, it.role, it.startedAt, current)
+            }
+            auditResolutionCreate(resolution, current)
             ergebnis
         }
     }

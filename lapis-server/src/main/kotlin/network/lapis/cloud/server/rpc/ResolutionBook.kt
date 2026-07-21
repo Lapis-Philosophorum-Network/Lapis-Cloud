@@ -3,6 +3,8 @@ package network.lapis.cloud.server.rpc
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
+import kotlinx.serialization.json.Json
+import network.lapis.cloud.server.audit.AuditLogRecorder
 import network.lapis.cloud.server.db.generated.AttendanceTable
 import network.lapis.cloud.server.db.generated.CommitteeTable
 import network.lapis.cloud.server.db.generated.MeetingTable
@@ -10,10 +12,13 @@ import network.lapis.cloud.server.db.generated.MemberTable
 import network.lapis.cloud.server.db.generated.ResolutionTable
 import network.lapis.cloud.server.security.CurrentMember
 import network.lapis.cloud.shared.domain.AttendanceStatus
+import network.lapis.cloud.shared.domain.AuditAction
+import network.lapis.cloud.shared.domain.AuditEntityType
 import network.lapis.cloud.shared.domain.QuorumResultDto
 import network.lapis.cloud.shared.domain.ResolutionDto
 import network.lapis.cloud.shared.domain.ResolutionInput
 import network.lapis.cloud.shared.domain.ResolutionMode
+import network.lapis.cloud.shared.domain.ResolutionSnapshot
 import org.jetbrains.exposed.v1.core.ResultRow
 import org.jetbrains.exposed.v1.core.and
 import org.jetbrains.exposed.v1.core.eq
@@ -144,6 +149,60 @@ internal fun insertResolutionRow(
         .where { ResolutionTable.id eq id }
         .single()
         .toResolutionDto()
+}
+
+/**
+ * V0.5.3 GoBD audit-log helper for every [insertResolutionRow] call site (recordResolution,
+ * resolveMotion, closeVote, `ElectionService.tally`, `SystemicConsensusService.evaluate`) --
+ * CREATE only, a Resolution is never mutated after recording (see `14-audit-log.kuml.kts` file
+ * header). Factored out so all five call sites produce the exact same [ResolutionSnapshot] shape
+ * instead of re-deriving it -- fixes a V0.5.3-review finding where only [GovernanceService
+ * .recordResolution] actually audited its Resolution and the other four call sites (which are the
+ * vote-/election-/systemic-consensus-*decided* outcomes, not just administrative recording) wrote
+ * no audit row at all.
+ *
+ * Deliberately NOT called from inside [insertResolutionRow] itself, even though that would remove
+ * the need for every call site to remember to call this: [AuditLogRecorder.record]'s documented
+ * deadlock-avoidance contract requires it to be the LAST database operation of the caller's
+ * transaction that takes a row lock, but every call site except recordResolution performs further
+ * row-locking writes (`MotionTable.update`/`VoteTable.update`/`ElectionTable.update`/
+ * `CommitteeMembershipTable.update`, etc.) AFTER [insertResolutionRow] returns. Calling
+ * [AuditLogRecorder.record] from inside [insertResolutionRow] would insert its chain-state row
+ * lock into the middle of those transactions instead of at the end, reintroducing exactly the
+ * lock-ordering hazard that KDoc warns about. Every call site therefore invokes this helper itself,
+ * explicitly, as the true last locking operation of its own transaction -- see each call site for
+ * the exact placement.
+ */
+internal fun auditResolutionCreate(
+    resolution: ResolutionDto,
+    current: CurrentMember,
+) {
+    AuditLogRecorder.record(
+        actorMemberId = current.memberId,
+        actorRole = current.role,
+        entityType = AuditEntityType.RESOLUTION,
+        entityId = Uuid.parse(resolution.id),
+        action = AuditAction.CREATE,
+        before = null,
+        after =
+            Json.encodeToString(
+                ResolutionSnapshot.serializer(),
+                ResolutionSnapshot(
+                    meetingId = resolution.meetingId,
+                    number = resolution.number,
+                    title = resolution.title,
+                    text = resolution.text,
+                    votesYes = resolution.votesYes,
+                    votesNo = resolution.votesNo,
+                    votesAbstain = resolution.votesAbstain,
+                    quorumMet = resolution.quorumMet,
+                    status = resolution.status,
+                    decidedAt = resolution.decidedAt,
+                    recordedBy = resolution.recordedById,
+                    resolutionMode = resolution.resolutionMode,
+                ),
+            ),
+    )
 }
 
 internal fun ResultRow.toResolutionDto(): ResolutionDto =

@@ -31,6 +31,7 @@ object PersonalDataRegistry {
             AccountingPersonalData,
             PostalMailPersonalData,
             BoardMembershipPersonalData,
+            AuditLogPersonalData,
         )
 
     /**

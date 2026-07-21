@@ -42,7 +42,7 @@ class DomainModelMergerTest :
                 requireNotNull(KumlModelLoader.kumlSourceDir.listFiles { f -> f.name.endsWith(".kuml.kts") }) {
                     "kUML source dir not found or not a directory: ${KumlModelLoader.kumlSourceDir.absolutePath}"
                 }.sortedBy { it.name }
-            scriptFiles shouldHaveSize 14
+            scriptFiles shouldHaveSize 15
 
             val diagrams = scriptFiles.map { KumlModelLoader.loadUmlDiagram(it) }
 
@@ -76,7 +76,13 @@ class DomainModelMergerTest :
             // stub (it has an FK to member) -- so it contributes +3 «Entity» declarations (the stub
             // + the two real tables) and +1 drop (the stub merges into the existing member entity)
             // versus the V0.5.1 baseline above (47 -> 49).
-            val distinctTableNames = 49
+            // 14-audit-log.kuml.kts (V0.5.3 GoBD-Revisionssicherheit) adds exactly two more real
+            // tables (audit_log_chain_state, audit_log_entry), WITH its own cross-domain Member
+            // stub (it has an FK to member via audit_log_entry.actor_member_id) -- so it
+            // contributes +3 «Entity» declarations (the stub + the two real tables) and +1 drop
+            // (the stub merges into the existing member entity) versus the V0.5.2 baseline above
+            // (49 -> 51).
+            val distinctTableNames = 51
 
             val result =
                 UmlToExposedViaErmScriptTransformer().transform(
@@ -148,6 +154,8 @@ class DomainModelMergerTest :
                     "PostalDeliveryLogTable.kt",
                     "BoardMembershipTable.kt",
                     "TransparenzregisterReminderTable.kt",
+                    "AuditLogChainStateTable.kt",
+                    "AuditLogEntryTable.kt",
                 )
         }
 

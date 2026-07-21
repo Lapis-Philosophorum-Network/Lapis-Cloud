@@ -524,6 +524,10 @@ class SystemicConsensusService(
                 SystemicConsensusTable.update({ SystemicConsensusTable.id eq kId }) {
                     it[SystemicConsensusTable.resolutionId] = Uuid.parse(resolution.id)
                 }
+                // V0.5.3 GoBD audit log: called last, after MotionTable.update/SystemicConsensusTable
+                // .update, so this satisfies AuditLogRecorder's deadlock-avoidance contract -- see
+                // auditResolutionCreate KDoc.
+                auditResolutionCreate(resolution, current)
             }
 
             toSystemicConsensusResultDto(kId, ergebnis)
