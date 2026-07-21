@@ -18,11 +18,13 @@ import io.ktor.server.routing.routing
 import network.lapis.cloud.server.db.DatabaseConfig
 import network.lapis.cloud.server.db.DevSeedData
 import network.lapis.cloud.server.postal.LetterxpressPostalMailProvider
+import network.lapis.cloud.server.routes.registerBackupRoutes
 import network.lapis.cloud.server.routes.registerDocumentRoutes
 import network.lapis.cloud.server.routes.registerDsgvoRoutes
 import network.lapis.cloud.server.routes.registerMailmergeRoutes
 import network.lapis.cloud.server.rpc.AccountingService
 import network.lapis.cloud.server.rpc.AuditLogService
+import network.lapis.cloud.server.rpc.BackupService
 import network.lapis.cloud.server.rpc.BoardMembershipService
 import network.lapis.cloud.server.rpc.ContributionService
 import network.lapis.cloud.server.rpc.DirectMessageService
@@ -41,6 +43,7 @@ import network.lapis.cloud.server.security.UnauthenticatedException
 import network.lapis.cloud.shared.Greeting
 import network.lapis.cloud.shared.rpc.IAccountingService
 import network.lapis.cloud.shared.rpc.IAuditLogService
+import network.lapis.cloud.shared.rpc.IBackupService
 import network.lapis.cloud.shared.rpc.IBoardMembershipService
 import network.lapis.cloud.shared.rpc.IContributionService
 import network.lapis.cloud.shared.rpc.IDirectMessageService
@@ -109,6 +112,7 @@ fun Application.module() {
         registerService(IPostalMailService::class) { call -> PostalMailService(call, documentStorageRoot, postalMailProvider) }
         registerService(IBoardMembershipService::class) { call -> BoardMembershipService(call) }
         registerService(IAuditLogService::class) { call -> AuditLogService(call) }
+        registerService(IBackupService::class) { call -> BackupService(call) }
     }
 
     routing {
@@ -118,6 +122,7 @@ fun Application.module() {
         registerDocumentRoutes(documentStorageRoot)
         registerDsgvoRoutes()
         registerMailmergeRoutes(documentStorageRoot)
+        registerBackupRoutes(DatabaseConfig.connect(), documentStorageRoot)
         getAllServiceManagers().forEach { applyRoutes(it) }
     }
 }

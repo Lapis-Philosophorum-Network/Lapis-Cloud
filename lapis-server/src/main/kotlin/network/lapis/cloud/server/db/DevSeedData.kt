@@ -169,6 +169,24 @@ object DevSeedData {
                 "Demo seeding (fixed, guessable member ids with a NULL password_hash) must never run " +
                 "against a real deployment."
         }
+        // Synchronized around the whole check-then-insert body: many test Spec classes call
+        // seedIfEmpty(force = true) from their own beforeSpec, and Kotest/coroutine-dispatched test
+        // execution can run several of those concurrently within one JVM. Without this lock, two
+        // concurrent callers can both observe `alreadySeeded == false` before either has committed
+        // (classic TOCTOU race), both then attempt to INSERT the same fixed-id rows, and the loser
+        // throws a UNIQUE-constraint violation out of its own transaction {} block -- which,
+        // depending on exactly which INSERT lost the race, can also leave OTHER Spec classes'
+        // beforeSpec (and every test that depends on `demoMembers` existing) failing with a
+        // confusing downstream "member not found"/FK-violation error instead of a clear seeding
+        // failure. synchronized(this) serializes every call within this one JVM -- cheap, since
+        // seedIfEmpty is only ever called from test setup (and once from main()), never from a
+        // request-handling hot path.
+        synchronized(this) {
+            seedIfEmptyLocked()
+        }
+    }
+
+    private fun seedIfEmptyLocked() {
         transaction {
             val alreadySeeded = MemberTable.selectAll().limit(1).any()
             if (alreadySeeded) return@transaction

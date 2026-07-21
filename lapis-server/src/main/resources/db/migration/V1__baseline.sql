@@ -607,6 +607,27 @@ CREATE TABLE audit_log_entry (
     CHECK (action IN ('CREATE', 'UPDATE', 'POST'))
 );
 
+-- V0.5.4 Backup-/Restore-/Datenexport-Garantie: one row per completed (or failed) full-organization
+-- export/restore attempt (see 15-backup-export.kuml.kts file header for why this is deliberately
+-- NOT part of the GoBD hash chain above).
+CREATE TABLE backup_operation_log (
+    id UUID NOT NULL PRIMARY KEY,
+    operation_type VARCHAR(7) NOT NULL,
+    status VARCHAR(9) NOT NULL,
+    started_at TIMESTAMP NOT NULL,
+    finished_at TIMESTAMP NOT NULL,
+    bundle_format_version INT NOT NULL,
+    table_count INT NOT NULL,
+    total_row_count BIGINT NOT NULL,
+    blob_count INT NOT NULL,
+    blob_bytes_total BIGINT NOT NULL,
+    bundle_size_bytes BIGINT NOT NULL,
+    error_message VARCHAR(2000) NULL,
+    actor_member_id UUID NOT NULL,
+    CHECK (operation_type IN ('EXPORT', 'RESTORE')),
+    CHECK (status IN ('SUCCEEDED', 'FAILED'))
+);
+
 -- Foreign Keys
 
 ALTER TABLE member ADD CONSTRAINT fk_member_membership_tier_id FOREIGN KEY (membership_tier_id) REFERENCES membership_tier(id);
@@ -708,6 +729,7 @@ ALTER TABLE board_membership ADD CONSTRAINT fk_board_membership_member_id FOREIG
 ALTER TABLE transparenzregister_reminder ADD CONSTRAINT fk_transparenzregister_reminder_member_id FOREIGN KEY (member_id) REFERENCES member(id);
 ALTER TABLE transparenzregister_reminder ADD CONSTRAINT fk_transparenzregister_reminder_resolved_by FOREIGN KEY (resolved_by) REFERENCES member(id);
 ALTER TABLE audit_log_entry ADD CONSTRAINT fk_audit_log_entry_actor_member_id FOREIGN KEY (actor_member_id) REFERENCES member(id);
+ALTER TABLE backup_operation_log ADD CONSTRAINT fk_backup_operation_log_actor_member_id FOREIGN KEY (actor_member_id) REFERENCES member(id);
 
 -- Indexes
 
@@ -788,6 +810,7 @@ CREATE INDEX idx_transparenzregister_reminder_resolved ON transparenzregister_re
 CREATE UNIQUE INDEX uq_audit_log_entry_sequence ON audit_log_entry (sequence_number);
 CREATE INDEX idx_audit_log_entry_entity_id ON audit_log_entry (entity_id);
 CREATE INDEX idx_audit_log_entry_occurred_at ON audit_log_entry (occurred_at);
+CREATE INDEX idx_backup_operation_log_actor ON backup_operation_log (actor_member_id);
 
 -- V0.4.1 Serienbrief/PDF engine: exactly one organization_settings row must exist from first
 -- migration onward, in every environment (not just LAPIS_SEED_DEMO_DATA=true demo deployments) --

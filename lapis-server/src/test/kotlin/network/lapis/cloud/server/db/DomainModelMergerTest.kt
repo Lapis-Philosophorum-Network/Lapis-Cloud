@@ -35,14 +35,14 @@ class DomainModelMergerTest :
         // ── Test 1: merging the real 14 domain scripts ───────────────────────────────────
 
         test(
-            "merging the real 14 domain scripts succeeds and the uml-to-erm -> erm-to-exposed chain " +
+            "merging the real 15 domain scripts succeeds and the uml-to-erm -> erm-to-exposed chain " +
                 "produces exactly one Table file per distinct table name",
         ) {
             val scriptFiles =
                 requireNotNull(KumlModelLoader.kumlSourceDir.listFiles { f -> f.name.endsWith(".kuml.kts") }) {
                     "kUML source dir not found or not a directory: ${KumlModelLoader.kumlSourceDir.absolutePath}"
                 }.sortedBy { it.name }
-            scriptFiles shouldHaveSize 15
+            scriptFiles shouldHaveSize 16
 
             val diagrams = scriptFiles.map { KumlModelLoader.loadUmlDiagram(it) }
 
@@ -82,7 +82,12 @@ class DomainModelMergerTest :
             // contributes +3 «Entity» declarations (the stub + the two real tables) and +1 drop
             // (the stub merges into the existing member entity) versus the V0.5.2 baseline above
             // (49 -> 51).
-            val distinctTableNames = 51
+            // 15-backup-export.kuml.kts (V0.5.4 Backup-/Restore-/Datenexport-Garantie) adds exactly
+            // one more real table (backup_operation_log), WITH its own cross-domain Member stub (it
+            // has an FK to member via backup_operation_log.actor_member_id) -- so it contributes +2
+            // «Entity» declarations (the stub + the one real table) and +1 drop (the stub merges
+            // into the existing member entity) versus the V0.5.3 baseline above (51 -> 52).
+            val distinctTableNames = 52
 
             val result =
                 UmlToExposedViaErmScriptTransformer().transform(
@@ -156,6 +161,7 @@ class DomainModelMergerTest :
                     "TransparenzregisterReminderTable.kt",
                     "AuditLogChainStateTable.kt",
                     "AuditLogEntryTable.kt",
+                    "BackupOperationLogTable.kt",
                 )
         }
 
