@@ -25,6 +25,7 @@ import network.lapis.cloud.server.routes.registerDocumentRoutes
 import network.lapis.cloud.server.routes.registerDsgvoRoutes
 import network.lapis.cloud.server.routes.registerMailmergeRoutes
 import network.lapis.cloud.server.rpc.AccountingService
+import network.lapis.cloud.server.rpc.AuctionService
 import network.lapis.cloud.server.rpc.AuditLogService
 import network.lapis.cloud.server.rpc.BackupService
 import network.lapis.cloud.server.rpc.BoardMembershipService
@@ -50,6 +51,7 @@ import network.lapis.cloud.server.security.ForbiddenException
 import network.lapis.cloud.server.security.UnauthenticatedException
 import network.lapis.cloud.shared.Greeting
 import network.lapis.cloud.shared.rpc.IAccountingService
+import network.lapis.cloud.shared.rpc.IAuctionService
 import network.lapis.cloud.shared.rpc.IAuditLogService
 import network.lapis.cloud.shared.rpc.IBackupService
 import network.lapis.cloud.shared.rpc.IBoardMembershipService
@@ -138,6 +140,7 @@ fun Application.module() {
         registerService(IPeerTransferService::class) { call -> PeerTransferService(call) }
         registerService(IPriceOracleService::class) { call -> PriceOracleService(call, priceOracleOrchestrator) }
         registerService(IPoliticianService::class) { call -> PoliticianService(call) }
+        registerService(IAuctionService::class) { call -> AuctionService(call) }
     }
 
     routing {

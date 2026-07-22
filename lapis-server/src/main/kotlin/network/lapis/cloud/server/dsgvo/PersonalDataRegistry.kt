@@ -38,6 +38,7 @@ object PersonalDataRegistry {
             PeerTransferPersonalData,
             PriceOraclePersonalData,
             PoliticianPersonalData,
+            AuctionPersonalData,
         )
 
     /**

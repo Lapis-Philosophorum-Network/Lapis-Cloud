@@ -2,6 +2,7 @@
 
 package network.lapis.cloud.server.db.generated
 
+import java.math.BigDecimal
 import kotlin.uuid.Uuid
 import kotlinx.datetime.LocalDate
 import org.jetbrains.exposed.v1.core.Column
@@ -22,6 +23,8 @@ public object OrganizationSettingsTable : Table("organization_settings") {
     public val isPoliticalParty: Column<Boolean> = bool("is_political_party")
     public val postalMailEnabled: Column<Boolean> = bool("postal_mail_enabled")
     public val politicianRankingEnabled: Column<Boolean> = bool("politician_ranking_enabled")
+    public val auctionEnabled: Column<Boolean> = bool("auction_enabled")
+    public val auctionMaxValueLtr: Column<BigDecimal?> = decimal("auction_max_value_ltr", 18, 2).nullable()
 
     override val primaryKey: PrimaryKey = PrimaryKey(id)
 }

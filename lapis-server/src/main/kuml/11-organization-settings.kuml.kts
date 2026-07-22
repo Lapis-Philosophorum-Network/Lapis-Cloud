@@ -28,6 +28,18 @@
 // -- an explicit opt-in gate for the whole feature, NOT NULL, defaults to FALSE. Same "independent
 // flag, not folded into isPoliticalParty" reasoning `postalMailEnabled` already established --
 // see that attribute's own comment below and `20-politician.kuml.kts`'s own file header addendum.
+//
+// V0.6.2 (LTR-Auktion) adds two more fields: `auctionEnabled` (opt-in gate, NOT NULL, defaults to
+// FALSE) and `auctionMaxValueLtr` (nullable ADMIN-configurable per-auction value cap, no default =
+// no cap). UNLIKE `postalMailEnabled`/`politicianRankingEnabled` above, `auctionEnabled` is
+// deliberately NOT part of `OrganizationSettingsService.updateOrganizationSettings`'s writable
+// column set -- it can only be flipped on via the auditable disclaimer-acknowledgment RPC
+// `AuctionService.enableAuction` (see `21-auction.kuml.kts`'s own file header and
+// `network.lapis.cloud.server.rpc.AuctionComplianceDisclaimer` KDoc) or off via
+// `AuctionService.disableAuction`. `auctionMaxValueLtr` is set via
+// `AuctionService.setAuctionMaxValueLtr`, also bypassing the generic update path -- both fields
+// are therefore modelled here (this is still the single row that owns them) but read-only from
+// `OrganizationSettingsService`'s own perspective; see that class's KDoc.
 import dev.kuml.profile.erm.ermMappingProfile
 import dev.kuml.uml.Multiplicity
 import dev.kuml.uml.dsl.applyProfile
@@ -112,6 +124,23 @@ classDiagram(name = "OrganizationSettings") {
         attribute(name = "politicianRankingEnabled", type = "Boolean") {
             defaultValue = "FALSE"
             stereotype("Column") { "columnName" to "politician_ranking_enabled" }
+        }
+        // V0.6.2 LTR-Auktion: explicit opt-in gate, NOT NULL, defaults to FALSE. Read-only from
+        // OrganizationSettingsService's own update path -- see file header addendum above and
+        // 21-auction.kuml.kts's own file header for the full rationale. Settable ONLY via
+        // AuctionService.enableAuction (requires the disclaimer-acknowledgment flow)/disableAuction.
+        attribute(name = "auctionEnabled", type = "Boolean") {
+            defaultValue = "FALSE"
+            stereotype("Column") { "columnName" to "auction_enabled" }
+        }
+        // V0.6.2 LTR-Auktion: nullable, no default = no cap. ADMIN-configurable value ceiling (in
+        // LTR, never Oracle-derived) applied only to a NEW listing's startingBidLtr/buyNowPriceLtr
+        // -- see 21-auction.kuml.kts file header. Settable ONLY via
+        // AuctionService.setAuctionMaxValueLtr, bypassing the generic update path -- see file
+        // header addendum above.
+        attribute(name = "auctionMaxValueLtr", type = "BigDecimal") {
+            multiplicity = Multiplicity(0, 1)
+            stereotype("Column") { "columnName" to "auction_max_value_ltr"; "sqlType" to "DECIMAL(18,2)" }
         }
     }
 }

@@ -51,6 +51,12 @@ class OrganizationSettingsSchemaDriftTest :
             entity.attributeByName("name")?.nullable shouldBe false
         }
 
+        test("auction_enabled is NOT NULL, auction_max_value_ltr is nullable -- V0.6.2 addendum") {
+            val entity = model.entities.single { it.name == "organization_settings" }
+            entity.attributeByName("auction_enabled")?.nullable shouldBe false
+            entity.attributeByName("auction_max_value_ltr")?.nullable shouldBe true
+        }
+
         test("organization_settings entity column-name set matches the generated OrganizationSettingsTable 1:1") {
             model.entities
                 .single { it.name == "organization_settings" }

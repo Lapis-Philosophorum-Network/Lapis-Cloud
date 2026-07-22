@@ -1,5 +1,6 @@
 package network.lapis.cloud.shared.domain
 
+import dev.kilua.rpc.types.Decimal
 import kotlinx.datetime.LocalDate
 import kotlinx.serialization.Serializable
 
@@ -40,6 +41,21 @@ import kotlinx.serialization.Serializable
  * folded into [isPoliticalParty]" reasoning [postalMailEnabled] already established. ADMIN-only to
  * set, same tier as every other field. See `network.lapis.cloud.server.rpc.PoliticianService`
  * KDoc for the runtime gate this backs.
+ *
+ * [auctionEnabled]/[auctionMaxValueLtr] (V0.6.2 LTR-Auktion) are **READ-ONLY here** -- unlike
+ * every field above, they are deliberately absent from [OrganizationSettingsInput] and can NEVER
+ * be changed via [network.lapis.cloud.shared.rpc.IOrganizationSettingsService.updateOrganizationSettings].
+ * [auctionEnabled] defaults to `false`/off and can only be flipped on via the auditable
+ * disclaimer-acknowledgment flow
+ * [network.lapis.cloud.shared.rpc.IAuctionService.enableAuction]/off via
+ * [network.lapis.cloud.shared.rpc.IAuctionService.disableAuction] -- stronger than
+ * [postalMailEnabled]/[politicianRankingEnabled]'s own opt-in gates, which the generic update path
+ * CAN flip. [auctionMaxValueLtr] (nullable, default `null` = no cap) is set via
+ * [network.lapis.cloud.shared.rpc.IAuctionService.setAuctionMaxValueLtr]. The acknowledgment
+ * history itself (who/when/which disclaimer version) is NOT duplicated here -- see
+ * [network.lapis.cloud.shared.domain.AuctionSettingsDto] for that. See
+ * `network.lapis.cloud.server.rpc.AuctionService`/`21-auction.kuml.kts` file header for the full
+ * rationale.
  */
 @Serializable
 data class OrganizationSettingsDto(
@@ -56,6 +72,8 @@ data class OrganizationSettingsDto(
     val isPoliticalParty: Boolean = false,
     val postalMailEnabled: Boolean = false,
     val politicianRankingEnabled: Boolean = false,
+    val auctionEnabled: Boolean = false,
+    val auctionMaxValueLtr: Decimal? = null,
 )
 
 /** Replaces every field of the single [OrganizationSettingsDto] row wholesale (no partial update). */

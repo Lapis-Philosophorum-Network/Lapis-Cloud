@@ -32,17 +32,17 @@ import io.kotest.matchers.string.shouldContain
 class DomainModelMergerTest :
     FunSpec({
 
-        // ── Test 1: merging the real 19 domain scripts ───────────────────────────────────
+        // ── Test 1: merging the real 22 domain scripts ───────────────────────────────────
 
         test(
-            "merging the real 21 domain scripts succeeds and the uml-to-erm -> erm-to-exposed chain " +
+            "merging the real 22 domain scripts succeeds and the uml-to-erm -> erm-to-exposed chain " +
                 "produces exactly one Table file per distinct table name",
         ) {
             val scriptFiles =
                 requireNotNull(KumlModelLoader.kumlSourceDir.listFiles { f -> f.name.endsWith(".kuml.kts") }) {
                     "kUML source dir not found or not a directory: ${KumlModelLoader.kumlSourceDir.absolutePath}"
                 }.sortedBy { it.name }
-            scriptFiles shouldHaveSize 21
+            scriptFiles shouldHaveSize 22
 
             val diagrams = scriptFiles.map { KumlModelLoader.loadUmlDiagram(it) }
 
@@ -128,7 +128,14 @@ class DomainModelMergerTest :
             // politician_weight_snapshot all resolve through it) -- so it contributes +4 «Entity»
             // declarations (the stub + 3 real tables) and +1 drop (the stub merges into the
             // already-existing member entity) versus the V0.6.5 baseline above (63 -> 66).
-            val distinctTableNames = 66
+            // 21-auction.kuml.kts (V0.6.2 LTR-Auktion) adds exactly three more real tables
+            // (auction, auction_bid, auction_compliance_acknowledgment), WITH its own cross-domain
+            // Member stub (seller_member_id/winner_member_id on auction, bidder_member_id on
+            // auction_bid, acknowledged_by_member_id on auction_compliance_acknowledgment all
+            // resolve through it) -- so it contributes +4 «Entity» declarations (the stub + 3 real
+            // tables) and +1 drop (the stub merges into the already-existing member entity) versus
+            // the V0.6.4 baseline above (66 -> 69).
+            val distinctTableNames = 69
 
             val result =
                 UmlToExposedViaErmScriptTransformer().transform(
@@ -217,6 +224,9 @@ class DomainModelMergerTest :
                     "PoliticianProfileTable.kt",
                     "PoliticianReactionTable.kt",
                     "PoliticianWeightSnapshotTable.kt",
+                    "AuctionTable.kt",
+                    "AuctionBidTable.kt",
+                    "AuctionComplianceAcknowledgmentTable.kt",
                 )
         }
 

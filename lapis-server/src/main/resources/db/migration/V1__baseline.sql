@@ -25,6 +25,9 @@ CREATE TABLE document_folder (
 -- that column's comment in 11-organization-settings.kuml.kts -- AVV requirement.
 -- politician_ranking_enabled (V0.6.4): explicit opt-in gate for the Politiker-Profile/-Ranking
 -- feature, see that column's comment in 11-organization-settings.kuml.kts.
+-- auction_enabled / auction_max_value_ltr (V0.6.2): explicit opt-in gate (settable ONLY via
+-- AuctionService.enableAuction/disableAuction, never via updateOrganizationSettings) and optional
+-- ADMIN-configured per-listing LTR value cap -- see 21-auction.kuml.kts file header.
 CREATE TABLE organization_settings (
     id UUID NOT NULL PRIMARY KEY,
     name VARCHAR(300) NOT NULL,
@@ -38,7 +41,9 @@ CREATE TABLE organization_settings (
     tax_exemption_date DATE NULL,
     is_political_party BOOLEAN NOT NULL DEFAULT FALSE,
     postal_mail_enabled BOOLEAN NOT NULL DEFAULT FALSE,
-    politician_ranking_enabled BOOLEAN NOT NULL DEFAULT FALSE
+    politician_ranking_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    auction_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    auction_max_value_ltr DECIMAL(18, 2) NULL
 );
 
 CREATE TABLE committee (
@@ -203,8 +208,11 @@ CREATE TABLE ltr_ledger_entry (
     created_by UUID NULL,
     created_at TIMESTAMP NOT NULL,
     member_id UUID NOT NULL,
-    CHECK (entry_type IN ('MINT', 'PROJECT_STAKE', 'PROJECT_STAKE_RELEASE', 'VOTE_STAKE', 'PEER_TRANSFER_OUT', 'PEER_TRANSFER_IN')),
-    CHECK (reference_type IN ('CROWDFUNDING_PROJECT', 'VOTE', 'PEER_TRANSFER'))
+    CHECK (entry_type IN (
+        'MINT', 'PROJECT_STAKE', 'PROJECT_STAKE_RELEASE', 'VOTE_STAKE', 'PEER_TRANSFER_OUT', 'PEER_TRANSFER_IN',
+        'AUCTION_LISTING_FEE', 'AUCTION_HOLD', 'AUCTION_HOLD_RELEASE', 'AUCTION_SALE_OUT', 'AUCTION_SALE_IN'
+    )),
+    CHECK (reference_type IN ('CROWDFUNDING_PROJECT', 'VOTE', 'PEER_TRANSFER', 'AUCTION'))
 );
 
 CREATE TABLE journal_entry (
@@ -859,6 +867,45 @@ CREATE TABLE politician_weight_snapshot (
     computed_by_member_id UUID NOT NULL
 );
 
+-- V0.6.2 LTR-Auktion (see 21-auction.kuml.kts file header for the full fachlich model). No
+-- genesis-singleton gate table for this domain (no cross-auction global invariant exists, unlike
+-- crowdfunding_submission_gate) -- see that file's own header.
+CREATE TABLE auction (
+    id UUID NOT NULL PRIMARY KEY,
+    title VARCHAR(200) NOT NULL,
+    description VARCHAR(4000) NOT NULL,
+    starting_bid_ltr DECIMAL(18, 2) NOT NULL,
+    buy_now_price_ltr DECIMAL(18, 2) NULL,
+    status VARCHAR(14) NOT NULL,
+    seller_member_id UUID NOT NULL,
+    winner_member_id UUID NULL,
+    final_price_ltr DECIMAL(18, 2) NULL,
+    listing_fee_ltr DECIMAL(18, 2) NOT NULL,
+    created_at TIMESTAMP NOT NULL,
+    ends_at TIMESTAMP NOT NULL,
+    settled_at TIMESTAMP NULL,
+    CHECK (status IN ('OPEN', 'SETTLED', 'CLOSED_NO_SALE'))
+);
+
+-- auction_bid is an UPSERT table, one row per (auction, bidder) -- uq_auction_bid_auction_bidder
+-- below enforces at most one standing maxBidLtr per bidder per auction; raising your own bid
+-- UPDATES this same row rather than inserting a second one. See 21-auction.kuml.kts file header.
+CREATE TABLE auction_bid (
+    id UUID NOT NULL PRIMARY KEY,
+    auction_id UUID NOT NULL,
+    bidder_member_id UUID NOT NULL,
+    max_bid_ltr DECIMAL(18, 2) NOT NULL,
+    created_at TIMESTAMP NOT NULL
+);
+
+CREATE TABLE auction_compliance_acknowledgment (
+    id UUID NOT NULL PRIMARY KEY,
+    acknowledged_by_member_id UUID NOT NULL,
+    acknowledged_at TIMESTAMP NOT NULL,
+    disclaimer_version VARCHAR(50) NOT NULL,
+    disclaimer_sha256 VARCHAR(64) NOT NULL
+);
+
 -- Foreign Keys
 
 ALTER TABLE member ADD CONSTRAINT fk_member_membership_tier_id FOREIGN KEY (membership_tier_id) REFERENCES membership_tier(id);
@@ -989,6 +1036,11 @@ ALTER TABLE politician_reaction ADD CONSTRAINT fk_politician_reaction_politician
 ALTER TABLE politician_reaction ADD CONSTRAINT fk_politician_reaction_rater_member_id FOREIGN KEY (rater_member_id) REFERENCES member(id);
 ALTER TABLE politician_weight_snapshot ADD CONSTRAINT fk_politician_weight_snapshot_politician_profile_id FOREIGN KEY (politician_profile_id) REFERENCES politician_profile(id);
 ALTER TABLE politician_weight_snapshot ADD CONSTRAINT fk_politician_weight_snapshot_computed_by_member_id FOREIGN KEY (computed_by_member_id) REFERENCES member(id);
+ALTER TABLE auction ADD CONSTRAINT fk_auction_seller_member_id FOREIGN KEY (seller_member_id) REFERENCES member(id);
+ALTER TABLE auction ADD CONSTRAINT fk_auction_winner_member_id FOREIGN KEY (winner_member_id) REFERENCES member(id);
+ALTER TABLE auction_bid ADD CONSTRAINT fk_auction_bid_auction_id FOREIGN KEY (auction_id) REFERENCES auction(id);
+ALTER TABLE auction_bid ADD CONSTRAINT fk_auction_bid_bidder_member_id FOREIGN KEY (bidder_member_id) REFERENCES member(id);
+ALTER TABLE auction_compliance_acknowledgment ADD CONSTRAINT fk_auction_compliance_acknowledgment_acknowledged_by_member_id FOREIGN KEY (acknowledged_by_member_id) REFERENCES member(id);
 
 -- Indexes
 
@@ -1090,6 +1142,13 @@ CREATE UNIQUE INDEX uq_politician_profile_member ON politician_profile (member_i
 CREATE UNIQUE INDEX uq_politician_reaction_profile_rater ON politician_reaction (politician_profile_id, rater_member_id);
 CREATE INDEX idx_politician_reaction_profile ON politician_reaction (politician_profile_id);
 CREATE UNIQUE INDEX uq_politician_weight_snapshot_profile_period ON politician_weight_snapshot (politician_profile_id, period_month);
+CREATE INDEX idx_auction_status ON auction (status);
+CREATE INDEX idx_auction_seller ON auction (seller_member_id);
+CREATE INDEX idx_auction_ends_at ON auction (ends_at);
+CREATE UNIQUE INDEX uq_auction_bid_auction_bidder ON auction_bid (auction_id, bidder_member_id);
+CREATE INDEX idx_auction_bid_auction ON auction_bid (auction_id);
+CREATE INDEX idx_auction_bid_bidder ON auction_bid (bidder_member_id);
+CREATE INDEX idx_auction_compliance_ack_at ON auction_compliance_acknowledgment (acknowledged_at);
 
 CREATE INDEX idx_price_oracle_conversion_member ON price_oracle_conversion (member_id);
 

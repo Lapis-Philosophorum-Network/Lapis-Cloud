@@ -43,6 +43,37 @@ enum class LtrLedgerEntryType {
 
     /** Credit half of the [PEER_TRANSFER_OUT] pair -- see that literal's KDoc. */
     PEER_TRANSFER_IN,
+
+    /**
+     * [network.lapis.cloud.server.rpc.AuctionService.createListing] debiting the seller's flat
+     * 0.01 LTR listing fee (V0.6.2) -- pure spam guard, same disclaimer class as [PEER_TRANSFER_OUT]'s
+     * own minimum-transfer constant. Never released/refunded, even for a
+     * [network.lapis.cloud.shared.domain.AuctionStatus.CLOSED_NO_SALE] outcome -- see
+     * `21-auction.kuml.kts` file header.
+     */
+    AUCTION_LISTING_FEE,
+
+    /**
+     * [network.lapis.cloud.server.rpc.AuctionService.placeBid] reserving the CURRENT leading
+     * bidder's `maxBidLtr` out of their free balance (V0.6.2) -- only the current leader ever
+     * holds one of these at a time per auction, released ([AUCTION_HOLD_RELEASE]) the instant a
+     * higher bid takes the lead. See `21-auction.kuml.kts` file header "Reservation model".
+     */
+    AUCTION_HOLD,
+
+    /** Credit releasing a previously-held [AUCTION_HOLD] -- either the former leader was outbid, or the auction settled. See that literal's KDoc. */
+    AUCTION_HOLD_RELEASE,
+
+    /**
+     * [network.lapis.cloud.server.rpc.AuctionService] debiting the WINNING bidder the final
+     * (second-price, or fixed Sofortkauf) price at settlement (V0.6.2) -- always paired, same
+     * transaction, same `auction.id` as `referenceId`, with an [AUCTION_SALE_IN] entry crediting
+     * the seller.
+     */
+    AUCTION_SALE_OUT,
+
+    /** Credit half of the [AUCTION_SALE_OUT] pair, crediting the seller -- see that literal's KDoc. */
+    AUCTION_SALE_IN,
 }
 
 /**
@@ -50,11 +81,12 @@ enum class LtrLedgerEntryType {
  * [AuditEntityType]'s own role for `audit_log_entry.entity_id`. [CROWDFUNDING_PROJECT] is this
  * wave's original literal, [VOTE] the security-fix addition for [LtrLedgerEntryType.VOTE_STAKE],
  * [PEER_TRANSFER] the V0.6.3 addition for [LtrLedgerEntryType.PEER_TRANSFER_OUT]/
- * [LtrLedgerEntryType.PEER_TRANSFER_IN] (see that literal's KDoc); additively extended by later
- * waves (auction lots, ...).
+ * [LtrLedgerEntryType.PEER_TRANSFER_IN] (see that literal's KDoc), [AUCTION] the V0.6.2 addition
+ * for every `AUCTION_*` [LtrLedgerEntryType] literal (`referenceId` always points at the
+ * `auction.id`, never at `auction_bid`); additively extended by later waves.
  */
 @Serializable
-enum class LtrLedgerReferenceType { CROWDFUNDING_PROJECT, VOTE, PEER_TRANSFER }
+enum class LtrLedgerReferenceType { CROWDFUNDING_PROJECT, VOTE, PEER_TRANSFER, AUCTION }
 
 /**
  * One row of the append-only LTR ledger. [amountLtr] is signed: positive for a credit (e.g.

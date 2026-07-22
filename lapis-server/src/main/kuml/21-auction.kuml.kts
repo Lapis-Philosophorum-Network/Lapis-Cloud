@@ -1,0 +1,270 @@
+// LTR-Auktion domain (V0.6.2) -- see the concept document ("03 Bereiche/Lapis Cloud/
+// Meritokratisches System und Libertaler.md", "Auktion – Marktplatz fuer LTR-Inhaber" section,
+// vault) for the full fachlich specification this implements.
+//
+// **Englische Proxy-Bid-Auktion, Second-Price-Zuschlag, LTR-only.** A seller creates a listing
+// (title/description/startingBidLtr/optional buyNowPriceLtr/durationHours). Bidders submit a
+// PROXY maximum (`auction_bid.max_bid_ltr`) -- the server derives the current asking price and the
+// leader purely from the set of standing maxima, never storing a "current price" column (see
+// network.lapis.cloud.server.rpc.computeAuctionOutcome, a pure function with zero DB access, unit-
+// property-tested). At settlement the leader wins and pays the SECOND-highest maximum (bumped by
+// one minimum increment, capped at their own maximum) -- eBay/Vickrey-style, conceptually related
+// to but NOT reusing network.lapis.cloud.server.rpc.computeVickreySettlement (that function
+// apportions a second price across MULTIPLE simultaneous winning ballots in a basket vote; an
+// auction has exactly one winning slot, no apportionment needed).
+//
+// **THIS FILE'S auction_bid IS AN UPSERT TABLE, ONE ROW PER (auction, bidder) -- NOT an append-
+// only bid history.** `uq_auction_bid_auction_bidder` enforces at most one standing maximum per
+// bidder per auction; raising your own bid UPDATES that same row (`max_bid_ltr`/`created_at`
+// overwritten), it never inserts a second row. This is a deliberate implementation decision (not
+// explicitly fixed by the wave's concept document), chosen because it mirrors this codebase's own
+// established "one row per (parent, member), enforced by a unique index, upsert on repeat action"
+// idiom already used for `crowdfunding_reaction`/`politician_reaction` (see 17-crowdfunding.kuml.kts/
+// 20-politician.kuml.kts) -- and because computeAuctionOutcome's leader/second-price math needs
+// exactly "each bidder's current standing maximum", which this shape gives for free with no extra
+// group-by-then-take-latest step server-side. `created_at`, despite the name, is therefore this
+// row's LAST bid time (re-stamped on every raise) -- same "single timestamp column reused as last-
+// action time" idiom `crowdfunding_reaction.cast_at` already establishes.
+//
+// **Reservation model -- ONLY the current leader holds a `ltr_ledger_entry` hold.** Every bid is
+// checked for LTR coverage at bid time (a bidder can never submit a maxBidLtr they could not
+// actually back), but a bid that does not (yet) take the lead reserves nothing net -- it is
+// checked, then legitimately just sets the second price. The moment a HIGHER bid takes the lead,
+// the former leader's hold is released (`AUCTION_HOLD_RELEASE`) and the new leader's hold is
+// booked (`AUCTION_HOLD`) for their own maxBidLtr, atomically, in the same transaction. This is a
+// deliberate architecture decision (see the V0.6.2 planning discussion): real, signed
+// `ltr_ledger_entry` rows, NOT a value derived purely from live open bids -- because every OTHER
+// LTR-debiting call site (`PeerTransferService.transferLtr`, `GovernanceService.castVoteBallot`,
+// `CrowdfundingService.submitProject`) reads `LtrBalanceProvider.freeBalance` = `SUM(ltr_ledger_
+// entry.amount_ltr)` and would otherwise be BLIND to an open auction hold -- exactly the
+// V0.6.1 security gap `08-ltr-balance.kuml.kts`'s own header documents for the original
+// `castVoteBallot`/stake omission. A real ledger hold composes for free with every existing and
+// future debit path; a live-derived-only reservation would require re-auditing every debit call
+// site whenever a new one is added. See 08-ltr-balance.kuml.kts's own header for the five new,
+// additively-appended `LtrLedgerEntryType` literals this wave introduces
+// (AUCTION_LISTING_FEE/AUCTION_HOLD/AUCTION_HOLD_RELEASE/AUCTION_SALE_OUT/AUCTION_SALE_IN) and the
+// new `AUCTION` `LtrLedgerReferenceType` literal (`referenceId` always points at `auction.id`,
+// never at `auction_bid.id`).
+//
+// **Lazy-Close, no scheduler.** This codebase has no scheduler/cron-job infrastructure anywhere
+// (verified, same absence 17-crowdfunding.kuml.kts's own header documents for its Silence-is-
+// Approval window). An auction whose `ends_at` has passed is settled on the next call that
+// actually touches it (getAuction/placeBid/buyNow/settleAuction) -- `status` stays OPEN in the
+// database until that happens; `listAuctions` computes an `effectiveStatus` on read without ever
+// writing it, same "computed view over a persisted PENDING state" idiom `CrowdfundingProjectDto
+// .effectiveStatus`/`CrowdfundingWeightDecay.isAutoApproved` already use.
+//
+// **Split from ltr_ledger_entry, not a widening of it**: same "business table carries fachlich
+// detail, ltr_ledger_entry carries only the generic signed booking effect" split
+// `crowdfunding_project`/`PROJECT_STAKE` and `peer_transfer`/`PEER_TRANSFER_OUT`/`PEER_TRANSFER_IN`
+// already establish (see 17-crowdfunding.kuml.kts/18-peer-transfer.kuml.kts).
+//
+// **`auction_max_value_ltr` cap (11-organization-settings.kuml.kts, this wave's own two-column
+// addition there)**: enforced ONLY at `createListing` against `starting_bid_ltr`/
+// `buy_now_price_ltr` -- never against an individual bid. The cap governs what a seller may LIST,
+// not what a bidder may offer (a bidder legitimately exceeding a since-lowered cap on an
+// already-open auction is not retroactively invalidated). Deliberately NOT derived from the
+// Price-Oracle (19-price-oracle.kuml.kts) -- the ADMIN sets the LTR figure directly, no Oracle
+// dependency in auction core validation. See that column's own comment in
+// 11-organization-settings.kuml.kts.
+//
+// **`auctionEnabled` gate + auditable acknowledgment (`auction_compliance_acknowledgment`)**: see
+// 11-organization-settings.kuml.kts's own header for the `auction_enabled` column, and
+// network.lapis.cloud.server.rpc.AuctionComplianceDisclaimer/AuctionService KDoc for the full
+// versioned-disclaimer-hash acknowledgment mechanism this table backs. Deliberately NOT a
+// genesis-singleton lock row (unlike crowdfunding_submission_gate) -- this table is meant to
+// accumulate ONE row per enableAuction call (an append-only audit trail of who acknowledged which
+// disclaimer version and when), never locked/read-then-decided against for a business invariant.
+//
+// **No genesis-singleton gate row for auction listing itself** (unlike
+// `crowdfunding_submission_gate`) -- there is no cross-auction global invariant analogous to
+// Crowdfunding's decaying entry hurdle; every listing is independent, and the one genuinely
+// cross-request invariant this domain has (a bidder's aggregate LTR exposure) is already covered
+// by the existing per-member `LtrBalanceProvider.lockForDebit` row lock -- no dedicated singleton
+// lock row is needed.
+//
+// **FK-naming choice**: EVERY member-referencing and auction-referencing FK in this file
+// (`seller_member_id`, `winner_member_id`, `auction_id`, `bidder_member_id`,
+// `acknowledged_by_member_id`) is modelled as a plain «Column» UUID attribute with
+// «Column».fkEntity, NEVER a UML association -- consistently, even where an association's
+// class-derived default would happen to already match (e.g. `auction_bid.auction_id`). This
+// deliberately avoids the exact footgun that caused the V0.6.4 `politician_reaction
+// .rater_member_id` bug (a UML association's `role` override does NOT rename the generated
+// column -- see Commit 9171e95's post-mortem, and the CLAUDE.md "kUML-Repo-Konventionen" rule this
+// wave follows): a domain-wide "always plain «Column», never association-with-role" policy is
+// simpler to hold in mind and audit than "association except where the name would collide".
+//
+// **Scope-cuts (deliberate, documented so a reviewer does not mistake these for gaps)**:
+//  - Member-only. No Gast/guest identity model exists in this codebase yet (same V0.7-dependent
+//    cut 18-peer-transfer.kuml.kts/20-politician.kuml.kts already document) -- `seller_member_id`/
+//    `bidder_member_id`/`winner_member_id` are real, appropriately-NOT-NULL member FKs.
+//  - NO central arbitration/Kaeuferschutz/chargeback table or column anywhere in this domain --
+//    unlike `peer_transfer.initiated_by`'s privileged-correction path, an auction dispute has NO
+//    analogous mechanism, and none is planned. The concept document deliberately withholds a
+//    content-arbitration role from the platform here; reputation (LTR-balance visibility, social
+//    ratings) is the only protection. This is an intentional, permanent design decision, not a
+//    missing feature the reviewer should flag.
+//  - No automatic EUR/Fiat conversion anywhere in this domain (see `auction_max_value_ltr` above).
+//  - `auction_bid.max_bid_ltr` of any member OTHER than the caller is never exposed by any DTO --
+//    proxy-auction integrity (`listAuctions`/`getAuction` only ever expose the DERIVED
+//    `currentPriceLtr`, never a raw maximum). Enforced at the service layer, not by this model.
+import dev.kuml.profile.erm.ermMappingProfile
+import dev.kuml.uml.Multiplicity
+import dev.kuml.uml.dsl.applyProfile
+import dev.kuml.uml.dsl.stereotype
+
+classDiagram(name = "Auction") {
+    applyProfile(ermMappingProfile)
+
+    // Foundation-owned stub — id-only, mirrors every other domain's own Member stub. Resolves
+    // seller_member_id/winner_member_id/bidder_member_id/acknowledged_by_member_id's
+    // «Column».fkEntity overrides within this single-file evaluation.
+    val member = classOf(name = "Member") {
+        stereotype("Entity") { "tableName" to "member"; "kotlinObjectName" to "MemberTable" }
+        attribute(name = "id", type = "UUID") {
+            stereotype("Id")
+            stereotype("Column") { "columnName" to "id" }
+        }
+    }
+
+    // Literal order is load-bearing: AuctionSchemaDriftTest asserts ErmDataType.Enum.values in
+    // exactly this order, matching network.lapis.cloud.shared.domain.AuctionStatus.
+    val auctionStatus = enumOf(name = "AuctionStatus") {
+        literal(name = "OPEN")
+        literal(name = "SETTLED")
+        literal(name = "CLOSED_NO_SALE")
+    }
+
+    val auction = classOf(name = "Auction") {
+        stereotype("Entity") { "tableName" to "auction"; "kotlinObjectName" to "AuctionTable" }
+        stereotype("Index") { "columns" to listOf("status"); "name" to "idx_auction_status" }
+        stereotype("Index") { "columns" to listOf("seller_member_id"); "name" to "idx_auction_seller" }
+        stereotype("Index") { "columns" to listOf("ends_at"); "name" to "idx_auction_ends_at" }
+
+        attribute(name = "id", type = "UUID") {
+            stereotype("Id")
+            stereotype("Column") { "columnName" to "id" }
+        }
+        attribute(name = "title", type = "String") {
+            stereotype("Column") { "columnName" to "title"; "sqlType" to "VARCHAR(200)" }
+        }
+        attribute(name = "description", type = "String") {
+            stereotype("Column") { "columnName" to "description"; "sqlType" to "VARCHAR(4000)" }
+        }
+        attribute(name = "startingBidLtr", type = "BigDecimal") {
+            stereotype("Column") { "columnName" to "starting_bid_ltr"; "sqlType" to "DECIMAL(18,2)" }
+        }
+        // Nullable -- an auction may run to endsAt with no Sofortkauf option at all.
+        attribute(name = "buyNowPriceLtr", type = "BigDecimal") {
+            multiplicity = Multiplicity(0, 1)
+            stereotype("Column") { "columnName" to "buy_now_price_ltr"; "sqlType" to "DECIMAL(18,2)" }
+        }
+        attribute(name = "status", type = auctionStatus) {
+            defaultValue = "OPEN"
+            stereotype("Column") { "columnName" to "status"; "enumType" to "network.lapis.cloud.shared.domain.AuctionStatus" }
+        }
+        // Real FK -> member (id), NOT NULL. Plain «Column» UUID attribute -- see file header
+        // "FK-naming choice".
+        attribute(name = "sellerMemberId", type = "UUID") {
+            stereotype("Column") { "columnName" to "seller_member_id"; "fkEntity" to "Member" }
+        }
+        // Real FK -> member (id), nullable (unset until SETTLED). Plain «Column» UUID attribute --
+        // see file header "FK-naming choice" and "Scope-cut: member-only".
+        attribute(name = "winnerMemberId", type = "UUID") {
+            multiplicity = Multiplicity(0, 1)
+            stereotype("Column") { "columnName" to "winner_member_id"; "fkEntity" to "Member" }
+        }
+        // NOT NULL iff status == SETTLED -- cross-column invariant enforced only at the service
+        // layer, same class of gap 17-crowdfunding.kuml.kts's own rejection_reason comment documents.
+        attribute(name = "finalPriceLtr", type = "BigDecimal") {
+            multiplicity = Multiplicity(0, 1)
+            stereotype("Column") { "columnName" to "final_price_ltr"; "sqlType" to "DECIMAL(18,2)" }
+        }
+        // Flat spam-guard fee actually debited at createListing -- see file header. Denormalized
+        // onto this row (rather than only ever existing as the AUCTION_LISTING_FEE ledger entry)
+        // so a read of one auction never needs a second ledger lookup to show what its own listing
+        // cost the seller.
+        attribute(name = "listingFeeLtr", type = "BigDecimal") {
+            stereotype("Column") { "columnName" to "listing_fee_ltr"; "sqlType" to "DECIMAL(18,2)" }
+        }
+        attribute(name = "createdAt", type = "LocalDateTime") {
+            stereotype("Column") { "columnName" to "created_at" }
+        }
+        attribute(name = "endsAt", type = "LocalDateTime") {
+            stereotype("Column") { "columnName" to "ends_at" }
+        }
+        // Set the instant the lazy-close (or explicit buyNow/settleAuction) actually settles this
+        // row -- null while OPEN, regardless of whether endsAt has already passed (see file header
+        // "Lazy-Close").
+        attribute(name = "settledAt", type = "LocalDateTime") {
+            multiplicity = Multiplicity(0, 1)
+            stereotype("Column") { "columnName" to "settled_at" }
+        }
+    }
+
+    val auctionBid = classOf(name = "AuctionBid") {
+        stereotype("Entity") { "tableName" to "auction_bid"; "kotlinObjectName" to "AuctionBidTable" }
+        stereotype("Index") {
+            "columns" to listOf("auction_id", "bidder_member_id")
+            "unique" to true
+            "name" to "uq_auction_bid_auction_bidder"
+        }
+        stereotype("Index") { "columns" to listOf("auction_id"); "name" to "idx_auction_bid_auction" }
+        stereotype("Index") { "columns" to listOf("bidder_member_id"); "name" to "idx_auction_bid_bidder" }
+
+        attribute(name = "id", type = "UUID") {
+            stereotype("Id")
+            stereotype("Column") { "columnName" to "id" }
+        }
+        // Real FK -> auction (id), NOT NULL. Plain «Column» UUID attribute -- see file header
+        // "FK-naming choice" (deliberately plain even though the association-derived default would
+        // already match, for a single, exceptionless domain-wide rule).
+        attribute(name = "auctionId", type = "UUID") {
+            stereotype("Column") { "columnName" to "auction_id"; "fkEntity" to "Auction" }
+        }
+        // Real FK -> member (id), NOT NULL. Plain «Column» UUID attribute -- see file header.
+        attribute(name = "bidderMemberId", type = "UUID") {
+            stereotype("Column") { "columnName" to "bidder_member_id"; "fkEntity" to "Member" }
+        }
+        attribute(name = "maxBidLtr", type = "BigDecimal") {
+            stereotype("Column") { "columnName" to "max_bid_ltr"; "sqlType" to "DECIMAL(18,2)" }
+        }
+        // This bidder's LAST bid time on this auction, re-stamped on every raise -- see file
+        // header "auction_bid is an upsert table".
+        attribute(name = "createdAt", type = "LocalDateTime") {
+            stereotype("Column") { "columnName" to "created_at" }
+        }
+    }
+
+    val auctionComplianceAcknowledgment = classOf(name = "AuctionComplianceAcknowledgment") {
+        stereotype("Entity") {
+            "tableName" to "auction_compliance_acknowledgment"
+            "kotlinObjectName" to "AuctionComplianceAcknowledgmentTable"
+        }
+        stereotype("Index") { "columns" to listOf("acknowledged_at"); "name" to "idx_auction_compliance_ack_at" }
+
+        attribute(name = "id", type = "UUID") {
+            stereotype("Id")
+            stereotype("Column") { "columnName" to "id" }
+        }
+        // Real FK -> member (id), NOT NULL -- always an ADMIN at the time of acknowledgment (role
+        // is not itself persisted here, only the actor's identity). Plain «Column» UUID attribute
+        // -- see file header "FK-naming choice".
+        attribute(name = "acknowledgedByMemberId", type = "UUID") {
+            stereotype("Column") { "columnName" to "acknowledged_by_member_id"; "fkEntity" to "Member" }
+        }
+        attribute(name = "acknowledgedAt", type = "LocalDateTime") {
+            stereotype("Column") { "columnName" to "acknowledged_at" }
+        }
+        // Echoes network.lapis.cloud.server.rpc.AuctionComplianceDisclaimer.VERSION at the moment
+        // of acknowledgment -- see that object's KDoc.
+        attribute(name = "disclaimerVersion", type = "String") {
+            stereotype("Column") { "columnName" to "disclaimer_version"; "sqlType" to "VARCHAR(50)" }
+        }
+        // Echoes AuctionComplianceDisclaimer.SHA256 at the moment of acknowledgment -- a SHA-256
+        // digest is always exactly 64 lowercase hex characters.
+        attribute(name = "disclaimerSha256", type = "String") {
+            stereotype("Column") { "columnName" to "disclaimer_sha256"; "sqlType" to "VARCHAR(64)" }
+        }
+    }
+}

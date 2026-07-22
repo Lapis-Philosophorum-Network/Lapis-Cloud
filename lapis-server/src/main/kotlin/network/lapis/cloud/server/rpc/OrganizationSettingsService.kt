@@ -58,6 +58,10 @@ class OrganizationSettingsService(
                 it[isPoliticalParty] = input.isPoliticalParty
                 it[postalMailEnabled] = input.postalMailEnabled
                 it[politicianRankingEnabled] = input.politicianRankingEnabled
+                // auctionEnabled/auctionMaxValueLtr are DELIBERATELY absent from this write-set --
+                // see OrganizationSettingsDto.auctionEnabled KDoc. The generic update path must
+                // never be able to flip the auction gate; only AuctionService.enableAuction
+                // (disclaimer-acknowledgment required)/disableAuction/setAuctionMaxValueLtr may.
             }
             loadOrganizationSettings()
         }
@@ -93,4 +97,6 @@ fun ResultRow.toOrganizationSettingsDto(): OrganizationSettingsDto =
         isPoliticalParty = this[OrganizationSettingsTable.isPoliticalParty],
         postalMailEnabled = this[OrganizationSettingsTable.postalMailEnabled],
         politicianRankingEnabled = this[OrganizationSettingsTable.politicianRankingEnabled],
+        auctionEnabled = this[OrganizationSettingsTable.auctionEnabled],
+        auctionMaxValueLtr = this[OrganizationSettingsTable.auctionMaxValueLtr],
     )

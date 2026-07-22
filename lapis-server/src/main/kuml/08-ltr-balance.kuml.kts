@@ -48,6 +48,18 @@
 // referenceType/referenceId" split `CROWDFUNDING_PROJECT`/`PROJECT_STAKE` already established
 // (see 17-crowdfunding.kuml.kts).
 //
+// V0.6.2 (LTR-Auktion) additively appends FIVE more literals --
+// `AUCTION_LISTING_FEE`/`AUCTION_HOLD`/`AUCTION_HOLD_RELEASE`/`AUCTION_SALE_OUT`/`AUCTION_SALE_IN`
+// -- and a new `AUCTION` `ltrLedgerReferenceType` literal below, same "additive-only, order is
+// load-bearing" discipline. New literals are deliberately named to stay <= 20 characters
+// (`AUCTION_HOLD_RELEASE` is the longest, at 20) so `entry_type`'s existing `VARCHAR(21)` width
+// (set by the pre-existing `PROJECT_STAKE_RELEASE`, 21 chars) does not need to widen -- avoid
+// `AUCTION_SETTLEMENT_OUT`-style longer names that would force a churn of both the SQL column
+// width and `LtrLedgerEntryTable.entryType`'s `enumerationByName(..., 21)` call. See
+// 21-auction.kuml.kts's own header for the full reservation-hold rationale (real ledger holds so
+// every OTHER debit path stays automatically aware of an open auction reservation, closing
+// exactly the class of gap the V0.6.1 `castVoteBallot` security fix above had to retrofit).
+//
 // **`referenceType`/`referenceId` are a polymorphic, DB-FK-less opaque pointer** -- directly
 // mirrors `audit_log_entry.entity_type`/`entity_id` (14-audit-log.kuml.kts): no single FK
 // constraint could express "targets crowdfunding_project today, possibly an auction lot or a
@@ -104,16 +116,23 @@ classDiagram(name = "LtrLedger") {
         literal(name = "VOTE_STAKE")
         literal(name = "PEER_TRANSFER_OUT")
         literal(name = "PEER_TRANSFER_IN")
+        literal(name = "AUCTION_LISTING_FEE")
+        literal(name = "AUCTION_HOLD")
+        literal(name = "AUCTION_HOLD_RELEASE")
+        literal(name = "AUCTION_SALE_OUT")
+        literal(name = "AUCTION_SALE_IN")
     }
 
     // Literal order is load-bearing, same reason as above. `CROWDFUNDING_PROJECT` is this wave's
     // original literal, `VOTE` the security-fix addition for `VOTE_STAKE` above, `PEER_TRANSFER`
-    // the V0.6.3 addition for `PEER_TRANSFER_OUT`/`PEER_TRANSFER_IN` -- additively extended by
-    // later waves (auction lots, ...) exactly like AuditEntityType.
+    // the V0.6.3 addition for `PEER_TRANSFER_OUT`/`PEER_TRANSFER_IN`, `AUCTION` the V0.6.2
+    // addition for every `AUCTION_*` entry type above -- additively extended by later waves
+    // exactly like AuditEntityType.
     val ltrLedgerReferenceType = enumOf(name = "LtrLedgerReferenceType") {
         literal(name = "CROWDFUNDING_PROJECT")
         literal(name = "VOTE")
         literal(name = "PEER_TRANSFER")
+        literal(name = "AUCTION")
     }
 
     val ltrLedgerEntry = classOf(name = "LtrLedgerEntry") {
