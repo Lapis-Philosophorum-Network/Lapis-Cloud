@@ -64,7 +64,7 @@ this repository. This README describes only the technical scope.
 
 == Status
 
-As of *V0.5.2*, five major waves are complete and released (see `CHANGELOG.md` for full detail):
+As of *V0.6.5*, six major waves are complete and released (see `CHANGELOG.md` for full detail):
 
 * **V0.1 — Project foundation & standard membership management**: Gradle multi-module structure,
   Ktor server, KVision client, Kilua RPC wiring, CI/CD, member master data, join/leave workflow,
@@ -82,15 +82,22 @@ As of *V0.5.2*, five major waves are complete and released (see `CHANGELOG.md` f
   email.
 * **V0.5 — Compliance bundle**: a §25 PartG donation-acceptance check for political parties, and
   §20 GwG Transparenzregister board-change reminders with a beneficial-owner data completeness
-  report.
+  report, plus a hash-chained GoBD audit log and a full-organization backup/restore/export and
+  DSGVO-Vollausbau (AVV, TOMs, DSFA, Datenpannenmeldung).
+* **V0.6 — LTR economy (in progress)**: a real LTR ledger and Internes Crowdfunding (V0.6.1),
+  direct peer-to-peer LTR transfer (V0.6.3), and a Price-Oracle for the anchor-asset peg with a
+  load-bearing donation → LTR conversion boundary (V0.6.5). V0.6.2 (Auction) remains blocked on
+  legal review; V0.6.4 (Politician Profiles/Ranking) remains parked on a separate, unmerged branch
+  pending a future guest-identity model — neither is released.
 
 Every wave went through this project's mandatory plan → implement → independent review →
 independent security audit pipeline before merging. Known limitations (Letterxpress wire format
-not verified against live docs, no Sammelbestätigung aggregation, no full GoBD tamper-evidence/TSE,
-federation not yet built) are tracked in `CHANGELOG.md`. See
-link:docs/architecture/domain-model.adoc[domain model documentation] (currently covers the V0.1.5
-Contributions/Documents/Communication slice — not yet updated for V0.2+) and `CLAUDE.md` for
-further detail.
+and V0.6.5's oracle wire formats not verified against live docs, no Sammelbestätigung aggregation,
+no full GoBD tamper-evidence/TSE, no persistent oracle halt-queue, federation not yet built) are
+tracked in `CHANGELOG.md`. See link:docs/architecture/domain-model.adoc[domain model documentation]
+(covers the V0.1.5 Contributions/Documents/Communication slice, the V0.3 accounting slices, the
+V0.4.1 mail-merge slice, and the V0.6.5 Price-Oracle slice — not yet updated for every wave in
+between) and `CLAUDE.md` for further detail.
 
 == Documentation Convention
 

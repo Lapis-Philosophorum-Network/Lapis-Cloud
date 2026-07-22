@@ -36,6 +36,7 @@ object PersonalDataRegistry {
             DsgvoCompliancePersonalData,
             CrowdfundingPersonalData,
             PeerTransferPersonalData,
+            PriceOraclePersonalData,
         )
 
     /**
@@ -70,6 +71,8 @@ object PersonalDataRegistry {
                 "Deliberately NOT covered by the erasure walk: references the subject only by UUID, " +
                 "accountability (Art. 5(2) GDPR) is its own legal basis for retention. See " +
                 "dsgvo.adoc \"Audit log data protection\".",
+            "price_oracle_config" to
+                "Pure single-row oracle policy (anchor/peg/TTL/thresholds), no member FK, no personal data.",
         )
 
     init {

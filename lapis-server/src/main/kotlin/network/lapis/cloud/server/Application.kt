@@ -17,6 +17,8 @@ import io.ktor.server.routing.get
 import io.ktor.server.routing.routing
 import network.lapis.cloud.server.db.DatabaseConfig
 import network.lapis.cloud.server.db.DevSeedData
+import network.lapis.cloud.server.economy.oracle.PriceOracleOrchestrator
+import network.lapis.cloud.server.economy.oracle.defaultBitcoinOracleSources
 import network.lapis.cloud.server.postal.LetterxpressPostalMailProvider
 import network.lapis.cloud.server.routes.registerBackupRoutes
 import network.lapis.cloud.server.routes.registerDocumentRoutes
@@ -41,6 +43,7 @@ import network.lapis.cloud.server.rpc.OrganizationSettingsService
 import network.lapis.cloud.server.rpc.PeerTransferService
 import network.lapis.cloud.server.rpc.PingService
 import network.lapis.cloud.server.rpc.PostalMailService
+import network.lapis.cloud.server.rpc.PriceOracleService
 import network.lapis.cloud.server.rpc.SystemicConsensusService
 import network.lapis.cloud.server.security.ForbiddenException
 import network.lapis.cloud.server.security.UnauthenticatedException
@@ -64,6 +67,7 @@ import network.lapis.cloud.shared.rpc.IOrganizationSettingsService
 import network.lapis.cloud.shared.rpc.IPeerTransferService
 import network.lapis.cloud.shared.rpc.IPingService
 import network.lapis.cloud.shared.rpc.IPostalMailService
+import network.lapis.cloud.shared.rpc.IPriceOracleService
 import network.lapis.cloud.shared.rpc.ISystemicConsensusService
 import java.io.File
 
@@ -89,6 +93,11 @@ fun Application.module() {
     // here (not per-request) with its own env-var-derived defaults, same lifecycle as
     // documentStorageRoot.
     val postalMailProvider = LetterxpressPostalMailProvider()
+
+    // V0.6.5 Price-Oracle fuer die Anker-Bindung -- constructed once here (owns the pooled HTTP
+    // client AND the in-memory quote cache, see PriceOracleOrchestrator KDoc "Singleton
+    // lifecycle"), same lifecycle as postalMailProvider/documentStorageRoot above.
+    val priceOracleOrchestrator = PriceOracleOrchestrator(sources = defaultBitcoinOracleSources())
 
     install(CallLogging)
     install(Compression)
@@ -125,6 +134,7 @@ fun Application.module() {
         registerService(ILtrLedgerService::class) { call -> LtrLedgerService(call) }
         registerService(ICrowdfundingService::class) { call -> CrowdfundingService(call) }
         registerService(IPeerTransferService::class) { call -> PeerTransferService(call) }
+        registerService(IPriceOracleService::class) { call -> PriceOracleService(call, priceOracleOrchestrator) }
     }
 
     routing {

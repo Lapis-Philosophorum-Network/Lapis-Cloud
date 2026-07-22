@@ -826,3 +826,86 @@ Explicitly out of scope for V0.4.1 (this is the first of two V0.4 waves): any Le
 postal-dispatch API integration -- V0.4.2, a separate later wave, consumes these PDF bytes and
 dispatches them; this wave only produces and exposes them over HTTP. No bulk/batch mail-merge UI, no
 KVision client screens, no donation campaign/pledge management, no automated tax-authority reporting.
+
+== Price-Oracle fuer die Anker-Bindung (V0.6.5)
+
+The first real money-to-LTR conversion boundary this codebase has ever had. Before this wave,
+`ILtrLedgerService.mintLtr` (V0.6.1) only ever took an already-decided, explicit LTR amount --
+nobody computed an LTR amount from a real-world donation via an exchange rate. This wave adds
+exactly that boundary, governed by a single-row, ADMIN-tunable `PriceOracleConfig`
+(`lapis-server/src/main/kuml/19-price-oracle.kuml.kts`, verified by its own
+`PriceOracleSchemaDriftTest`) and a permanent per-conversion provenance record,
+`PriceOracleConversion`.
+
+[kuml, domain-model-price-oracle, svg]
+----
+classDiagram(name = "Lapis Cloud Domain Model — Price Oracle (V0.6.5)") {
+
+    val priceOracleConfig = classOf(name = "PriceOracleConfig") {
+        attribute(name = "id", type = "UUID")
+        attribute(name = "anchorAsset", type = "AnchorAsset")
+        attribute(name = "donationCurrency", type = "String")
+        attribute(name = "anchorUnitsPerLtr", type = "BigDecimal")
+        attribute(name = "cacheTtlSeconds", type = "Int")
+        attribute(name = "minQuorum", type = "Int")
+        attribute(name = "outlierThresholdBps", type = "Int")
+        attribute(name = "maxSpreadBps", type = "Int")
+        attribute(name = "updatedAt", type = "LocalDateTime")
+    }
+
+    val priceOracleConversion = classOf(name = "PriceOracleConversion") {
+        attribute(name = "id", type = "UUID")
+        attribute(name = "memberId", type = "UUID")
+        attribute(name = "donationAmount", type = "BigDecimal")
+        attribute(name = "donationCurrency", type = "String")
+        attribute(name = "anchorAsset", type = "AnchorAsset")
+        attribute(name = "anchorPrice", type = "BigDecimal")
+        attribute(name = "anchorUnitsPerLtr", type = "BigDecimal")
+        attribute(name = "ltrMinted", type = "BigDecimal")
+        attribute(name = "priceStatus", type = "PriceStatus")
+        attribute(name = "sourceCount", type = "Int")
+        attribute(name = "sourcesUsed", type = "String")
+        attribute(name = "priceTimestamp", type = "LocalDateTime")
+        attribute(name = "ltrLedgerEntryId", type = "UUID")
+        attribute(name = "createdById", type = "UUID")
+        attribute(name = "createdAt", type = "LocalDateTime")
+    }
+
+    comment(
+        text = "Single-row, ADMIN-tunable oracle policy -- exactly one row, seeded once with sane " +
+            "BTC/EUR defaults. No FK to Member at all: pure scalar policy (anchor/currency/peg/TTL/" +
+            "quorum/thresholds). Exposes NO url/host/source field -- price sources stay a compile-time " +
+            "hostname allowlist an ADMIN cannot retarget.",
+        firstAnchor = priceOracleConfig,
+    )
+    comment(
+        text = "Permanent per-conversion provenance record -- one row per donation -> LTR mint, " +
+            "snapshotting the price/sources/peg/status used. ltrLedgerEntryId points at the MINT " +
+            "ltr_ledger_entry row this caused (deliberately NOT a FK, same polymorphic-pointer idiom " +
+            "ltr_ledger_entry.reference_id itself uses). Two Member FKs: memberId (the LTR recipient) " +
+            "and createdById (the acting TREASURER/BOARD/ADMIN, nullable).",
+        firstAnchor = priceOracleConversion,
+    )
+}
+----
+
+**Median/outlier-rejection/cache/halt algorithm**
+(`network.lapis.cloud.server.economy.oracle.PriceOracleOrchestrator`, a singleton constructed once
+by `Application.module`): query every configured `PriceOracleSource` for the active anchor in
+parallel; if fewer than `minQuorum` responded, fall back to the cache. Otherwise compute a
+provisional median, drop any price whose deviation exceeds `outlierThresholdBps`, and if the
+survivors either drop below `minQuorum` or their own spread exceeds `maxSpreadBps`, ALSO fall back
+to the cache. A cache hit within `cacheTtlSeconds` returns status `CACHED`; otherwise the call
+**halts** -- `convertDonationToLtr` rejects the request outright rather than minting from a stale
+or unreliable price (see `network.lapis.cloud.shared.rpc.IPriceOracleService` KDoc). Three real,
+independent, no-API-key BTC sources are wired (Coinbase/Kraken/Bitstamp,
+`network.lapis.cloud.server.economy.oracle.defaultBitcoinOracleSources`) behind a hardened,
+allowlisted, timeout-bounded, response-size-capped HTTP client
+(`network.lapis.cloud.server.economy.oracle.oracleHttpClient`).
+
+Explicitly out of scope for V0.6.5: a persistent halt-queue with deferred/retroactive re-pricing
+(the concept document's own design for this -- `PriceStatus.DEFERRED` is defined but reserved,
+unused this wave); any anchor besides Bitcoin (`AnchorAsset.GOLD_XAU`/`FIAT` are unimplemented
+literals -- no free, no-API-key, multi-source feed set exists for either); a payment-gateway/PSP
+webhook intake (`convertDonationToLtr` is operator-triggered); and a shared/federated quote cache
+(in-memory, per-server only -- a V0.7 federation concern).

@@ -42,7 +42,7 @@ class DomainModelMergerTest :
                 requireNotNull(KumlModelLoader.kumlSourceDir.listFiles { f -> f.name.endsWith(".kuml.kts") }) {
                     "kUML source dir not found or not a directory: ${KumlModelLoader.kumlSourceDir.absolutePath}"
                 }.sortedBy { it.name }
-            scriptFiles shouldHaveSize 19
+            scriptFiles shouldHaveSize 20
 
             val diagrams = scriptFiles.map { KumlModelLoader.loadUmlDiagram(it) }
 
@@ -112,7 +112,13 @@ class DomainModelMergerTest :
             // contributes +2 «Entity» declarations (the stub + the one real table) and +1 drop (the
             // stub merges into the already-existing member entity) versus the V0.6.1 baseline
             // above (60 -> 61).
-            val distinctTableNames = 61
+            // 19-price-oracle.kuml.kts (V0.6.5 Price-Oracle fuer die Anker-Bindung) adds exactly two
+            // more real tables (price_oracle_config, price_oracle_conversion), WITH its own
+            // cross-domain Member stub (price_oracle_conversion.member_id/created_by resolve
+            // through it) -- so it contributes +3 «Entity» declarations (the stub + 2 real tables)
+            // and +1 drop (the stub merges into the already-existing member entity) versus the
+            // V0.6.3 baseline above (61 -> 63).
+            val distinctTableNames = 63
 
             val result =
                 UmlToExposedViaErmScriptTransformer().transform(
@@ -196,6 +202,8 @@ class DomainModelMergerTest :
                     "CrowdfundingDistributionTable.kt",
                     "CrowdfundingSubmissionGateTable.kt",
                     "PeerTransferTable.kt",
+                    "PriceOracleConfigTable.kt",
+                    "PriceOracleConversionTable.kt",
                 )
         }
 

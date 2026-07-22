@@ -4,6 +4,29 @@ All notable changes to this project are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.6.5] — 2026-07-22
+
+### Added
+
+**Price-Oracle fuer die Anker-Bindung** — the first real money-to-LTR conversion boundary this codebase has ever had. Three independent, free, no-API-key public exchange feeds (Coinbase, Kraken, Bitstamp) are queried in parallel for the current BTC/donation-currency price; a provisional median is computed, any source deviating beyond a configurable outlier threshold (basis points) is dropped, and if the surviving sources' own spread is still too wide the quote is rejected rather than trusted. A quote is `LIVE` when every configured source agreed, `DEGRADED` when a reduced-but-sufficient quorum survived, or `CACHED` when a live quorum could not be reached but a still-fresh cached price (within a configurable TTL) was used instead. All of this is governed by a single-row, ADMIN-tunable `price_oracle_config` (anchor asset, donation currency, the peg itself, cache TTL, quorum, outlier/spread thresholds) — seeded with sane BTC/EUR defaults on first migration, retunable via `updateOracleConfig`.
+
+**Load-bearing `convertDonationToLtr`** — a TREASURER/BOARD/ADMIN-gated RPC that books an already-received donation: it fetches a current oracle quote for the active anchor and, if (and only if) it is not halted, MINTs the computed LTR amount into the recipient's ledger (a real `MINT` `ltr_ledger_entry` row) and writes a permanent `price_oracle_conversion` provenance row in the same transaction, capturing the donation amount/currency, the anchor and median price actually used, the peg snapshot, the resulting LTR amount, the quote's status, how many and which sources contributed, and the price's own timestamp — the full audit trail the concept's "Trust und Auditierbarkeit" section calls for. A diagnostic `previewCurrentPrice` lets an operator check oracle health without minting anything.
+
+### Security
+
+Every oracle source resolves against a compile-time-fixed hostname allowlist (`api.coinbase.com`/`api.kraken.com`/`www.bitstamp.net`) — `price_oracle_config` carries no URL/host/source field at all, so an ADMIN can retune policy but can never point a source at an arbitrary host. Every outbound request is HTTPS-only (enforced by the same allowlist guard), never follows redirects, carries bounded connect/request/socket timeouts, and caps the response body it will ever read into memory at 64 KiB, discarding anything larger unparsed. A source failure (network error, timeout, non-2xx status, unparseable body, oversized body, a non-allowlisted URL) is caught inside the source and mapped to `null` — one misbehaving source can never abort the others' fan-out or crash the RPC call — and only a sanitized message (source id plus exception class name) is ever logged, never a response body or raw exception message.
+
+### Known limitations (tracked for later versions)
+
+- No persistent halt-queue: the concept document's deferred/retroactive-vs-forward re-pricing mechanism is not built. HALT instead rejects `convertDonationToLtr` outright (mints nothing) — `PriceStatus.DEFERRED` is defined but reserved-and-unused, so a later wave can add the queue without an enum-literal-order-breaking re-model.
+- Bitcoin-only anchor: `AnchorAsset.GOLD_XAU`/`FIAT` are defined enum literals with no wired price sources. A robust, free, no-API-key, multi-source feed set for spot gold needs paid API keys this codebase has no secret-management story for yet, and fiat cross-rates have essentially one authoritative free source (ECB reference rates) — a degenerate single-source case that cannot satisfy the quorum design leans on. `updateOracleConfig` rejects any non-Bitcoin anchor with a clear "not yet implemented" error rather than silently accepting a config with no sources behind it.
+- The quote cache is in-memory and per-server (per JVM), not shared/federated — a multi-server deployment does not share a warm cache. Tracked for V0.7 (federation).
+- `convertDonationToLtr` is an operator-triggered booking of an already-received donation, not a payment-gateway/PSP-webhook intake — no automatic donation-detection integration exists or is planned this wave.
+- The seeded `anchor_units_per_ltr` peg (1 LTR = 0.000001 BTC) is a placeholder; an ADMIN must set the real peg via `updateOracleConfig` before any conversion should be trusted in production.
+- Source governance (a board/meritocratic choice of which price sources to trust, per the concept's own open point) is deferred — the source set is installation-fixed for now, changeable only by shipping new code.
+- This wave's build could not be verified with a real `./gradlew clean check` run in the authoring sandbox: the pinned Gradle 9.6.1 wrapper distribution download redirects to a host outside this session's GitHub repo scope and is denied by the egress proxy, and the only locally available Gradle (8.14.3) cannot configure this build's Kilua/KVision plugins under any available JDK — a known, previously reproduced environment gap, not specific to this wave. Correctness was instead verified by careful manual read-through (types, imports, brace/paren balance, Exposed query correctness, import completeness, kUML-model-to-generated-table consistency). A real `./gradlew clean check` run in an actual CI/dev environment is still required before this wave is considered fully done.
+- V0.6.4 (Politician Profiles/Ranking) remains parked on a separate, unmerged local branch pending a future guest-identity model, and V0.6.2 (Auction) remains blocked on legal review — neither is part of this release.
+
 ## [0.5.1] — 2026-07-21
 
 ### Added

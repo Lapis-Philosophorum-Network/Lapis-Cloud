@@ -780,6 +780,45 @@ CREATE TABLE peer_transfer (
     CHECK (characterization IN ('SCHENKUNG', 'HONORAR', 'PRIVATVERKAUF', 'SONSTIGES'))
 );
 
+-- V0.6.5 Price-Oracle fuer die Anker-Bindung (see 19-price-oracle.kuml.kts file header for the
+-- full fachlich model). price_oracle_config is a single-row, ADMIN-tunable policy row, seeded
+-- below, mirroring organization_settings/crowdfunding_submission_gate's own pattern -- no FK to
+-- member. price_oracle_conversion is the permanent per-conversion provenance record; ltr_ledger_
+-- entry_id is deliberately a plain, non-FK column (same polymorphic-pointer idiom
+-- ltr_ledger_entry.reference_id already uses).
+CREATE TABLE price_oracle_config (
+    id UUID NOT NULL PRIMARY KEY,
+    anchor_asset VARCHAR(11) NOT NULL,
+    donation_currency VARCHAR(3) NOT NULL,
+    anchor_units_per_ltr DECIMAL(38, 18) NOT NULL,
+    cache_ttl_seconds INT NOT NULL,
+    min_quorum INT NOT NULL,
+    outlier_threshold_bps INT NOT NULL,
+    max_spread_bps INT NOT NULL,
+    updated_at TIMESTAMP NOT NULL,
+    CHECK (anchor_asset IN ('BITCOIN_BTC', 'GOLD_XAU', 'FIAT'))
+);
+
+CREATE TABLE price_oracle_conversion (
+    id UUID NOT NULL PRIMARY KEY,
+    donation_amount DECIMAL(18, 2) NOT NULL,
+    donation_currency VARCHAR(3) NOT NULL,
+    anchor_asset VARCHAR(11) NOT NULL,
+    anchor_price DECIMAL(38, 18) NOT NULL,
+    anchor_units_per_ltr DECIMAL(38, 18) NOT NULL,
+    ltr_minted DECIMAL(18, 2) NOT NULL,
+    price_status VARCHAR(8) NOT NULL,
+    source_count INT NOT NULL,
+    sources_used VARCHAR(500) NOT NULL,
+    price_timestamp TIMESTAMP NOT NULL,
+    ltr_ledger_entry_id UUID NOT NULL,
+    created_by UUID NULL,
+    created_at TIMESTAMP NOT NULL,
+    member_id UUID NOT NULL,
+    CHECK (anchor_asset IN ('BITCOIN_BTC', 'GOLD_XAU', 'FIAT')),
+    CHECK (price_status IN ('LIVE', 'DEGRADED', 'CACHED', 'DEFERRED'))
+);
+
 -- Foreign Keys
 
 ALTER TABLE member ADD CONSTRAINT fk_member_membership_tier_id FOREIGN KEY (membership_tier_id) REFERENCES membership_tier(id);
@@ -901,6 +940,8 @@ ALTER TABLE crowdfunding_distribution ADD CONSTRAINT fk_crowdfunding_distributio
 ALTER TABLE peer_transfer ADD CONSTRAINT fk_peer_transfer_sender_member_id FOREIGN KEY (sender_member_id) REFERENCES member(id);
 ALTER TABLE peer_transfer ADD CONSTRAINT fk_peer_transfer_recipient_member_id FOREIGN KEY (recipient_member_id) REFERENCES member(id);
 ALTER TABLE peer_transfer ADD CONSTRAINT fk_peer_transfer_initiated_by FOREIGN KEY (initiated_by) REFERENCES member(id);
+ALTER TABLE price_oracle_conversion ADD CONSTRAINT fk_price_oracle_conversion_member_id FOREIGN KEY (member_id) REFERENCES member(id);
+ALTER TABLE price_oracle_conversion ADD CONSTRAINT fk_price_oracle_conversion_created_by FOREIGN KEY (created_by) REFERENCES member(id);
 
 -- Indexes
 
@@ -998,6 +1039,8 @@ CREATE UNIQUE INDEX uq_crowdfunding_distribution_project_period ON crowdfunding_
 CREATE INDEX idx_peer_transfer_sender ON peer_transfer (sender_member_id);
 CREATE INDEX idx_peer_transfer_recipient ON peer_transfer (recipient_member_id);
 
+CREATE INDEX idx_price_oracle_conversion_member ON price_oracle_conversion (member_id);
+
 -- V0.4.1 Serienbrief/PDF engine: exactly one organization_settings row must exist from first
 -- migration onward, in every environment (not just LAPIS_SEED_DEMO_DATA=true demo deployments) --
 -- unlike every other row in this codebase, letterhead data existing at all is a real capability
@@ -1024,4 +1067,19 @@ VALUES ('00000000-0000-0000-0000-0000000000f3', 0, NULL);
 -- target is not mistaken for "already holds data".
 INSERT INTO crowdfunding_submission_gate (id)
 VALUES ('00000000-0000-0000-0000-0000000000f4');
+
+-- V0.6.5 Price-Oracle fuer die Anker-Bindung: exactly one price_oracle_config row must exist from
+-- first migration onward -- ADMIN can (and should) retune every field via updateOracleConfig
+-- afterward. Fixed sentinel id, next unused '...-0000-0000000000fN' slot after
+-- crowdfunding_submission_gate's own '...-f4'. Seeded defaults: BITCOIN_BTC anchor, EUR donation
+-- currency, a placeholder peg (1 LTR = 0.000001 BTC), 300s cache TTL, quorum 2 (of 3 configured
+-- BTC sources), 3% (300bps) outlier-rejection threshold, 10% (1000bps) max survivor spread before
+-- halting. See 19-price-oracle.kuml.kts file header. Also registered in
+-- OrganizationRestoreService.SEEDED_SINGLETON_ROWS so a fresh restore target is not mistaken for
+-- "already holds data".
+INSERT INTO price_oracle_config
+    (id, anchor_asset, donation_currency, anchor_units_per_ltr,
+     cache_ttl_seconds, min_quorum, outlier_threshold_bps, max_spread_bps, updated_at)
+VALUES ('00000000-0000-0000-0000-0000000000f5', 'BITCOIN_BTC', 'EUR', 0.000001,
+    300, 2, 300, 1000, CURRENT_TIMESTAMP);
 
