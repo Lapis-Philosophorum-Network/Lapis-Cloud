@@ -3,6 +3,7 @@ package network.lapis.cloud.server.economy
 import network.lapis.cloud.server.db.generated.LtrLedgerEntryTable
 import network.lapis.cloud.server.db.generated.MemberTable
 import org.jetbrains.exposed.v1.core.eq
+import org.jetbrains.exposed.v1.core.inList
 import org.jetbrains.exposed.v1.jdbc.selectAll
 import java.math.BigDecimal
 import kotlin.uuid.Uuid
@@ -23,6 +24,22 @@ import kotlin.uuid.Uuid
 interface LtrBalanceProvider {
     /** The member's current free LTR balance, or [BigDecimal.ZERO] if the member has none. */
     fun freeBalance(memberId: Uuid): BigDecimal
+
+    /**
+     * Batched free-balance read for N members in one query -- introduced for V0.6.4
+     * [network.lapis.cloud.server.rpc.PoliticianTrustWeightCalculator], which needs every distinct
+     * rater's balance to compute the shared LTR-weight pool. Computing that pool via N sequential
+     * [freeBalance] calls is an N+1 query pattern the single-member debit call sites never had to
+     * care about (they only ever read one member's balance per RPC call). Default implementation
+     * simply folds [freeBalance] over [memberIds] one at a time -- correct, but re-introduces the
+     * N+1 pattern this method exists to avoid -- so it stays additive/non-breaking for any other
+     * [LtrBalanceProvider] implementer, while [LedgerBackedLtrBalanceProvider] overrides it with a
+     * real single `GROUP BY member_id` query. A member absent from [memberIds] is not present in
+     * the result at all; a member present but with no ledger rows maps to [BigDecimal.ZERO].
+     * Read-only -- does not lock any row, unlike [lockForDebit].
+     */
+    fun freeBalances(memberIds: Collection<Uuid>): Map<Uuid, BigDecimal> =
+        memberIds.associateWith { freeBalance(it) }
 
     /**
      * Takes a row-level lock (`SELECT ... FOR UPDATE`) serializing concurrent debit-causing
@@ -58,6 +75,28 @@ class LedgerBackedLtrBalanceProvider : LtrBalanceProvider {
             .selectAll()
             .where { LtrLedgerEntryTable.memberId eq memberId }
             .fold(BigDecimal.ZERO.setScale(2)) { acc, row -> acc + row[LtrLedgerEntryTable.amountLtr] }
+
+    /**
+     * One query for every requested member's ledger rows (`memberId inList memberIds`), summed in
+     * Kotlin per member -- NOT one query per member. See [LtrBalanceProvider.freeBalances] KDoc.
+     * A member with no ledger rows at all is simply absent from the returned map -- callers that
+     * need a zero default for such a member must apply it themselves (mirrors
+     * [network.lapis.cloud.server.rpc.CrowdfundingService.reactionCountsByProject]'s own
+     * "absent means zero, caller defaults it" convention).
+     */
+    override fun freeBalances(memberIds: Collection<Uuid>): Map<Uuid, BigDecimal> {
+        if (memberIds.isEmpty()) return emptyMap()
+        val rows =
+            LtrLedgerEntryTable
+                .selectAll()
+                .where { LtrLedgerEntryTable.memberId inList memberIds }
+                .toList()
+        return rows
+            .groupBy { it[LtrLedgerEntryTable.memberId] }
+            .mapValues { (_, entries) ->
+                entries.fold(BigDecimal.ZERO.setScale(2)) { acc, row -> acc + row[LtrLedgerEntryTable.amountLtr] }
+            }
+    }
 
     override fun lockForDebit(memberId: Uuid) {
         MemberTable

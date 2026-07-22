@@ -42,6 +42,7 @@ import network.lapis.cloud.server.rpc.MemberService
 import network.lapis.cloud.server.rpc.OrganizationSettingsService
 import network.lapis.cloud.server.rpc.PeerTransferService
 import network.lapis.cloud.server.rpc.PingService
+import network.lapis.cloud.server.rpc.PoliticianService
 import network.lapis.cloud.server.rpc.PostalMailService
 import network.lapis.cloud.server.rpc.PriceOracleService
 import network.lapis.cloud.server.rpc.SystemicConsensusService
@@ -66,6 +67,7 @@ import network.lapis.cloud.shared.rpc.IMemberService
 import network.lapis.cloud.shared.rpc.IOrganizationSettingsService
 import network.lapis.cloud.shared.rpc.IPeerTransferService
 import network.lapis.cloud.shared.rpc.IPingService
+import network.lapis.cloud.shared.rpc.IPoliticianService
 import network.lapis.cloud.shared.rpc.IPostalMailService
 import network.lapis.cloud.shared.rpc.IPriceOracleService
 import network.lapis.cloud.shared.rpc.ISystemicConsensusService
@@ -135,6 +137,7 @@ fun Application.module() {
         registerService(ICrowdfundingService::class) { call -> CrowdfundingService(call) }
         registerService(IPeerTransferService::class) { call -> PeerTransferService(call) }
         registerService(IPriceOracleService::class) { call -> PriceOracleService(call, priceOracleOrchestrator) }
+        registerService(IPoliticianService::class) { call -> PoliticianService(call) }
     }
 
     routing {

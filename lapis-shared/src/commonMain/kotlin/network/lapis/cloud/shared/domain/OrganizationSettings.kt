@@ -34,6 +34,12 @@ import kotlinx.serialization.Serializable
  * legal precondition this codebase cannot verify or enforce. ADMIN-only to set (same tier as every
  * other field, via [network.lapis.cloud.shared.rpc.IOrganizationSettingsService.updateOrganizationSettings]).
  * See `network.lapis.cloud.server.rpc.PostalMailService` KDoc for the runtime gate this backs.
+ *
+ * [politicianRankingEnabled] (V0.6.4 Politiker-Profile und Politiker-Ranking) is the explicit
+ * opt-in gate for the whole feature -- **defaults to `false`/off**, same "independent flag, not
+ * folded into [isPoliticalParty]" reasoning [postalMailEnabled] already established. ADMIN-only to
+ * set, same tier as every other field. See `network.lapis.cloud.server.rpc.PoliticianService`
+ * KDoc for the runtime gate this backs.
  */
 @Serializable
 data class OrganizationSettingsDto(
@@ -49,6 +55,7 @@ data class OrganizationSettingsDto(
     val taxExemptionDate: LocalDate?,
     val isPoliticalParty: Boolean = false,
     val postalMailEnabled: Boolean = false,
+    val politicianRankingEnabled: Boolean = false,
 )
 
 /** Replaces every field of the single [OrganizationSettingsDto] row wholesale (no partial update). */
@@ -66,4 +73,6 @@ data class OrganizationSettingsInput(
     val isPoliticalParty: Boolean = false,
     /** See [OrganizationSettingsDto.postalMailEnabled] KDoc -- AVV requirement applies here too. */
     val postalMailEnabled: Boolean = false,
+    /** See [OrganizationSettingsDto.politicianRankingEnabled] KDoc. */
+    val politicianRankingEnabled: Boolean = false,
 )

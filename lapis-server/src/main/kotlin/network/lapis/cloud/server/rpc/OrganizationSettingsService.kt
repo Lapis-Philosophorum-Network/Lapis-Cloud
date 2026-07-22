@@ -57,6 +57,7 @@ class OrganizationSettingsService(
                 it[taxExemptionDate] = input.taxExemptionDate
                 it[isPoliticalParty] = input.isPoliticalParty
                 it[postalMailEnabled] = input.postalMailEnabled
+                it[politicianRankingEnabled] = input.politicianRankingEnabled
             }
             loadOrganizationSettings()
         }
@@ -91,4 +92,5 @@ fun ResultRow.toOrganizationSettingsDto(): OrganizationSettingsDto =
         taxExemptionDate = this[OrganizationSettingsTable.taxExemptionDate],
         isPoliticalParty = this[OrganizationSettingsTable.isPoliticalParty],
         postalMailEnabled = this[OrganizationSettingsTable.postalMailEnabled],
+        politicianRankingEnabled = this[OrganizationSettingsTable.politicianRankingEnabled],
     )

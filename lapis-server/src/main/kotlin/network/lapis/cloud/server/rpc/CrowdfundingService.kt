@@ -14,7 +14,6 @@ import network.lapis.cloud.server.db.generated.LtrLedgerEntryTable
 import network.lapis.cloud.server.db.generated.MemberTable
 import network.lapis.cloud.server.economy.LedgerBackedLtrBalanceProvider
 import network.lapis.cloud.server.economy.LtrBalanceProvider
-import network.lapis.cloud.server.security.ForbiddenException
 import network.lapis.cloud.server.security.requireRole
 import network.lapis.cloud.server.security.resolveCurrentMember
 import network.lapis.cloud.shared.domain.AccountRole
@@ -27,7 +26,6 @@ import network.lapis.cloud.shared.domain.CrowdfundingReactionDto
 import network.lapis.cloud.shared.domain.CrowdfundingReactionValue
 import network.lapis.cloud.shared.domain.LtrLedgerEntryType
 import network.lapis.cloud.shared.domain.LtrLedgerReferenceType
-import network.lapis.cloud.shared.domain.MemberStatus
 import network.lapis.cloud.shared.rpc.ICrowdfundingService
 import org.jetbrains.exposed.v1.core.JoinType
 import org.jetbrains.exposed.v1.core.Op
@@ -371,14 +369,8 @@ class CrowdfundingService(
 
     // ── Internal helpers ──────────────────────────────────────────────────────────────────
 
-    private fun requireActiveMembership(memberId: Uuid) {
-        val isActive =
-            MemberTable
-                .selectAll()
-                .where { (MemberTable.id eq memberId) and (MemberTable.status eq MemberStatus.AKTIV) }
-                .count() > 0
-        if (!isActive) throw ForbiddenException()
-    }
+    // requireActiveMembership was extracted to network.lapis.cloud.server.rpc.MembershipGuards
+    // (V0.6.4) so PoliticianService can reuse it -- see that file's KDoc.
 
     /**
      * [forUpdate] takes a `SELECT ... FOR UPDATE` row lock on this project before returning it --

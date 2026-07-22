@@ -23,6 +23,11 @@
 // explicit opt-in gate for the new postal-dispatch path, NOT NULL, defaults to FALSE. See that
 // attribute's own comment below and `network.lapis.cloud.server.rpc.PostalMailService` KDoc for
 // the runtime gate it backs.
+//
+// V0.6.4 (Politiker-Profile und Politiker-Ranking) adds one more field: `politicianRankingEnabled`
+// -- an explicit opt-in gate for the whole feature, NOT NULL, defaults to FALSE. Same "independent
+// flag, not folded into isPoliticalParty" reasoning `postalMailEnabled` already established --
+// see that attribute's own comment below and `20-politician.kuml.kts`'s own file header addendum.
 import dev.kuml.profile.erm.ermMappingProfile
 import dev.kuml.uml.Multiplicity
 import dev.kuml.uml.dsl.applyProfile
@@ -99,6 +104,14 @@ classDiagram(name = "OrganizationSettings") {
         attribute(name = "postalMailEnabled", type = "Boolean") {
             defaultValue = "FALSE"
             stereotype("Column") { "columnName" to "postal_mail_enabled" }
+        }
+        // V0.6.4 Politiker-Profile und Politiker-Ranking: explicit opt-in gate, NOT NULL, defaults
+        // to FALSE. Independent of isPoliticalParty -- see file header addendum above and
+        // 20-politician.kuml.kts's own file header for the rationale. ADMIN-only to set, same tier
+        // as every other OrganizationSettings field (via updateOrganizationSettings).
+        attribute(name = "politicianRankingEnabled", type = "Boolean") {
+            defaultValue = "FALSE"
+            stereotype("Column") { "columnName" to "politician_ranking_enabled" }
         }
     }
 }

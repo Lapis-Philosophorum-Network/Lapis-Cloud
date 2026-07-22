@@ -35,14 +35,14 @@ class DomainModelMergerTest :
         // ── Test 1: merging the real 19 domain scripts ───────────────────────────────────
 
         test(
-            "merging the real 19 domain scripts succeeds and the uml-to-erm -> erm-to-exposed chain " +
+            "merging the real 21 domain scripts succeeds and the uml-to-erm -> erm-to-exposed chain " +
                 "produces exactly one Table file per distinct table name",
         ) {
             val scriptFiles =
                 requireNotNull(KumlModelLoader.kumlSourceDir.listFiles { f -> f.name.endsWith(".kuml.kts") }) {
                     "kUML source dir not found or not a directory: ${KumlModelLoader.kumlSourceDir.absolutePath}"
                 }.sortedBy { it.name }
-            scriptFiles shouldHaveSize 20
+            scriptFiles shouldHaveSize 21
 
             val diagrams = scriptFiles.map { KumlModelLoader.loadUmlDiagram(it) }
 
@@ -118,7 +118,17 @@ class DomainModelMergerTest :
             // through it) -- so it contributes +3 «Entity» declarations (the stub + 2 real tables)
             // and +1 drop (the stub merges into the already-existing member entity) versus the
             // V0.6.3 baseline above (61 -> 63).
-            val distinctTableNames = 63
+            // 20-politician.kuml.kts (V0.6.4 Politiker-Profile und Politiker-Ranking; renumbered
+            // from its original 19-politician.kuml.kts to 20 when merged onto master alongside
+            // V0.6.5, since both waves independently claimed the next-free slot 19 off the same
+            // V0.6.3 base) adds exactly three more real tables (politician_profile,
+            // politician_reaction, politician_weight_snapshot), WITH its own cross-domain Member
+            // stub (member_id/granted_by_member_id/revoked_by_member_id on politician_profile,
+            // rater_member_id on politician_reaction, computed_by_member_id on
+            // politician_weight_snapshot all resolve through it) -- so it contributes +4 «Entity»
+            // declarations (the stub + 3 real tables) and +1 drop (the stub merges into the
+            // already-existing member entity) versus the V0.6.5 baseline above (63 -> 66).
+            val distinctTableNames = 66
 
             val result =
                 UmlToExposedViaErmScriptTransformer().transform(
@@ -204,6 +214,9 @@ class DomainModelMergerTest :
                     "PeerTransferTable.kt",
                     "PriceOracleConfigTable.kt",
                     "PriceOracleConversionTable.kt",
+                    "PoliticianProfileTable.kt",
+                    "PoliticianReactionTable.kt",
+                    "PoliticianWeightSnapshotTable.kt",
                 )
         }
 

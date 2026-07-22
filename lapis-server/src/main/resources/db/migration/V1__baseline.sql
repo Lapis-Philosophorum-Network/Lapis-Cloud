@@ -23,6 +23,8 @@ CREATE TABLE document_folder (
 -- gate a real capability like letterhead data existing at all).
 -- postal_mail_enabled (V0.4.2): explicit opt-in gate for Letterxpress postal-mail dispatch, see
 -- that column's comment in 11-organization-settings.kuml.kts -- AVV requirement.
+-- politician_ranking_enabled (V0.6.4): explicit opt-in gate for the Politiker-Profile/-Ranking
+-- feature, see that column's comment in 11-organization-settings.kuml.kts.
 CREATE TABLE organization_settings (
     id UUID NOT NULL PRIMARY KEY,
     name VARCHAR(300) NOT NULL,
@@ -35,7 +37,8 @@ CREATE TABLE organization_settings (
     tax_exemption_authority VARCHAR(300) NULL,
     tax_exemption_date DATE NULL,
     is_political_party BOOLEAN NOT NULL DEFAULT FALSE,
-    postal_mail_enabled BOOLEAN NOT NULL DEFAULT FALSE
+    postal_mail_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    politician_ranking_enabled BOOLEAN NOT NULL DEFAULT FALSE
 );
 
 CREATE TABLE committee (
@@ -819,6 +822,43 @@ CREATE TABLE price_oracle_conversion (
     CHECK (price_status IN ('LIVE', 'DEGRADED', 'CACHED', 'DEFERRED'))
 );
 
+-- V0.6.4 Politiker-Profile und Politiker-Ranking (see 20-politician.kuml.kts file header for the
+-- full fachlich model; renumbered from 19-politician.kuml.kts to 20 when merged onto master
+-- alongside V0.6.5, which independently claimed the same next-free slot 19 off the same V0.6.3
+-- base -- no functional change from the rename). Re-grant after revocation reactivates the same
+-- politician_profile row (member_id UNIQUE below) rather than inserting a second one.
+CREATE TABLE politician_profile (
+    id UUID NOT NULL PRIMARY KEY,
+    member_id UUID NOT NULL,
+    status VARCHAR(6) NOT NULL,
+    mandate_text VARCHAR(2000) NULL,
+    granted_at TIMESTAMP NOT NULL,
+    granted_by_member_id UUID NOT NULL,
+    revoked_at TIMESTAMP NULL,
+    revoked_by_member_id UUID NULL,
+    CHECK (status IN ('ACTIVE', 'FORMER'))
+);
+
+CREATE TABLE politician_reaction (
+    id UUID NOT NULL PRIMARY KEY,
+    politician_profile_id UUID NOT NULL,
+    reaction_value VARCHAR(7) NOT NULL,
+    cast_at TIMESTAMP NOT NULL,
+    rater_member_id UUID NOT NULL,
+    CHECK (reaction_value IN ('LIKE', 'DISLIKE'))
+);
+
+CREATE TABLE politician_weight_snapshot (
+    id UUID NOT NULL PRIMARY KEY,
+    politician_profile_id UUID NOT NULL,
+    period_month DATE NOT NULL,
+    member_trust_weight DECIMAL(18, 2) NOT NULL,
+    member_like_count INT NOT NULL,
+    member_dislike_count INT NOT NULL,
+    computed_at TIMESTAMP NOT NULL,
+    computed_by_member_id UUID NOT NULL
+);
+
 -- Foreign Keys
 
 ALTER TABLE member ADD CONSTRAINT fk_member_membership_tier_id FOREIGN KEY (membership_tier_id) REFERENCES membership_tier(id);
@@ -942,6 +982,13 @@ ALTER TABLE peer_transfer ADD CONSTRAINT fk_peer_transfer_recipient_member_id FO
 ALTER TABLE peer_transfer ADD CONSTRAINT fk_peer_transfer_initiated_by FOREIGN KEY (initiated_by) REFERENCES member(id);
 ALTER TABLE price_oracle_conversion ADD CONSTRAINT fk_price_oracle_conversion_member_id FOREIGN KEY (member_id) REFERENCES member(id);
 ALTER TABLE price_oracle_conversion ADD CONSTRAINT fk_price_oracle_conversion_created_by FOREIGN KEY (created_by) REFERENCES member(id);
+ALTER TABLE politician_profile ADD CONSTRAINT fk_politician_profile_member_id FOREIGN KEY (member_id) REFERENCES member(id);
+ALTER TABLE politician_profile ADD CONSTRAINT fk_politician_profile_granted_by_member_id FOREIGN KEY (granted_by_member_id) REFERENCES member(id);
+ALTER TABLE politician_profile ADD CONSTRAINT fk_politician_profile_revoked_by_member_id FOREIGN KEY (revoked_by_member_id) REFERENCES member(id);
+ALTER TABLE politician_reaction ADD CONSTRAINT fk_politician_reaction_politician_profile_id FOREIGN KEY (politician_profile_id) REFERENCES politician_profile(id);
+ALTER TABLE politician_reaction ADD CONSTRAINT fk_politician_reaction_rater_member_id FOREIGN KEY (rater_member_id) REFERENCES member(id);
+ALTER TABLE politician_weight_snapshot ADD CONSTRAINT fk_politician_weight_snapshot_politician_profile_id FOREIGN KEY (politician_profile_id) REFERENCES politician_profile(id);
+ALTER TABLE politician_weight_snapshot ADD CONSTRAINT fk_politician_weight_snapshot_computed_by_member_id FOREIGN KEY (computed_by_member_id) REFERENCES member(id);
 
 -- Indexes
 
@@ -1038,6 +1085,11 @@ CREATE INDEX idx_crowdfunding_reaction_project ON crowdfunding_reaction (project
 CREATE UNIQUE INDEX uq_crowdfunding_distribution_project_period ON crowdfunding_distribution (project_id, period_start, period_end);
 CREATE INDEX idx_peer_transfer_sender ON peer_transfer (sender_member_id);
 CREATE INDEX idx_peer_transfer_recipient ON peer_transfer (recipient_member_id);
+CREATE INDEX idx_politician_profile_status ON politician_profile (status);
+CREATE UNIQUE INDEX uq_politician_profile_member ON politician_profile (member_id);
+CREATE UNIQUE INDEX uq_politician_reaction_profile_rater ON politician_reaction (politician_profile_id, rater_member_id);
+CREATE INDEX idx_politician_reaction_profile ON politician_reaction (politician_profile_id);
+CREATE UNIQUE INDEX uq_politician_weight_snapshot_profile_period ON politician_weight_snapshot (politician_profile_id, period_month);
 
 CREATE INDEX idx_price_oracle_conversion_member ON price_oracle_conversion (member_id);
 

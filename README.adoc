@@ -64,7 +64,10 @@ this repository. This README describes only the technical scope.
 
 == Status
 
-As of *V0.6.5*, six major waves are complete and released (see `CHANGELOG.md` for full detail):
+As of *V0.6.5*, six major waves are complete (see `CHANGELOG.md` for full detail; note the package
+version and git tags have not yet been bumped past `v0.5.1` — V0.6's sub-waves have so far shipped
+as feature commits, with the version/tag/release choreography apparently deferred until the V0.6
+LTR-economy arc is fully done):
 
 * **V0.1 — Project foundation & standard membership management**: Gradle multi-module structure,
   Ktor server, KVision client, Kilua RPC wiring, CI/CD, member master data, join/leave workflow,
@@ -80,24 +83,37 @@ As of *V0.6.5*, six major waves are complete and released (see `CHANGELOG.md` fo
 * **V0.4 — Mail-merge & postal mail**: a PDF mail-merge engine (membership dues invoices, §50 EStDV
   donation receipts, invitations) and a Letterxpress-based postal-dispatch path for members without
   email.
-* **V0.5 — Compliance bundle**: a §25 PartG donation-acceptance check for political parties, and
-  §20 GwG Transparenzregister board-change reminders with a beneficial-owner data completeness
-  report, plus a hash-chained GoBD audit log and a full-organization backup/restore/export and
-  DSGVO-Vollausbau (AVV, TOMs, DSFA, Datenpannenmeldung).
-* **V0.6 — LTR economy (in progress)**: a real LTR ledger and Internes Crowdfunding (V0.6.1),
-  direct peer-to-peer LTR transfer (V0.6.3), and a Price-Oracle for the anchor-asset peg with a
-  load-bearing donation → LTR conversion boundary (V0.6.5). V0.6.2 (Auction) remains blocked on
-  legal review; V0.6.4 (Politician Profiles/Ranking) remains parked on a separate, unmerged branch
-  pending a future guest-identity model — neither is released.
+* **V0.5 — Compliance bundle**: a §25 PartG donation-acceptance check for political parties, §20
+  GwG Transparenzregister board-change reminders with a beneficial-owner data completeness report,
+  a hash-chained GoBD audit log, full-organization backup/restore/export, and the DSGVO-Vollausbau
+  (AVV register, TOM documentation, DPIA template, data-breach-incident workflow).
+* **V0.6 — LTR economy (in progress)**: a real, ledger-backed LTR balance (`LtrLedgerEntry`,
+  replacing the earlier balance stub), Internes Crowdfunding (member-submitted, board-reviewed
+  projects with a silence-is-approval clock, Like/Dislike-driven monthly EUR donation-pool
+  distribution), direct member-to-member LTR peer transfers (with a board/admin arbitration-
+  correction path), Politiker-Profile und Politiker-Ranking (member-only Like/Dislike trust
+  weighting of granted politician status, computed as a single shared LTR pool apportioned
+  proportionally across all active politicians), and a Price-Oracle for the anchor-asset peg with a
+  load-bearing donation → LTR conversion boundary. V0.6.2 (Auction) remains blocked on legal
+  review — the one remaining item of this wave's original scope.
 
 Every wave went through this project's mandatory plan → implement → independent review →
 independent security audit pipeline before merging. Known limitations (Letterxpress wire format
-and V0.6.5's oracle wire formats not verified against live docs, no Sammelbestätigung aggregation,
-no full GoBD tamper-evidence/TSE, no persistent oracle halt-queue, federation not yet built) are
-tracked in `CHANGELOG.md`. See link:docs/architecture/domain-model.adoc[domain model documentation]
-(covers the V0.1.5 Contributions/Documents/Communication slice, the V0.3 accounting slices, the
-V0.4.1 mail-merge slice, and the V0.6.5 Price-Oracle slice — not yet updated for every wave in
-between) and `CLAUDE.md` for further detail.
+and the oracle's price-source wire formats not verified against live docs, no Sammelbestätigung
+aggregation, no full GoBD tamper-evidence/TSE, no persistent oracle halt-queue, no guest/Gast
+rating basket, federation not yet built) are tracked in `CHANGELOG.md`. See
+link:docs/architecture/domain-model.adoc[domain model documentation] (covers the V0.1.5
+Contributions/Documents/Communication slice, the V0.3 accounting slices, the V0.4.1 mail-merge
+slice, and the V0.6.5 Price-Oracle slice — not yet updated for every wave in between, including
+V0.6.4) and `CLAUDE.md` for further detail.
+
+CAUTION: The V0.6.4 guest/Gast rating basket cut (`PoliticianProfileDto` exposes
+`memberTrustWeight` only, not the concept's three-way Mitglieder-/Gäste-/Gesamtbewertung) is an
+*open product decision*, not an accepted final scope narrowing — it still needs an explicit
+accept/reject from the product owner. See `CHANGELOG.md` `[0.6.4]` "Known limitations" for the
+full reasoning (no operational Gast identity/exit workflow exists anywhere in this codebase to
+source a guest basket from). This note is cross-referenced here, not just in the changelog, so it
+is not missed before this wave is considered fully closed.
 
 == Documentation Convention
 

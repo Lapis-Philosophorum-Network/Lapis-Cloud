@@ -37,6 +37,7 @@ object PersonalDataRegistry {
             CrowdfundingPersonalData,
             PeerTransferPersonalData,
             PriceOraclePersonalData,
+            PoliticianPersonalData,
         )
 
     /**
