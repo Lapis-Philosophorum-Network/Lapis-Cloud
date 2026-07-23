@@ -32,6 +32,11 @@ kilua-rpc               = { id = "dev.kilua.rpc", version.ref = "kilua-rpc" }
 kvision-core                    = { module = "io.kvision:kvision", version.ref = "kvision" }
 kvision-bootstrap               = { module = "io.kvision:kvision-bootstrap", version.ref = "kvision" }
 kvision-common-remote           = { module = "io.kvision:kvision-common-remote", version.ref = "kvision" }
+# V0.7.3 Basis-Mehrseiten-UI: Navigo-8+-backed hash router for the multi-screen SPA (login/
+# register/dashboard/members/contributions/documents/communication) -- see io.kvision.routing.Routing
+# KDoc. "-ng" is the Navigo-8+ variant (vs. the older kvision-routing-navigo module pinned to
+# Navigo 7).
+kvision-routing-navigo-ng       = { module = "io.kvision:kvision-routing-navigo-ng", version.ref = "kvision" }
 ktor-server-core                = { module = "io.ktor:ktor-server-core", version.ref = "ktor" }
 ktor-server-netty                = { module = "io.ktor:ktor-server-netty", version.ref = "ktor" }
 ktor-server-call-logging        = { module = "io.ktor:ktor-server-call-logging", version.ref = "ktor" }

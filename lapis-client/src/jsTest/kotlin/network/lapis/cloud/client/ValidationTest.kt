@@ -1,0 +1,119 @@
+package network.lapis.cloud.client
+
+import network.lapis.cloud.shared.domain.AccountRole
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
+
+/**
+ * V0.7.3 Basis-Mehrseiten-UI: this module had no `jsTest` source set at all before this wave (only
+ * `build/tmp` artifacts existed) -- see the CHANGELOG's V0.7.3 entry "Testing approach" for the
+ * full reasoning. In scope: pure, DOM-independent functions with real branching logic
+ * ([Validation], [selectableRolesFor], [isRouteAllowed]) -- these run under the
+ * Karma+ChromeHeadless `testTask` already configured in `lapis-client/build.gradle.kts`. Explicitly
+ * NOT in scope: component-rendering/DOM tests or an E2E browser-automation framework -- see that
+ * CHANGELOG entry for why (no existing UI-test harness in this repo, disproportionate scope for
+ * this wave). Manual QA against the four seeded demo roles is the deliberate substitute for actual
+ * on-screen behavior verification.
+ */
+class ValidationTest {
+    @Test
+    fun looksLikeEmail_acceptsAPlausibleAddress() {
+        assertTrue(Validation.looksLikeEmail("amara.admin@example.org"))
+    }
+
+    @Test
+    fun looksLikeEmail_rejectsMissingAtSign() {
+        assertFalse(Validation.looksLikeEmail("not-an-email"))
+    }
+
+    @Test
+    fun looksLikeEmail_rejectsMissingDotAfterAtSign() {
+        assertFalse(Validation.looksLikeEmail("someone@example"))
+    }
+
+    @Test
+    fun looksLikeEmail_rejectsLeadingAtSign() {
+        assertFalse(Validation.looksLikeEmail("@example.org"))
+    }
+
+    @Test
+    fun isNonBlank_rejectsWhitespaceOnly() {
+        assertFalse(Validation.isNonBlank("   "))
+    }
+
+    @Test
+    fun passwordHint_flagsTooShort() {
+        assertEquals("Mindestens 12 Zeichen.", Validation.passwordHint("short", "a@b.de"))
+    }
+
+    @Test
+    fun passwordHint_flagsTooLong() {
+        val tooLong = "a".repeat(Validation.PASSWORD_MAX_LENGTH + 1)
+        assertEquals("Höchstens 128 Zeichen.", Validation.passwordHint(tooLong, "a@b.de"))
+    }
+
+    @Test
+    fun passwordHint_flagsPasswordEqualToEmail_caseInsensitive() {
+        val hint = Validation.passwordHint("Amara.Admin@Example.ORG", "amara.admin@example.org")
+        assertEquals("Darf nicht die E-Mail-Adresse sein.", hint)
+    }
+
+    @Test
+    fun passwordHint_acceptsAPlausiblePassword() {
+        assertEquals(null, Validation.passwordHint("correct-horse-battery-staple", "amara.admin@example.org"))
+    }
+
+    @Test
+    fun passwordsMatch_trueForIdenticalStrings() {
+        assertTrue(Validation.passwordsMatch("secret-password-123", "secret-password-123"))
+    }
+
+    @Test
+    fun passwordsMatch_falseForDifferentStrings() {
+        assertFalse(Validation.passwordsMatch("secret-password-123", "different-password-456"))
+    }
+
+    @Test
+    fun selectableRolesFor_adminMayChooseAnyRole() {
+        assertEquals(AccountRole.entries.toList(), selectableRolesFor(AccountRole.ADMIN))
+    }
+
+    @Test
+    fun selectableRolesFor_boardMayOnlyCreatePlainMembers() {
+        assertEquals(listOf(AccountRole.MEMBER), selectableRolesFor(AccountRole.BOARD))
+    }
+
+    @Test
+    fun selectableRolesFor_treasurerMayOnlyCreatePlainMembers() {
+        assertEquals(listOf(AccountRole.MEMBER), selectableRolesFor(AccountRole.TREASURER))
+    }
+
+    @Test
+    fun selectableRolesFor_memberMayOnlyCreatePlainMembers() {
+        assertEquals(listOf(AccountRole.MEMBER), selectableRolesFor(AccountRole.MEMBER))
+    }
+
+    @Test
+    fun isRouteAllowed_deniesUnauthenticatedCallerRegardlessOfRole() {
+        assertFalse(isRouteAllowed(authenticated = false, callerRole = AccountRole.ADMIN, requiredRoles = emptySet()))
+    }
+
+    @Test
+    fun isRouteAllowed_allowsAnyAuthenticatedCallerWhenNoRoleRequired() {
+        assertTrue(isRouteAllowed(authenticated = true, callerRole = AccountRole.MEMBER, requiredRoles = emptySet()))
+    }
+
+    @Test
+    fun isRouteAllowed_deniesMemberOnARoleGuardedRoute() {
+        val requiredRoles = setOf(AccountRole.BOARD, AccountRole.ADMIN)
+        assertFalse(isRouteAllowed(authenticated = true, callerRole = AccountRole.MEMBER, requiredRoles = requiredRoles))
+    }
+
+    @Test
+    fun isRouteAllowed_allowsBoardOnARouteRequiringBoardOrAdmin() {
+        val requiredRoles = setOf(AccountRole.BOARD, AccountRole.ADMIN)
+        assertTrue(isRouteAllowed(authenticated = true, callerRole = AccountRole.BOARD, requiredRoles = requiredRoles))
+    }
+}

@@ -1,213 +1,119 @@
 package network.lapis.cloud.client
 
 import io.kvision.Application
-import io.kvision.html.ButtonStyle
-import io.kvision.html.button
-import io.kvision.html.div
-import io.kvision.html.h1
-import io.kvision.html.h2
-import io.kvision.panel.SimplePanel
+import io.kvision.html.Link
+import io.kvision.navbar.Nav
+import io.kvision.navbar.Navbar
+import io.kvision.navbar.nav
+import io.kvision.navbar.navLink
+import io.kvision.navbar.navLinkDisabled
+import io.kvision.navbar.navbar
 import io.kvision.panel.root
 import io.kvision.panel.vPanel
 import io.kvision.remote.registerRemoteTypes
 import io.kvision.startApplication
-import io.kvision.utils.px
 import kotlinx.browser.window
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.launch
-import kotlinx.datetime.LocalDate
-import kotlinx.datetime.LocalDateTime
-import kotlinx.datetime.TimeZone
-import kotlinx.datetime.toLocalDateTime
 import network.lapis.cloud.shared.domain.AccountRole
-import network.lapis.cloud.shared.domain.ContributionStatus
-import network.lapis.cloud.shared.rpc.IContributionService
-import network.lapis.cloud.shared.rpc.IDirectMessageService
-import network.lapis.cloud.shared.rpc.IMailingService
-import network.lapis.cloud.shared.rpc.IMemberService
-import kotlin.time.Clock
+import network.lapis.cloud.shared.rpc.IAuthService
 
 /** Application-wide coroutine scope tied to the browser's event loop. */
 val AppScope: CoroutineScope = CoroutineScope(window.asCoroutineDispatcher())
 
-// Matches DevSeedData.standardTierId on the server.
-private const val STANDARD_TIER_ID = "00000000-0000-0000-0000-0000000000f1"
-
 /**
- * Single-dashboard V0.1.5 demo UI: a "current member" switcher (Foundation-stub auth, see
- * [AppState]) plus one screen that exercises all four new RPC services (Contributions,
- * Documents metadata, Mailing, Direct messages) end to end against the real backend. A fuller
- * multi-screen UI (dedicated document browser with upload, mailing compose screen, etc. — see
- * the V0.1.5 plan) is follow-up scope; this proves the wiring works for every service.
+ * V0.7.3 Basis-Mehrseiten-UI: replaces the V0.1.5 single-dashboard "acting as" member-switcher
+ * demo with a real, multi-screen SPA covering the core domains needed for a first deployment. Each
+ * screen lives in its own file (`LoginScreen.kt`, `RegistrationScreen.kt`, `DashboardScreen.kt`,
+ * `MemberAdministrationScreen.kt`, `ContributionsScreen.kt`, `DocumentsScreen.kt`,
+ * `CommunicationScreen.kt`) -- mirrors the flat, one-file-per-concern convention
+ * `lapis-server/.../rpc/` already uses for its services. `Routing.kt` wires hash-based navigation
+ * between them; `AppState.kt`/`AuthHttp.kt` hold the real session-cookie auth this file's own
+ * previous KDoc always pointed towards.
  */
 class App : Application() {
     override fun start() {
         root("lapis-client") {
-            h1("Lapis Cloud — V0.1.5 Demo")
-            div("Beitragsverwaltung, Dokumentenablage, Kommunikation") {
-                marginBottom = 16.px
+            val navbar = navbar(label = "Lapis Cloud", link = "#${Routes.DASHBOARD}")
+            refreshNavbar(navbar)
+            val pageContainer = vPanel()
+
+            initNotifications()
+            AppState.onSessionChange = { refreshNavbar(navbar) }
+
+            AppScope.launch {
+                // Boot-time session probe -- deliberately NOT routed through `guarded()`: an
+                // anonymous first-time visitor failing this call is the ordinary, expected case,
+                // not a "your session just expired" event, so no error toast here (unlike every
+                // other call site in this app, which DOES want that toast).
+                val session =
+                    try {
+                        rpcService<IAuthService>().getSessionInfo()
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Throwable) {
+                        null
+                    }
+                AppState.setSession(session)
+                // Routing is initialized only AFTER the probe resolves, so the very first hash
+                // resolution already sees the correct auth state -- see `initRouting` KDoc.
+                initRouting(pageContainer)
             }
-            memberSwitcher(this)
-            val dashboard = vPanel()
-            add(dashboard)
-            renderDashboard(dashboard)
         }
     }
+}
 
-    private fun memberSwitcher(parent: SimplePanel) {
-        parent.div {
-            marginBottom = 16.px
-            +"Anmelden als: "
-            DevMembers.all.forEach { member ->
-                val btn = button(member.label, style = ButtonStyle.OUTLINELIGHT)
-                btn.marginLeft = 4.px
-                btn.onClick {
-                    AppState.currentMemberId = member.id
-                    window.location.reload()
-                }
-            }
-        }
+private fun refreshNavbar(navbar: Navbar) {
+    navbar.removeAll()
+    val session = AppState.session
+    if (session == null) {
+        navbar.hide()
+        return
     }
-}
+    navbar.show()
 
-private object DevMembers {
-    data class Entry(
-        val id: String,
-        val label: String,
-    )
-
-    // Mirrors network.lapis.cloud.server.db.DevSeedData.demoMembers — kept in sync by hand
-    // since the client has no "list all members without auth" bootstrap endpoint.
-    val all =
-        listOf(
-            Entry("00000000-0000-0000-0000-000000000001", "Amara (Admin)"),
-            Entry("00000000-0000-0000-0000-000000000002", "Boris (Board)"),
-            Entry("00000000-0000-0000-0000-000000000003", "Theresa (Schatzmeisterin)"),
-            Entry("00000000-0000-0000-0000-000000000004", "Max (Mitglied)"),
-        )
-}
-
-private fun renderDashboard(panel: SimplePanel) {
-    AppScope.launch {
-        val memberService = rpcService<IMemberService>()
-        val current =
-            try {
-                memberService.getCurrentMember()
-            } catch (e: Throwable) {
-                panel.div("Fehler beim Laden des aktuellen Mitglieds: ${e.message}")
-                return@launch
-            }
-
-        panel.div("Angemeldet als ${current.displayName} (${current.role})")
-
-        renderContributionsSection(panel, current.id, current.role)
-        renderMailingSection(panel)
-        renderInboxSection(panel)
+    val leftNav: Nav = navbar.nav()
+    leftNav.navLink("Dashboard", url = "#${Routes.DASHBOARD}")
+    leftNav.navLink("Beiträge", url = "#${Routes.CONTRIBUTIONS}")
+    leftNav.navLink("Dokumente", url = "#${Routes.DOCUMENTS}")
+    leftNav.navLink("Kommunikation", url = "#${Routes.COMMUNICATION}")
+    if (AppState.hasRole(AccountRole.BOARD, AccountRole.ADMIN)) {
+        leftNav.navLink("Mitgliederverwaltung", url = "#${Routes.MEMBERS}")
     }
-}
 
-private fun renderContributionsSection(
-    panel: SimplePanel,
-    memberId: String,
-    role: AccountRole,
-) {
-    panel.h2("Beitragsverwaltung")
-    val section = SimplePanel()
-    panel.add(section)
-    val canManage = role == AccountRole.TREASURER || role == AccountRole.ADMIN
-
-    fun refresh() {
-        section.removeAll()
+    val rightNav: Nav = navbar.nav(rightAlign = true)
+    rightNav.navLinkDisabled("${session.displayName} (${session.role})")
+    val logoutLink = rightNav.navLink("Abmelden", url = "javascript:void(0)")
+    logoutLink.onClick {
         AppScope.launch {
-            val service = rpcService<IContributionService>()
-            val summary = service.getMemberContributionSummary(memberId)
-            section.div(
-                "Offen: ${summary.totalOpen} | Bezahlt: ${summary.totalPaid} | Gesamt: ${summary.totalDue}",
-            )
-            summary.contributions.forEach { contribution ->
-                val row = section.div()
-                row.add(
-                    io.kvision.html.Span(
-                        "${contribution.periodStart}–${contribution.periodEnd}: " +
-                            "${contribution.amountDue} (${contribution.status})",
-                    ),
-                )
-                if (contribution.status == ContributionStatus.OPEN && canManage) {
-                    val payButton = row.button("Als bezahlt markieren", style = ButtonStyle.SUCCESS)
-                    payButton.marginLeft = 8.px
-                    payButton.onClick {
-                        AppScope.launch {
-                            val now: LocalDateTime = Clock.System.now().toLocalDateTime(TimeZone.currentSystemDefault())
-                            service.markContributionPaid(contribution.id, now, contribution.amountDue, null)
-                            refresh()
-                        }
-                    }
-                }
-            }
-            if (canManage) {
-                val generateButton =
-                    section.button(
-                        "Beiträge für Standardbeitrag generieren (Juli 2026)",
-                        style = ButtonStyle.PRIMARY,
-                    )
-                generateButton.marginTop = 8.px
-                generateButton.onClick {
-                    AppScope.launch {
-                        val periodStart = LocalDate(2026, 7, 1)
-                        val periodEnd = LocalDate(2026, 7, 31)
-                        service.generateContributionsForPeriod(STANDARD_TIER_ID, periodStart, periodEnd)
-                        refresh()
-                    }
-                }
-            }
+            AuthHttp.logout()
+            AppState.setSession(null)
+            navigateTo(Routes.LOGIN)
         }
-    }
-    refresh()
-}
-
-private fun renderMailingSection(panel: SimplePanel) {
-    panel.h2("Mailinglisten")
-    val section = SimplePanel()
-    panel.add(section)
-
-    fun refresh() {
-        section.removeAll()
-        AppScope.launch {
-            val service = rpcService<IMailingService>()
-            val lists = service.listMailingLists()
-            if (lists.isEmpty()) {
-                section.div("Noch keine Mailinglisten.")
-            }
-            lists.forEach { list ->
-                val row = section.div()
-                row.add(io.kvision.html.Span("${list.name} (${list.subscriberCount} Abonnenten) "))
-                val toggleButton = row.button(if (list.isSubscribedByCurrentMember) "Abbestellen" else "Abonnieren")
-                toggleButton.onClick {
-                    AppScope.launch {
-                        if (list.isSubscribedByCurrentMember) service.unsubscribe(list.id) else service.subscribe(list.id)
-                        refresh()
-                    }
-                }
-            }
-        }
-    }
-    refresh()
-}
-
-private fun renderInboxSection(panel: SimplePanel) {
-    panel.h2("Postfach")
-    val section = SimplePanel()
-    panel.add(section)
-
-    AppScope.launch {
-        val service = rpcService<IDirectMessageService>()
-        val unread = service.unreadCount()
-        section.div("Ungelesene Nachrichten: $unread")
     }
 }
 
 fun main() {
+    // Critical fix (found+fixed during V0.7.3 review round 1): every `navLink(...)`/`link(...)`
+    // call in this app (Routing.kt's own KDoc notwithstanding) passes only `url = "#/x"`, never
+    // `dataNavigo = true` -- and `io.kvision.html.Link.useDataNavigoForLinks` defaults to `false`.
+    // Without one of those two, `Link.buildAttributeSet` never emits the `data-navigo` attribute,
+    // so kvision-routing-navigo-ng's own click-hijacking (`linksSelector`) never recognizes these
+    // anchors as SPA-routed links: a real click just performs the browser's native, un-intercepted
+    // hash-fragment update -- `location.hash` changes, but no `Routing.kvOn(...)` handler ever
+    // fires, so the visible screen never changes. Verified end-to-end in a real browser against
+    // both the production and development webpack bundles: every nav-link/tile click (Beiträge,
+    // Dokumente, Kommunikation, Mitgliederverwaltung, the Dashboard "Bereiche" tiles) silently did
+    // nothing -- only the explicit, programmatic `routing.navigate(...)` call sites (post-login,
+    // post-logout, the boot-time `/` resolve, `guarded()`'s session-expiry redirect) worked, because
+    // those bypass link-hijacking entirely. Setting this flag globally, once, before any `Link` is
+    // ever constructed (i.e. here in `main()`, before `startApplication`) is the standard KVision
+    // fix -- see `io.kvision.html.Link` companion object KDoc -- and is simpler and less error-prone
+    // than threading `dataNavigo = true` through every individual `navLink`/`link`/`navTile` call
+    // site across every screen file.
+    Link.useDataNavigoForLinks = true
     registerRemoteTypes()
     startApplication(::App)
 }

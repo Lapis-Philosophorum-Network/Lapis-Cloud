@@ -1,0 +1,131 @@
+package network.lapis.cloud.client
+
+import io.kvision.form.text.password
+import io.kvision.form.text.text
+import io.kvision.html.ButtonStyle
+import io.kvision.html.InputType
+import io.kvision.html.button
+import io.kvision.html.div
+import io.kvision.html.h1
+import io.kvision.html.link
+import io.kvision.html.p
+import io.kvision.panel.SimplePanel
+import io.kvision.panel.vPanel
+import io.kvision.utils.px
+import kotlinx.coroutines.launch
+import network.lapis.cloud.shared.rpc.IAuthService
+
+/**
+ * Screen 1 of the V0.7.3 plan. Calls the real `POST /api/auth/login` HTTP route (see [AuthHttp])
+ * -- NOT an RPC method, see `IAuthService` KDoc for why. On success, immediately calls
+ * `getSessionInfo()` (RPC, the session cookie is already set by then) to populate
+ * [AppState.session] with the real role/expiry, rather than trusting the login response body.
+ *
+ * Error handling: the server's own response text is shown verbatim -- it is already
+ * account-enumeration-hardened (identical generic text for unknown email / wrong password / a
+ * departed-or-rejected account, see `AuthRoutes` KDoc), so this screen adds NO further
+ * differentiation on top of it; doing so would defeat the server's own hardening.
+ */
+fun renderLoginScreen(container: SimplePanel) {
+    container.vPanel(spacing = 10) {
+        addCssClass("mx-auto")
+        width = 380.px
+        marginTop = 64.px
+
+        h1("Lapis Cloud")
+        p("Bitte melden Sie sich mit Ihrer E-Mail-Adresse an.")
+
+        val errorBox =
+            div().apply {
+                addCssClass("text-danger")
+                hide()
+            }
+
+        val emailInput = text(type = InputType.EMAIL, label = "E-Mail")
+        val passwordInput = password(label = "Passwort")
+
+        lateinit var loginButton: io.kvision.html.Button
+        loginButton =
+            button("Anmelden", style = ButtonStyle.PRIMARY) {
+                onClick {
+                    val email = emailInput.value.orEmpty().trim()
+                    val pw = passwordInput.value.orEmpty()
+                    errorBox.hide()
+                    if (!Validation.isNonBlank(email) || !Validation.isNonBlank(pw)) {
+                        errorBox.content = "Bitte E-Mail und Passwort eingeben."
+                        errorBox.show()
+                        return@onClick
+                    }
+                    loginButton.disabled = true
+                    AppScope.launch {
+                        val loginError = AuthHttp.login(email, pw)
+                        if (loginError != null) {
+                            errorBox.content = loginError
+                            errorBox.show()
+                            loginButton.disabled = false
+                            return@launch
+                        }
+                        val session = guarded { rpcService<IAuthService>().getSessionInfo() }
+                        loginButton.disabled = false
+                        if (session != null) {
+                            AppState.setSession(session)
+                            notifySuccess("Willkommen, ${session.displayName}.")
+                            navigateTo(Routes.DASHBOARD)
+                        } else {
+                            errorBox.content = "Anmeldung erfolgreich, aber Sitzungsdaten konnten nicht geladen werden."
+                            errorBox.show()
+                        }
+                    }
+                }
+            }
+
+        div {
+            marginTop = 8.px
+            link("Noch kein Konto? Jetzt Mitglied werden.", url = "#${Routes.REGISTER}")
+        }
+
+        renderForgotPasswordToggle(this)
+    }
+}
+
+/** Minimal request+confirm "forgot password" flow -- see V0.7.3 plan Open Question 3. Collapsed
+ * behind a toggle link so it doesn't crowd the primary login form. */
+private fun renderForgotPasswordToggle(parent: SimplePanel) {
+    val toggleLink = parent.link("Passwort vergessen?", url = "javascript:void(0)")
+    val panel = parent.vPanel(spacing = 6) { hide() }
+    toggleLink.onClick { if (panel.visible) panel.hide() else panel.show() }
+
+    panel.p(
+        "Geben Sie Ihre E-Mail-Adresse ein, um einen Link zum Zurücksetzen anzufordern. " +
+            "Erhalten Sie eine Bestätigung, tragen Sie anschließend den Token und Ihr neues Passwort ein.",
+    )
+    val resetEmail = panel.text(type = InputType.EMAIL, label = "E-Mail")
+    val requestButton = panel.button("Zurücksetzen anfordern", style = ButtonStyle.OUTLINEPRIMARY)
+    requestButton.onClick {
+        val email = resetEmail.value.orEmpty().trim()
+        if (!Validation.isNonBlank(email)) return@onClick
+        AppScope.launch {
+            val error = AuthHttp.requestPasswordReset(email)
+            if (error != null) notifyError(error) else notifyInfo("Falls diese E-Mail registriert ist, wurde ein Link versendet.")
+        }
+    }
+
+    panel.div { marginTop = 8.px }
+    val resetToken = panel.text(label = "Token (aus der E-Mail bzw. vom Betreiber)")
+    val newPassword = panel.password(label = "Neues Passwort")
+    val confirmButton = panel.button("Neues Passwort setzen", style = ButtonStyle.OUTLINEPRIMARY)
+    confirmButton.onClick {
+        val token = resetToken.value.orEmpty().trim()
+        val pw = newPassword.value.orEmpty()
+        if (!Validation.isNonBlank(token) || !Validation.isNonBlank(pw)) return@onClick
+        AppScope.launch {
+            val error = AuthHttp.confirmPasswordReset(token, pw)
+            if (error != null) {
+                notifyError(error)
+            } else {
+                notifySuccess("Passwort wurde geändert -- bitte melden Sie sich neu an.")
+                panel.hide()
+            }
+        }
+    }
+}

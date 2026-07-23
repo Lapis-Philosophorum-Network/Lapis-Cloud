@@ -8,9 +8,12 @@ import io.ktor.server.application.Application
 import io.ktor.server.application.call
 import io.ktor.server.application.install
 import io.ktor.server.engine.embeddedServer
+import io.ktor.server.http.content.staticFiles
 import io.ktor.server.netty.Netty
+import io.ktor.server.plugins.autohead.AutoHeadResponse
 import io.ktor.server.plugins.calllogging.CallLogging
 import io.ktor.server.plugins.compression.Compression
+import io.ktor.server.plugins.partialcontent.PartialContent
 import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
@@ -99,6 +102,25 @@ fun Application.module() {
     val documentStorageRoot = File(System.getenv("LAPIS_DOCUMENT_STORAGE_ROOT") ?: "build/document-storage")
     documentStorageRoot.mkdirs()
 
+    // V0.7.3 Basis-Mehrseiten-UI: same-origin static serving of the KVision/Kotlin-JS client
+    // bundle, replacing the previous "separate origin, no CORS story" gap (see lapis-client's
+    // Routing.kt KDoc for why same-origin was chosen over CORS+credentials). Default path assumes
+    // this process runs with `lapis-server/` as its working directory (true for
+    // `./gradlew :lapis-server:run` and `./gradlew :lapis-server:test`) and the client was built via
+    // `./gradlew :lapis-client:jsBrowserDistribution` (verified empirically during V0.7.3 review
+    // round 1, against the pinned Kotlin Gradle Plugin version -- NOT `jsBrowserProductionWebpack`,
+    // which this KDoc originally named: that task alone only emits `main.bundle.js` under
+    // `lapis-client/build/kotlin-webpack/js/productionExecutable/`, WITHOUT `index.html` next to it,
+    // so `staticFiles` would 404 on "/" even though the bundle exists. `jsBrowserDistribution`
+    // additionally copies the processed `index.html` resource alongside the bundle into
+    // `lapis-client/build/dist/js/productionExecutable/` -- the actual directory this default
+    // matches. Re-verify against the actual Kotlin Gradle Plugin version if this path ever drifts.
+    // Deliberately NOT eagerly validated: Route.staticFiles resolves files lazily per-request, so an
+    // empty/missing directory (e.g. in a `./gradlew clean check` run that never built the client) is
+    // harmless -- requests to "/" just 404 instead of breaking server startup or the test suite.
+    val clientDistRoot = File(System.getenv("LAPIS_CLIENT_DIST_ROOT") ?: "../lapis-client/build/dist/js/productionExecutable")
+    clientDistRoot.mkdirs()
+
     // V0.4.2 Letterxpress postal-mail dispatch -- see LetterxpressPostalMailProvider KDoc for the
     // sandbox/live-mode default and the "wire format not verified" disclosure. Constructed once
     // here (not per-request) with its own env-var-derived defaults, same lifecycle as
@@ -128,6 +150,11 @@ fun Application.module() {
 
     install(CallLogging)
     install(Compression)
+    // V0.7.3 Basis-Mehrseiten-UI: PartialContent (HTTP Range, for large JS/asset bundles) and
+    // AutoHeadResponse (HEAD for the same GET routes) back the staticFiles() registration below --
+    // both dependencies were already declared (see gradle/libs.versions.toml) but unused until now.
+    install(PartialContent)
+    install(AutoHeadResponse)
     install(StatusPages) {
         exception<UnauthenticatedException> { call, cause ->
             call.respondText(cause.message, status = HttpStatusCode.Unauthorized)
@@ -169,7 +196,10 @@ fun Application.module() {
     }
 
     routing {
-        get("/") {
+        // V0.7.3: was the placeholder `get("/") { respondText(Greeting.message()) }` -- relocated
+        // rather than dropped, since ApplicationTest already exercised it as a basic
+        // server-is-alive smoke check. "/" itself is now the SPA shell, served by staticFiles below.
+        get("/api/ping") {
             call.respondText(Greeting.message())
         }
         registerDocumentRoutes(documentStorageRoot)
@@ -178,5 +208,9 @@ fun Application.module() {
         registerBackupRoutes(DatabaseConfig.connect(), documentStorageRoot)
         registerAuthRoutes(loginRateLimiter, cookieSecure, passwordResetRateLimiter, passwordResetMailer)
         getAllServiceManagers().forEach { applyRoutes(it) }
+        // Registered last: literal routes above (/api/..., RPC service paths) always win over this
+        // catch-all in Ktor's routing trie regardless of registration order, but keeping it last
+        // documents the intent -- this is the fallback for everything not already handled above.
+        staticFiles("/", clientDistRoot)
     }
 }

@@ -58,6 +58,15 @@ dependencies {
     // V0.7.1 Authentifizierung — see PasswordHasher KDoc for why bcrypt over Argon2id.
     implementation(libs.bcrypt)
 
+    // Pre-existing gap found+fixed during V0.7.3 review round 1: h2 was testImplementation-only,
+    // so `DatabaseConfig`'s own documented "LAPIS_DB_URL unset -> in-memory H2, zero external
+    // setup" default was actually unusable via `./gradlew :lapis-server:run` (H2 driver missing
+    // from the runtime classpath -- ClassNotFoundException: org.h2.Driver). runtimeOnly (not
+    // implementation) keeps it out of the compile classpath, matching the "test/dev convenience
+    // only" posture the KDoc already describes; production deployments still select the real
+    // `postgresql` driver via `LAPIS_DB_URL`.
+    runtimeOnly(libs.h2)
+
     testImplementation(libs.ktor.server.test.host)
     testImplementation(libs.kotest.runner.junit5)
     testImplementation(libs.kotest.assertions.core)
