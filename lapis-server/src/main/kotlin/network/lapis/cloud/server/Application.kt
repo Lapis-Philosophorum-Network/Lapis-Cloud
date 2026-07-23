@@ -19,6 +19,7 @@ import network.lapis.cloud.server.db.DatabaseConfig
 import network.lapis.cloud.server.db.DevSeedData
 import network.lapis.cloud.server.economy.oracle.PriceOracleOrchestrator
 import network.lapis.cloud.server.economy.oracle.defaultBitcoinOracleSources
+import network.lapis.cloud.server.mail.NoOpPasswordResetMailer
 import network.lapis.cloud.server.postal.LetterxpressPostalMailProvider
 import network.lapis.cloud.server.routes.registerAuthRoutes
 import network.lapis.cloud.server.routes.registerBackupRoutes
@@ -48,6 +49,7 @@ import network.lapis.cloud.server.rpc.PingService
 import network.lapis.cloud.server.rpc.PoliticianService
 import network.lapis.cloud.server.rpc.PostalMailService
 import network.lapis.cloud.server.rpc.PriceOracleService
+import network.lapis.cloud.server.rpc.RegistrationService
 import network.lapis.cloud.server.rpc.SystemicConsensusService
 import network.lapis.cloud.server.security.ForbiddenException
 import network.lapis.cloud.server.security.LoginRateLimiter
@@ -76,6 +78,7 @@ import network.lapis.cloud.shared.rpc.IPingService
 import network.lapis.cloud.shared.rpc.IPoliticianService
 import network.lapis.cloud.shared.rpc.IPostalMailService
 import network.lapis.cloud.shared.rpc.IPriceOracleService
+import network.lapis.cloud.shared.rpc.IRegistrationService
 import network.lapis.cloud.shared.rpc.ISystemicConsensusService
 import java.io.File
 
@@ -114,6 +117,14 @@ fun Application.module() {
     // "Cookie transport".
     val loginRateLimiter = LoginRateLimiter()
     val cookieSecure = System.getenv("LAPIS_COOKIE_SECURE")?.equals("false", ignoreCase = true) != true
+
+    // V0.7.2 Beitritts-/Registrierungs-Workflow -- constructed once here, same lifecycle as
+    // loginRateLimiter above. passwordResetMailer is the honest, disclosed non-delivery stub (see
+    // NoOpPasswordResetMailer KDoc) -- a real SMTP-backed implementation can later replace it here
+    // without touching AuthRoutes' call site.
+    val registrationRateLimiter = LoginRateLimiter()
+    val passwordResetRateLimiter = LoginRateLimiter()
+    val passwordResetMailer = NoOpPasswordResetMailer()
 
     install(CallLogging)
     install(Compression)
@@ -154,6 +165,7 @@ fun Application.module() {
         registerService(IPoliticianService::class) { call -> PoliticianService(call) }
         registerService(IAuctionService::class) { call -> AuctionService(call) }
         registerService(IAuthService::class) { call -> AuthService(call) }
+        registerService(IRegistrationService::class) { call -> RegistrationService(call, registrationRateLimiter) }
     }
 
     routing {
@@ -164,7 +176,7 @@ fun Application.module() {
         registerDsgvoRoutes()
         registerMailmergeRoutes(documentStorageRoot)
         registerBackupRoutes(DatabaseConfig.connect(), documentStorageRoot)
-        registerAuthRoutes(loginRateLimiter, cookieSecure)
+        registerAuthRoutes(loginRateLimiter, cookieSecure, passwordResetRateLimiter, passwordResetMailer)
         getAllServiceManagers().forEach { applyRoutes(it) }
     }
 }

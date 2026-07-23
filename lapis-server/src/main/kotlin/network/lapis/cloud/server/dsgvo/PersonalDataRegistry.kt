@@ -40,6 +40,7 @@ object PersonalDataRegistry {
             PoliticianPersonalData,
             AuctionPersonalData,
             SessionPersonalData,
+            RegistrationPersonalData,
         )
 
     /**

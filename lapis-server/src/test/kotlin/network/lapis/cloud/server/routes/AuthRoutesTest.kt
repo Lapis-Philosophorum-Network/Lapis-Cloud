@@ -12,25 +12,41 @@ import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
+import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.call
+import io.ktor.server.application.install
+import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
 import io.ktor.server.routing.routing
 import io.ktor.server.testing.testApplication
 import kotlinx.datetime.LocalDate
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.toLocalDateTime
 import network.lapis.cloud.server.db.DatabaseConfig
 import network.lapis.cloud.server.db.DevSeedData
 import network.lapis.cloud.server.db.generated.AccountTable
 import network.lapis.cloud.server.db.generated.MemberTable
+import network.lapis.cloud.server.db.generated.PasswordResetTokenTable
 import network.lapis.cloud.server.db.generated.SessionTable
+import network.lapis.cloud.server.mail.PasswordResetMailer
 import network.lapis.cloud.server.module
+import network.lapis.cloud.server.security.LoginRateLimiter
+import network.lapis.cloud.server.security.PasswordHasher
+import network.lapis.cloud.server.security.SessionStore
+import network.lapis.cloud.server.security.SessionTokens
 import network.lapis.cloud.server.security.resolveCurrentMember
 import network.lapis.cloud.shared.domain.AccountRole
+import network.lapis.cloud.shared.domain.DeliveryStatus
 import network.lapis.cloud.shared.domain.MemberStatus
+import org.jetbrains.exposed.v1.core.eq
 import org.jetbrains.exposed.v1.core.inList
 import org.jetbrains.exposed.v1.jdbc.deleteWhere
 import org.jetbrains.exposed.v1.jdbc.insert
 import org.jetbrains.exposed.v1.jdbc.transactions.transaction
+import org.jetbrains.exposed.v1.jdbc.update
+import kotlin.time.Clock
+import kotlin.time.Duration.Companion.hours
 import kotlin.uuid.Uuid
 
 private const val ADMIN_EMAIL = "amara.admin@example.org"
@@ -68,6 +84,32 @@ class AuthRoutesTest :
                     it[memberId] = id
                     it[role] = AccountRole.MEMBER
                     // passwordHash left unset -- nullable, models a seeded-but-never-logged-in account.
+                }
+            }
+            createdMemberIds += id
+            return id
+        }
+
+        fun createTestMemberWithPassword(
+            email: String,
+            password: String,
+            status: MemberStatus = MemberStatus.AKTIV,
+        ): Uuid {
+            val id = Uuid.random()
+            transaction {
+                MemberTable.insert {
+                    it[MemberTable.id] = id
+                    it[displayName] = "Auth-Routes Testmitglied mit Passwort"
+                    it[MemberTable.email] = email
+                    it[MemberTable.status] = status
+                    it[joinedAt] = LocalDate(2026, 1, 1)
+                    it[membershipTierId] = null
+                }
+                AccountTable.insert {
+                    it[AccountTable.id] = Uuid.random()
+                    it[memberId] = id
+                    it[role] = AccountRole.MEMBER
+                    it[passwordHash] = PasswordHasher.hash(password)
                 }
             }
             createdMemberIds += id
@@ -254,12 +296,254 @@ class AuthRoutesTest :
                 issuedToken shouldNotBe "attacker-chosen-fixed-token"
             }
         }
+
+        // ── V0.7.2 login gate ────────────────────────────────────────────────────────────
+
+        test(
+            "login against an AUSGETRETEN account with the correct password is rejected with the SAME generic message as a wrong password",
+        ) {
+            testApplication {
+                application { module() }
+
+                val email = "auth-routes-ausgetreten@example.org"
+                val password = "a-genuinely-strong-password-1"
+                createTestMemberWithPassword(email, password, status = MemberStatus.AUSGETRETEN)
+
+                val response = client.post("/api/auth/login") { setBody("""{"email":"$email","password":"$password"}""") }
+                response.status shouldBe HttpStatusCode.Unauthorized
+                response.bodyAsText() shouldBe "Invalid credentials"
+            }
+        }
+
+        test("login against an ABGELEHNT account with the correct password is rejected with the SAME generic message as a wrong password") {
+            testApplication {
+                application { module() }
+
+                val email = "auth-routes-abgelehnt@example.org"
+                val password = "a-genuinely-strong-password-1"
+                createTestMemberWithPassword(email, password, status = MemberStatus.ABGELEHNT)
+
+                val response = client.post("/api/auth/login") { setBody("""{"email":"$email","password":"$password"}""") }
+                response.status shouldBe HttpStatusCode.Unauthorized
+                response.bodyAsText() shouldBe "Invalid credentials"
+            }
+        }
+
+        test("login against a still-ANTRAG account with the correct password still succeeds -- only AUSGETRETEN/ABGELEHNT are blocked") {
+            testApplication {
+                application { module() }
+
+                val email = "auth-routes-antrag@example.org"
+                val password = "a-genuinely-strong-password-1"
+                createTestMemberWithPassword(email, password, status = MemberStatus.ANTRAG)
+
+                val response = client.post("/api/auth/login") { setBody("""{"email":"$email","password":"$password"}""") }
+                response.status shouldBe HttpStatusCode.OK
+            }
+        }
+
+        // ── V0.7.2 password reset ───────────────────────────────────────────────────────
+
+        test("password-reset/request: an existing and a non-existent email get the IDENTICAL response (account-enumeration hardening)") {
+            testApplication {
+                val mailer = CapturingPasswordResetMailer()
+                application { routing { registerAuthRoutes(LoginRateLimiter(), true, LoginRateLimiter(), mailer) } }
+
+                val email = "auth-routes-reset-existing@example.org"
+                createTestMemberWithPassword(email, "a-genuinely-strong-password-1")
+
+                val existingResponse = client.post("/api/auth/password-reset/request") { setBody("""{"email":"$email"}""") }
+                val unknownResponse =
+                    client.post("/api/auth/password-reset/request") { setBody("""{"email":"no-such-account@example.org"}""") }
+
+                existingResponse.status shouldBe unknownResponse.status
+                existingResponse.bodyAsText() shouldBe unknownResponse.bodyAsText()
+
+                // Only the EXISTING email actually triggers a (simulated) send.
+                mailer.lastEmail shouldBe email
+            }
+        }
+
+        test("password-reset/request: repeated requests eventually trip the rate limiter") {
+            testApplication {
+                val mailer = CapturingPasswordResetMailer()
+                application { routing { registerAuthRoutes(LoginRateLimiter(), true, LoginRateLimiter(), mailer) } }
+
+                val statuses =
+                    (1..10).map {
+                        client
+                            .post("/api/auth/password-reset/request") {
+                                setBody("""{"email":"auth-routes-reset-rate-limit@example.org"}""")
+                            }.status
+                    }
+                statuses shouldContain HttpStatusCode.TooManyRequests
+            }
+        }
+
+        test(
+            "password-reset/confirm: happy path -- new password works for login, old password is rejected, every prior session is revoked",
+        ) {
+            testApplication {
+                val mailer = CapturingPasswordResetMailer()
+                application {
+                    // The success path of /api/auth/login responds with a typed LoginResponse,
+                    // which needs a ContentNegotiation converter to serialize -- module() normally
+                    // provides this via initRpc's own internal install (see Application.kt KDoc);
+                    // this test mounts registerAuthRoutes directly (to inject a capturing mailer),
+                    // so it must install the same JSON converter itself.
+                    install(ContentNegotiation) { json() }
+                    routing { registerAuthRoutes(LoginRateLimiter(), true, LoginRateLimiter(), mailer) }
+                }
+
+                val email = "auth-routes-reset-confirm@example.org"
+                val oldPassword = "the-original-strong-password-1"
+                val newPassword = "a-brand-new-strong-password-2"
+                val memberId = createTestMemberWithPassword(email, oldPassword)
+                val priorSession = SessionStore.createSession(memberId)
+
+                client.post("/api/auth/password-reset/request") { setBody("""{"email":"$email"}""") }
+                val rawToken = requireNotNull(mailer.lastRawToken)
+
+                val confirmResponse =
+                    client.post("/api/auth/password-reset/confirm") {
+                        setBody("""{"token":"$rawToken","newPassword":"$newPassword"}""")
+                    }
+                confirmResponse.status shouldBe HttpStatusCode.NoContent
+
+                val newLogin = client.post("/api/auth/login") { setBody("""{"email":"$email","password":"$newPassword"}""") }
+                newLogin.status shouldBe HttpStatusCode.OK
+                val oldLogin = client.post("/api/auth/login") { setBody("""{"email":"$email","password":"$oldPassword"}""") }
+                oldLogin.status shouldBe HttpStatusCode.Unauthorized
+
+                SessionStore.resolve(priorSession.rawToken) shouldBe null
+            }
+        }
+
+        test("password-reset/confirm: an already-consumed token is rejected (single-use, tamper/replay test)") {
+            testApplication {
+                val mailer = CapturingPasswordResetMailer()
+                application { routing { registerAuthRoutes(LoginRateLimiter(), true, LoginRateLimiter(), mailer) } }
+
+                val email = "auth-routes-reset-replay@example.org"
+                createTestMemberWithPassword(email, "the-original-strong-password-1")
+                client.post("/api/auth/password-reset/request") { setBody("""{"email":"$email"}""") }
+                val rawToken = requireNotNull(mailer.lastRawToken)
+
+                val first =
+                    client.post("/api/auth/password-reset/confirm") {
+                        setBody("""{"token":"$rawToken","newPassword":"a-brand-new-strong-password-2"}""")
+                    }
+                first.status shouldBe HttpStatusCode.NoContent
+
+                val replay =
+                    client.post("/api/auth/password-reset/confirm") {
+                        setBody("""{"token":"$rawToken","newPassword":"yet-another-strong-password-3"}""")
+                    }
+                replay.status shouldBe HttpStatusCode.BadRequest
+            }
+        }
+
+        test("password-reset/confirm: an expired token is rejected") {
+            testApplication {
+                val mailer = CapturingPasswordResetMailer()
+                application { routing { registerAuthRoutes(LoginRateLimiter(), true, LoginRateLimiter(), mailer) } }
+
+                val email = "auth-routes-reset-expired@example.org"
+                createTestMemberWithPassword(email, "the-original-strong-password-1")
+                client.post("/api/auth/password-reset/request") { setBody("""{"email":"$email"}""") }
+                val rawToken = requireNotNull(mailer.lastRawToken)
+
+                // Directly age the token past its expiry -- same manipulation-of-persisted-state
+                // idiom SessionStoreTest's own purgeExpired test uses.
+                val nowMinusHour = (Clock.System.now() - 1.hours).toLocalDateTime(TimeZone.UTC)
+                transaction {
+                    PasswordResetTokenTable.update({
+                        PasswordResetTokenTable.tokenHash eq SessionTokens.hash(rawToken)
+                    }) {
+                        it[expiresAt] = nowMinusHour
+                    }
+                }
+
+                val response =
+                    client.post("/api/auth/password-reset/confirm") {
+                        setBody("""{"token":"$rawToken","newPassword":"a-brand-new-strong-password-2"}""")
+                    }
+                response.status shouldBe HttpStatusCode.BadRequest
+            }
+        }
+
+        test("password-reset/confirm: an unknown token is rejected, never a 500") {
+            testApplication {
+                val mailer = CapturingPasswordResetMailer()
+                application { routing { registerAuthRoutes(LoginRateLimiter(), true, LoginRateLimiter(), mailer) } }
+
+                val response =
+                    client.post("/api/auth/password-reset/confirm") {
+                        setBody("""{"token":"this-token-was-never-issued","newPassword":"a-brand-new-strong-password-2"}""")
+                    }
+                response.status shouldBe HttpStatusCode.BadRequest
+            }
+        }
+
+        test(
+            "password-reset/confirm: a weak newPassword is rejected by PasswordPolicy WITHOUT burning the token -- " +
+                "the same token can be retried afterward with a strong password",
+        ) {
+            testApplication {
+                val mailer = CapturingPasswordResetMailer()
+                application { routing { registerAuthRoutes(LoginRateLimiter(), true, LoginRateLimiter(), mailer) } }
+
+                val email = "auth-routes-reset-weak@example.org"
+                createTestMemberWithPassword(email, "the-original-strong-password-1")
+                client.post("/api/auth/password-reset/request") { setBody("""{"email":"$email"}""") }
+                val rawToken = requireNotNull(mailer.lastRawToken)
+
+                val weakAttempt =
+                    client.post("/api/auth/password-reset/confirm") {
+                        setBody("""{"token":"$rawToken","newPassword":"short"}""")
+                    }
+                weakAttempt.status shouldBe HttpStatusCode.BadRequest
+
+                // The token must still be alive -- a rejected newPassword is a validation failure,
+                // not a reason to burn an otherwise-valid single-use token (see
+                // PasswordResetTokenStore.peekMemberId KDoc). Retrying the SAME token with a strong
+                // password now must succeed.
+                val strongRetry =
+                    client.post("/api/auth/password-reset/confirm") {
+                        setBody("""{"token":"$rawToken","newPassword":"a-brand-new-strong-password-2"}""")
+                    }
+                strongRetry.status shouldBe HttpStatusCode.NoContent
+
+                // NOW the token really is spent -- a second use of the same (already-consumed) token fails.
+                val thirdAttempt =
+                    client.post("/api/auth/password-reset/confirm") {
+                        setBody("""{"token":"$rawToken","newPassword":"yet-another-strong-password-3"}""")
+                    }
+                thirdAttempt.status shouldBe HttpStatusCode.BadRequest
+            }
+        }
     })
+
+/** Captures the last [send] call's arguments instead of only logging -- lets tests recover the raw, otherwise-never-persisted reset token, same role a real inbox would play. */
+private class CapturingPasswordResetMailer : PasswordResetMailer {
+    var lastEmail: String? = null
+    var lastRawToken: String? = null
+
+    override fun send(
+        email: String,
+        rawToken: String,
+    ): DeliveryStatus {
+        lastEmail = email
+        lastRawToken = rawToken
+        return DeliveryStatus.SENT
+    }
+}
 
 private fun cleanUpAuthRoutesTestData(memberIds: List<Uuid>) {
     if (memberIds.isEmpty()) return
     transaction {
         SessionTable.deleteWhere { SessionTable.memberId inList memberIds }
+        PasswordResetTokenTable.deleteWhere { PasswordResetTokenTable.memberId inList memberIds }
         AccountTable.deleteWhere { AccountTable.memberId inList memberIds }
         MemberTable.deleteWhere { MemberTable.id inList memberIds }
     }

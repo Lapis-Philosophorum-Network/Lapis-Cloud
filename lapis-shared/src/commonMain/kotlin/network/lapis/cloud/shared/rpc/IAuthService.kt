@@ -15,13 +15,22 @@ import network.lapis.cloud.shared.domain.SessionInfoDto
  * establish for their own domains -- here the differentiator is authentication *order*, not
  * payload size.
  *
- * **Scope-cuts (V0.7.1, see `22-session.kuml.kts` file header)**: no "forgot password" email flow
- * (deferred to V0.7.2, which already needs outbound-email infrastructure for the
- * Beitritts-/Registrierungs-Workflow); no admin-reset-another-member's-password endpoint (deferred
- * likewise); no OIDC login (V0.8 Federation -- `account.oidc_subject` stays reserved/unused, but
- * [changePassword]'s credential-verification/session-issuance split is deliberately kept separate
- * so an OIDC path can later mint sessions via the same [network.lapis.cloud.server.security.SessionStore],
- * without this wave needing to build that out now).
+ * **Scope-cuts (V0.7.1, see `22-session.kuml.kts` file header)**: no OIDC login (V0.8 Federation --
+ * `account.oidc_subject` stays reserved/unused, but [changePassword]'s
+ * credential-verification/session-issuance split is deliberately kept separate so an OIDC path
+ * can later mint sessions via the same [network.lapis.cloud.server.security.SessionStore], without
+ * this wave needing to build that out now).
+ *
+ * **V0.7.2 delivered** (both were flagged as deferred here, and turned out NOT to need outbound
+ * email infrastructure after all -- see `network.lapis.cloud.server.mail.PasswordResetMailer`
+ * KDoc for why): the "forgot password" flow now lives as a dedicated HTTP route pair
+ * (`/api/auth/password-reset/request`/`/api/auth/password-reset/confirm`, see
+ * `network.lapis.cloud.server.routes.registerAuthRoutes`), for the exact same "reachable before
+ * any session exists" reason login/logout do. Admin-created accounts (an admin-set temporary
+ * password, not a reset flow) are covered by
+ * `network.lapis.cloud.shared.rpc.IRegistrationService.createMemberDirect` -- still no dedicated
+ * "admin resets an EXISTING member's forgotten password" endpoint; that member can always use the
+ * self-service password-reset route instead.
  */
 @RpcService
 interface IAuthService {

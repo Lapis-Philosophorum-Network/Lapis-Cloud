@@ -8,6 +8,7 @@ import network.lapis.cloud.server.security.ForbiddenException
 import network.lapis.cloud.server.security.isPrivileged
 import network.lapis.cloud.server.security.resolveCurrentMember
 import network.lapis.cloud.shared.domain.MemberDto
+import network.lapis.cloud.shared.domain.MemberStatus
 import network.lapis.cloud.shared.domain.MemberSummaryDto
 import network.lapis.cloud.shared.rpc.IMemberService
 import org.jetbrains.exposed.v1.core.ResultRow
@@ -24,10 +25,18 @@ class MemberService(
     // Deliberately unauthenticated (bootstrap for the "current member" picker before an
     // X-Member-Id is chosen — see IMemberService KDoc). Only id + displayName are selected,
     // so email and role (PII / authorization-relevant) never leave the server for this call.
+    //
+    // V0.7.2: tightened to AKTIV only -- was previously unfiltered (every member regardless of
+    // status). Once self-registration (IRegistrationService.registerApplication) starts producing
+    // real ANTRAG/ABGELEHNT/AUSGETRETEN rows, an unfiltered picker would list a not-yet-approved
+    // applicant's, a rejected applicant's, or a departed former member's display name to an
+    // UNAUTHENTICATED caller -- actively wrong for a login-picker, and for a political party, a
+    // real exposure (listing who applied/was rejected/left to anyone, no login required).
     override suspend fun listMembers(): List<MemberSummaryDto> =
         transaction {
             MemberTable
                 .select(MemberTable.id, MemberTable.displayName)
+                .where { MemberTable.status eq MemberStatus.AKTIV }
                 .map {
                     MemberSummaryDto(
                         id = it[MemberTable.id].toString(),
@@ -112,4 +121,7 @@ fun ResultRow.toMemberDto(): MemberDto =
         country = this[MemberTable.country],
         dateOfBirth = this[MemberTable.dateOfBirth],
         nationality = this[MemberTable.nationality],
+        reviewedById = this[MemberTable.reviewedBy]?.toString(),
+        reviewedAt = this[MemberTable.reviewedAt],
+        rejectionReason = this[MemberTable.rejectionReason],
     )

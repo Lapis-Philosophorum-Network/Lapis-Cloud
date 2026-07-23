@@ -109,7 +109,13 @@ CREATE TABLE member (
     date_of_birth DATE NULL,
     nationality VARCHAR(100) NULL,
     membership_tier_id UUID NULL,
-    CHECK (status IN ('ANTRAG', 'AKTIV', 'GAST', 'AUSGETRETEN'))
+    -- V0.7.2 Beitritts-Workflow board-decision metadata. reviewed_by is genuinely
+    -- self-referential (member -> member) -- deliberately no FK constraint, same treatment
+    -- document_folder.parent_folder_id already gets (see 02-document.kuml.kts file header).
+    reviewed_by UUID NULL,
+    reviewed_at TIMESTAMP NULL,
+    rejection_reason VARCHAR(1000) NULL,
+    CHECK (status IN ('ANTRAG', 'AKTIV', 'GAST', 'AUSGETRETEN', 'ABGELEHNT'))
 );
 
 CREATE TABLE account (
@@ -920,6 +926,32 @@ CREATE TABLE session (
     revoked_at TIMESTAMP NULL
 );
 
+-- V0.7.2 Beitritts-/Registrierungs-Workflow -- see 23-registration.kuml.kts file header for the
+-- full model. membership_agreement_acknowledgment is the append-only proof that a registrant
+-- echoed back the current, versioned+hashed Beitrittsvertrag/Satzungs-text (same three-column
+-- shape as auction_compliance_acknowledgment, plus member_id since the acknowledger IS the new
+-- applicant here).
+CREATE TABLE membership_agreement_acknowledgment (
+    id UUID NOT NULL PRIMARY KEY,
+    member_id UUID NOT NULL,
+    acknowledged_at TIMESTAMP NOT NULL,
+    agreement_version VARCHAR(50) NOT NULL,
+    agreement_sha256 VARCHAR(64) NOT NULL
+);
+
+-- password_reset_token -- single-use, short-TTL, hash-only-persisted reset token. Only
+-- token_hash is ever stored (SHA-256, reusing network.lapis.cloud.server.security.SessionTokens
+-- unchanged), never the raw bearer-usable token -- same discipline `session.token_hash` already
+-- establishes. consumed_at is nullable (null until consumed exactly once).
+CREATE TABLE password_reset_token (
+    id UUID NOT NULL PRIMARY KEY,
+    member_id UUID NOT NULL,
+    token_hash VARCHAR(64) NOT NULL,
+    created_at TIMESTAMP NOT NULL,
+    expires_at TIMESTAMP NOT NULL,
+    consumed_at TIMESTAMP NULL
+);
+
 -- Foreign Keys
 
 ALTER TABLE member ADD CONSTRAINT fk_member_membership_tier_id FOREIGN KEY (membership_tier_id) REFERENCES membership_tier(id);
@@ -1056,6 +1088,8 @@ ALTER TABLE auction_bid ADD CONSTRAINT fk_auction_bid_auction_id FOREIGN KEY (au
 ALTER TABLE auction_bid ADD CONSTRAINT fk_auction_bid_bidder_member_id FOREIGN KEY (bidder_member_id) REFERENCES member(id);
 ALTER TABLE auction_compliance_acknowledgment ADD CONSTRAINT fk_auction_compliance_acknowledgment_acknowledged_by_member_id FOREIGN KEY (acknowledged_by_member_id) REFERENCES member(id);
 ALTER TABLE session ADD CONSTRAINT fk_session_member_id FOREIGN KEY (member_id) REFERENCES member(id);
+ALTER TABLE membership_agreement_acknowledgment ADD CONSTRAINT fk_membership_agreement_acknowledgment_member_id FOREIGN KEY (member_id) REFERENCES member(id);
+ALTER TABLE password_reset_token ADD CONSTRAINT fk_password_reset_token_member_id FOREIGN KEY (member_id) REFERENCES member(id);
 
 -- Indexes
 
@@ -1167,6 +1201,10 @@ CREATE INDEX idx_auction_compliance_ack_at ON auction_compliance_acknowledgment 
 CREATE UNIQUE INDEX uq_session_token_hash ON session (token_hash);
 CREATE INDEX idx_session_member_id ON session (member_id);
 CREATE INDEX idx_session_expires_at ON session (expires_at);
+CREATE INDEX idx_membership_agreement_acknowledgment_member ON membership_agreement_acknowledgment (member_id);
+CREATE UNIQUE INDEX uq_password_reset_token_token_hash ON password_reset_token (token_hash);
+CREATE INDEX idx_password_reset_token_member ON password_reset_token (member_id);
+CREATE INDEX idx_password_reset_token_expires_at ON password_reset_token (expires_at);
 
 CREATE INDEX idx_price_oracle_conversion_member ON price_oracle_conversion (member_id);
 

@@ -26,6 +26,14 @@ public object MemberTable : Table("member") {
     public val nationality: Column<String?> = varchar("nationality", 100).nullable()
     public val membershipTierId: Column<Uuid?> = optReference("membership_tier_id", MembershipTierTable.id)
 
+    // V0.7.2 Beitritts-Workflow board-decision metadata. reviewedBy is genuinely self-referential
+    // (member -> member) -- NO .references() here, same treatment DocumentFolderTable.parentFolderId
+    // already establishes for its own self-referential column (see 02-document.kuml.kts file
+    // header "self/circular-reference cases").
+    public val reviewedBy: Column<Uuid?> = uuid("reviewed_by").nullable()
+    public val reviewedAt: Column<LocalDateTime?> = datetime("reviewed_at").nullable()
+    public val rejectionReason: Column<String?> = varchar("rejection_reason", 1000).nullable()
+
     override val primaryKey: PrimaryKey = PrimaryKey(id)
 
     // Note: 1 check constraint(s) declared on this entity are not

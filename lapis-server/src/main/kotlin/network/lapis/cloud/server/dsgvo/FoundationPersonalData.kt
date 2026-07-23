@@ -22,6 +22,14 @@ import kotlin.uuid.Uuid
  * [ContributionPersonalData]) keep a foreign key to it — the row must survive as an FK anchor.
  * [AccountTable] has no retention duty of its own and is always hard-deleted regardless of
  * [ErasureMode]: that is the step that actually severs the member's ability to log in.
+ *
+ * **V0.7.2**: `reviewedBy`/`reviewedAt`/`rejectionReason` (the board's own admission-decision
+ * metadata) are exported/nulled-out alongside the other V0.4.1/V0.5.2 PII fields when THIS member
+ * is erased -- same treatment as street/postalCode/dateOfBirth. Deliberately NOT touched here when
+ * this member appears as `reviewedBy` on a DIFFERENT member's row (i.e. erasing board member A
+ * does not scrub A's id off every application A ever decided) -- same "don't scrub a third
+ * party's accountability trail out of an unrelated erasure" reasoning
+ * [AuditLogPersonalData] already establishes for its own domain.
  */
 object FoundationPersonalData : PersonalDataContributor {
     override val sectionKey = "foundation"
@@ -45,6 +53,11 @@ object FoundationPersonalData : PersonalDataContributor {
             // V0.4.1 postal address.
             put("dateOfBirth", memberRow[MemberTable.dateOfBirth]?.toString())
             put("nationality", memberRow[MemberTable.nationality])
+            // V0.7.2 Beitritts-Workflow board-decision metadata -- PII (who decided, when, why),
+            // exported alongside the other member fields above.
+            put("reviewedBy", memberRow[MemberTable.reviewedBy]?.toString())
+            put("reviewedAt", memberRow[MemberTable.reviewedAt]?.toString())
+            put("rejectionReason", memberRow[MemberTable.rejectionReason])
 
             val accountRow = AccountTable.selectAll().where { AccountTable.memberId eq memberId }.singleOrNull()
             if (accountRow != null) {
@@ -73,6 +86,13 @@ object FoundationPersonalData : PersonalDataContributor {
                 // V0.5.2 Transparenzregister beneficial-owner fields -- PII, nulled out the same way.
                 it[dateOfBirth] = null
                 it[nationality] = null
+                // V0.7.2 Beitritts-Workflow board-decision metadata -- PII, nulled out the same
+                // way. Only THIS member's own reviewedBy/reviewedAt/rejectionReason -- see class
+                // KDoc for why a different member's reviewedBy pointing AT this member is
+                // deliberately left untouched.
+                it[reviewedBy] = null
+                it[reviewedAt] = null
+                it[rejectionReason] = null
             }
         val accountsDeleted = AccountTable.deleteWhere { AccountTable.memberId eq memberId }
         return listOf(

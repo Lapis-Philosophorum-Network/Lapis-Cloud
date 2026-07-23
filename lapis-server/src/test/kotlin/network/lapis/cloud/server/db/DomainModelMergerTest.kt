@@ -35,14 +35,14 @@ class DomainModelMergerTest :
         // ── Test 1: merging the real 22 domain scripts ───────────────────────────────────
 
         test(
-            "merging the real 23 domain scripts succeeds and the uml-to-erm -> erm-to-exposed chain " +
+            "merging the real 24 domain scripts succeeds and the uml-to-erm -> erm-to-exposed chain " +
                 "produces exactly one Table file per distinct table name",
         ) {
             val scriptFiles =
                 requireNotNull(KumlModelLoader.kumlSourceDir.listFiles { f -> f.name.endsWith(".kuml.kts") }) {
                     "kUML source dir not found or not a directory: ${KumlModelLoader.kumlSourceDir.absolutePath}"
                 }.sortedBy { it.name }
-            scriptFiles shouldHaveSize 23
+            scriptFiles shouldHaveSize 24
 
             val diagrams = scriptFiles.map { KumlModelLoader.loadUmlDiagram(it) }
 
@@ -140,7 +140,13 @@ class DomainModelMergerTest :
             // it) -- so it contributes +2 «Entity» declarations (the stub + the one real table) and
             // +1 drop (the stub merges into the already-existing member entity) versus the V0.6.2
             // baseline above (69 -> 70).
-            val distinctTableNames = 70
+            // 23-registration.kuml.kts (V0.7.2 Beitritts-/Registrierungs-Workflow) adds exactly two
+            // more real tables (membership_agreement_acknowledgment, password_reset_token), WITH
+            // its own cross-domain Member stub (both tables' member_id resolve through it) -- so it
+            // contributes +3 «Entity» declarations (the stub + 2 real tables) and +1 drop (the stub
+            // merges into the already-existing member entity) versus the V0.7.1 baseline above
+            // (70 -> 72).
+            val distinctTableNames = 72
 
             val result =
                 UmlToExposedViaErmScriptTransformer().transform(
@@ -233,6 +239,8 @@ class DomainModelMergerTest :
                     "AuctionBidTable.kt",
                     "AuctionComplianceAcknowledgmentTable.kt",
                     "SessionTable.kt",
+                    "MembershipAgreementAcknowledgmentTable.kt",
+                    "PasswordResetTokenTable.kt",
                 )
         }
 

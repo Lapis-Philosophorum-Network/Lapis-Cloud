@@ -15,6 +15,17 @@
 // (see BeneficialOwnerDataGapDto in the Transparenzregister domain). Treated as PII exactly like
 // the V0.4.1 postal-address fields -- see FoundationPersonalData for export/erasure coverage.
 //
+// V0.7.2 Beitritts-/Registrierungs-Workflow: `member.status` gains the ABGELEHNT literal (a
+// board-rejected ANTRAG, retained with a reason -- never reused as AUSGETRETEN, see
+// network.lapis.cloud.shared.domain.MemberStatus KDoc), and `member` gains three nullable
+// board-decision-metadata columns (reviewedBy/reviewedAt/rejectionReason), same shape as
+// crowdfunding_project's own reviewedBy/reviewedAt/rejectionReason (17-crowdfunding.kuml.kts) --
+// except reviewedBy here is genuinely self-referential (member -> member), see that attribute's
+// own comment below for why it deliberately has NO fkEntity tag. The two genuinely NEW entities
+// this wave adds (membership_agreement_acknowledgment, password_reset_token) live in
+// 23-registration.kuml.kts, not here -- this file only extends the `member` entity/enum Foundation
+// already owns.
+//
 // This is the versioned source-of-truth *model* for the schema shape (ADR-0016), verified
 // against both the real Flyway-migrated H2 schema and the hand-written Exposed Table objects
 // (network.lapis.cloud.server.db.tables.FoundationTables.kt) by SchemaDriftTest. Per ADR-0016's
@@ -46,6 +57,11 @@ classDiagram(name = "Foundation") {
         literal(name = "AKTIV")
         literal(name = "GAST")
         literal(name = "AUSGETRETEN")
+        // V0.7.2 Beitritts-Workflow: a board-rejected ANTRAG lands here, retained with a
+        // rejectionReason -- never silently reused as AUSGETRETEN, which means something
+        // structurally different ("left after having been admitted"). See
+        // network.lapis.cloud.shared.domain.MemberStatus KDoc.
+        literal(name = "ABGELEHNT")
     }
 
     val accountRole = enumOf(name = "AccountRole") {
@@ -111,6 +127,31 @@ classDiagram(name = "Foundation") {
         attribute(name = "nationality", type = "String") {
             multiplicity = Multiplicity(0, 1)
             stereotype("Column") { "columnName" to "nationality"; "sqlType" to "VARCHAR(100)" }
+        }
+        // V0.7.2 Beitritts-Workflow board-decision metadata -- see network.lapis.cloud.server.rpc.
+        // RegistrationService KDoc. All three nullable: null until a board decision is made (or
+        // forever, for a member created directly via createMemberDirect / a still-ANTRAG applicant).
+        //
+        // reviewedBy is genuinely self-referential (member -> member) -- UmlToErmTransformer
+        // explicitly skips self-referential UML associations (same as document_folder.parent_folder_id,
+        // see 02-document.kuml.kts file header "self/circular-reference cases"), so this is a plain
+        // UUID «Column» attribute with NO fkEntity tag -- do NOT add fkEntity="Member" here (that
+        // would be the natural-looking but WRONG move: unlike crowdfunding_project.reviewed_by
+        // -- which references a DIFFERENT table, member, and correctly uses fkEntity="Member" --
+        // this reviewedBy is on member itself, so fkEntity="Member" here would attempt a
+        // self-referential FK, exactly the case UmlToErmTransformer/this codebase's own convention
+        // deliberately avoids).
+        attribute(name = "reviewedBy", type = "UUID") {
+            multiplicity = Multiplicity(0, 1)
+            stereotype("Column") { "columnName" to "reviewed_by" }
+        }
+        attribute(name = "reviewedAt", type = "LocalDateTime") {
+            multiplicity = Multiplicity(0, 1)
+            stereotype("Column") { "columnName" to "reviewed_at" }
+        }
+        attribute(name = "rejectionReason", type = "String") {
+            multiplicity = Multiplicity(0, 1)
+            stereotype("Column") { "columnName" to "rejection_reason"; "sqlType" to "VARCHAR(1000)" }
         }
     }
 

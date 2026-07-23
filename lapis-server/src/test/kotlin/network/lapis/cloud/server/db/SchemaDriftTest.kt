@@ -88,6 +88,27 @@ class SchemaDriftTest :
             }
         }
 
+        test("member.reviewed_by/reviewed_at/rejection_reason are nullable (V0.7.2 Beitritts-Workflow board decision)") {
+            val entity = model.entities.single { it.name == "member" }
+            val real = transaction { introspectTable("member") }
+
+            listOf("reviewed_by", "reviewed_at", "rejection_reason").forEach { column ->
+                withClue("column '$column'") {
+                    entity.attributeByName(column)?.nullable shouldBe true
+                    real.columns.getValue(column).nullable shouldBe true
+                }
+            }
+            // reviewed_by is genuinely self-referential (member -> member) -- deliberately NO real
+            // FK constraint anywhere (kUML, SQL, Exposed), same treatment
+            // document_folder.parent_folder_id already gets (see 02-document.kuml.kts file
+            // header). Regression guard: this must stay null, not silently gain a real FK later.
+            real.foreignKeys["reviewed_by"] shouldBe null
+            model.entities
+                .single { it.name == "member" }
+                .attributeByName("reviewed_by")
+                ?.foreignKey shouldBe null
+        }
+
         test("account table shape matches the real migrated schema") {
             val entity = model.entities.single { it.name == "account" }
             val real = transaction { introspectTable("account") }
@@ -143,7 +164,7 @@ class SchemaDriftTest :
             status?.type shouldBe
                 ErmDataType.Enum(
                     name = "MemberStatus",
-                    values = listOf("ANTRAG", "AKTIV", "GAST", "AUSGETRETEN"),
+                    values = listOf("ANTRAG", "AKTIV", "GAST", "AUSGETRETEN", "ABGELEHNT"),
                     externalFqName = "network.lapis.cloud.shared.domain.MemberStatus",
                 )
             role?.type shouldBe
