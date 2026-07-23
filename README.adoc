@@ -64,10 +64,8 @@ this repository. This README describes only the technical scope.
 
 == Status
 
-As of *V0.6.5*, six major waves are complete (see `CHANGELOG.md` for full detail; note the package
-version and git tags have not yet been bumped past `v0.5.1` — V0.6's sub-waves have so far shipped
-as feature commits, with the version/tag/release choreography apparently deferred until the V0.6
-LTR-economy arc is fully done):
+As of *V0.7.1* (tag `v0.7.0`), seven major waves are complete, one of them partially (see
+`CHANGELOG.md` for full detail):
 
 * **V0.1 — Project foundation & standard membership management**: Gradle multi-module structure,
   Ktor server, KVision client, Kilua RPC wiring, CI/CD, member master data, join/leave workflow,
@@ -87,33 +85,65 @@ LTR-economy arc is fully done):
   GwG Transparenzregister board-change reminders with a beneficial-owner data completeness report,
   a hash-chained GoBD audit log, full-organization backup/restore/export, and the DSGVO-Vollausbau
   (AVV register, TOM documentation, DPIA template, data-breach-incident workflow).
-* **V0.6 — LTR economy (in progress)**: a real, ledger-backed LTR balance (`LtrLedgerEntry`,
-  replacing the earlier balance stub), Internes Crowdfunding (member-submitted, board-reviewed
-  projects with a silence-is-approval clock, Like/Dislike-driven monthly EUR donation-pool
-  distribution), direct member-to-member LTR peer transfers (with a board/admin arbitration-
-  correction path), Politiker-Profile und Politiker-Ranking (member-only Like/Dislike trust
-  weighting of granted politician status, computed as a single shared LTR pool apportioned
-  proportionally across all active politicians), and a Price-Oracle for the anchor-asset peg with a
-  load-bearing donation → LTR conversion boundary. V0.6.2 (Auction) remains blocked on legal
-  review — the one remaining item of this wave's original scope.
+* **V0.6 — LTR economy (complete, tag `v0.6.0`)**: a real, ledger-backed LTR balance
+  (`LtrLedgerEntry`, replacing the earlier balance stub), Internes Crowdfunding (member-submitted,
+  board-reviewed projects with a silence-is-approval clock, Like/Dislike-driven monthly EUR
+  donation-pool distribution), an English proxy-bid LTR auction (disabled by default, requires an
+  ADMIN to acknowledge a versioned legal-risk disclaimer before enabling — see "Auction opt-in"
+  below), direct member-to-member LTR peer transfers (with a board/admin arbitration-correction
+  path), Politiker-Profile und Politiker-Ranking (member-only Like/Dislike trust weighting of
+  granted politician status, computed as a single shared LTR pool apportioned proportionally across
+  all active politicians), and a Price-Oracle for the anchor-asset peg with a load-bearing donation
+  → LTR conversion boundary.
+* **V0.7 — Authentication, membership & usable UI (in progress, tag `v0.7.0`)**: real password
+  login and server-side revocable sessions (bcrypt, `HttpOnly`+`Secure`+`SameSite=Strict` cookies),
+  replacing the `X-Member-Id` header stand-in every prior version ran on. The join/registration
+  workflow (V0.7.2) and a real multi-screen web UI beyond the existing four-service tech demo
+  (V0.7.3) are still open — see "What doesn't work yet" below.
 
 Every wave went through this project's mandatory plan → implement → independent review →
 independent security audit pipeline before merging. Known limitations (Letterxpress wire format
 and the oracle's price-source wire formats not verified against live docs, no Sammelbestätigung
 aggregation, no full GoBD tamper-evidence/TSE, no persistent oracle halt-queue, no guest/Gast
-rating basket, federation not yet built) are tracked in `CHANGELOG.md`. See
-link:docs/architecture/domain-model.adoc[domain model documentation] (covers the V0.1.5
+participants anywhere in the LTR economy, federation not yet built) are tracked in `CHANGELOG.md`.
+See link:docs/architecture/domain-model.adoc[domain model documentation] (covers the V0.1.5
 Contributions/Documents/Communication slice, the V0.3 accounting slices, the V0.4.1 mail-merge
-slice, and the V0.6.5 Price-Oracle slice — not yet updated for every wave in between, including
-V0.6.4) and `CLAUDE.md` for further detail.
+slice, and the V0.6.5 Price-Oracle slice — not updated for every wave since) and `CLAUDE.md` for
+further detail.
 
 CAUTION: The V0.6.4 guest/Gast rating basket cut (`PoliticianProfileDto` exposes
 `memberTrustWeight` only, not the concept's three-way Mitglieder-/Gäste-/Gesamtbewertung) is an
 *open product decision*, not an accepted final scope narrowing — it still needs an explicit
-accept/reject from the product owner. See `CHANGELOG.md` `[0.6.4]` "Known limitations" for the
+accept/reject from the product owner. See `CHANGELOG.md` `[0.6.0]` "Known limitations" for the
 full reasoning (no operational Gast identity/exit workflow exists anywhere in this codebase to
 source a guest basket from). This note is cross-referenced here, not just in the changelog, so it
-is not missed before this wave is considered fully closed.
+is not missed.
+
+=== Auction opt-in (V0.6.2)
+
+The legal classification of an LTR-for-goods marketplace (payment-services supervision, trade law,
+tax law, consumer protection, party-donation law, anti-money-laundering law) depends on
+jurisdiction and organization type — no single blanket legal review can resolve this for every
+future Lapis Cloud deployment. The auction ships **disabled by default**
+(`OrganizationSettings.auctionEnabled = false`); an ADMIN must call `enableAuction` with the
+SHA-256 hash of the currently displayed, versioned legal-risk disclaimer before it activates.
+Enabling it is an operational decision for each organization's own operator, informed by their own
+legal counsel — not something this project can decide once for everyone. See `CHANGELOG.md`
+`[0.6.0]` and the disclaimer text in `AuctionComplianceDisclaimer.kt` for detail.
+
+=== What doesn't work yet
+
+* **No join/registration workflow.** No `createMember`/`registerMember` RPC exists — members are
+  currently created only via `DevSeedData` (dev/test) or the `AdminBootstrap` CLI task (first admin
+  only). Planned for V0.7.2.
+* **No real multi-screen web UI.** `lapis-client` is a single-page, four-service tech demo dating
+  back to V0.1.5 (member switcher, Contributions/Documents/Mailing/Direct-Messages). Governance,
+  accounting, compliance, and the entire LTR economy have no UI yet — they are reachable only via
+  Kilua RPC / the HTTP routes. Planned for V0.7.3 (core domains) and later waves (the rest).
+* **Federation (multi-server operation) is not built** — planned for V0.8.
+
+None of this is a secret gap: it is exactly why this project is not yet deployed anywhere, despite
+the backend's depth. See the project vault's Lapis Cloud roadmap for the up-to-date wave plan.
 
 == Documentation Convention
 
