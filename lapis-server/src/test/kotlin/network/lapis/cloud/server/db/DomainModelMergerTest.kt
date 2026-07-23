@@ -35,14 +35,14 @@ class DomainModelMergerTest :
         // ── Test 1: merging the real 22 domain scripts ───────────────────────────────────
 
         test(
-            "merging the real 22 domain scripts succeeds and the uml-to-erm -> erm-to-exposed chain " +
+            "merging the real 23 domain scripts succeeds and the uml-to-erm -> erm-to-exposed chain " +
                 "produces exactly one Table file per distinct table name",
         ) {
             val scriptFiles =
                 requireNotNull(KumlModelLoader.kumlSourceDir.listFiles { f -> f.name.endsWith(".kuml.kts") }) {
                     "kUML source dir not found or not a directory: ${KumlModelLoader.kumlSourceDir.absolutePath}"
                 }.sortedBy { it.name }
-            scriptFiles shouldHaveSize 22
+            scriptFiles shouldHaveSize 23
 
             val diagrams = scriptFiles.map { KumlModelLoader.loadUmlDiagram(it) }
 
@@ -135,7 +135,12 @@ class DomainModelMergerTest :
             // resolve through it) -- so it contributes +4 «Entity» declarations (the stub + 3 real
             // tables) and +1 drop (the stub merges into the already-existing member entity) versus
             // the V0.6.4 baseline above (66 -> 69).
-            val distinctTableNames = 69
+            // 22-session.kuml.kts (V0.7.1 Authentifizierung) adds exactly one more real table
+            // (session), WITH its own cross-domain Member stub (session.member_id resolves through
+            // it) -- so it contributes +2 «Entity» declarations (the stub + the one real table) and
+            // +1 drop (the stub merges into the already-existing member entity) versus the V0.6.2
+            // baseline above (69 -> 70).
+            val distinctTableNames = 70
 
             val result =
                 UmlToExposedViaErmScriptTransformer().transform(
@@ -227,6 +232,7 @@ class DomainModelMergerTest :
                     "AuctionTable.kt",
                     "AuctionBidTable.kt",
                     "AuctionComplianceAcknowledgmentTable.kt",
+                    "SessionTable.kt",
                 )
         }
 

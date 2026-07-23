@@ -39,6 +39,7 @@ object PersonalDataRegistry {
             PriceOraclePersonalData,
             PoliticianPersonalData,
             AuctionPersonalData,
+            SessionPersonalData,
         )
 
     /**

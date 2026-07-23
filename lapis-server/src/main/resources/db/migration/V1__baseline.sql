@@ -906,6 +906,20 @@ CREATE TABLE auction_compliance_acknowledgment (
     disclaimer_sha256 VARCHAR(64) NOT NULL
 );
 
+-- V0.7.1 Authentifizierung: server-side, DB-persisted, revocable session store -- see
+-- 22-session.kuml.kts file header and network.lapis.cloud.server.security.SessionStore KDoc for
+-- the full model and the "session vs. stateless JWT" rationale. Only a hash of the raw bearer
+-- token is ever stored (token_hash); last_used_at/revoked_at are both nullable (see file header).
+CREATE TABLE session (
+    id UUID NOT NULL PRIMARY KEY,
+    token_hash VARCHAR(64) NOT NULL,
+    member_id UUID NOT NULL,
+    created_at TIMESTAMP NOT NULL,
+    expires_at TIMESTAMP NOT NULL,
+    last_used_at TIMESTAMP NULL,
+    revoked_at TIMESTAMP NULL
+);
+
 -- Foreign Keys
 
 ALTER TABLE member ADD CONSTRAINT fk_member_membership_tier_id FOREIGN KEY (membership_tier_id) REFERENCES membership_tier(id);
@@ -1041,6 +1055,7 @@ ALTER TABLE auction ADD CONSTRAINT fk_auction_winner_member_id FOREIGN KEY (winn
 ALTER TABLE auction_bid ADD CONSTRAINT fk_auction_bid_auction_id FOREIGN KEY (auction_id) REFERENCES auction(id);
 ALTER TABLE auction_bid ADD CONSTRAINT fk_auction_bid_bidder_member_id FOREIGN KEY (bidder_member_id) REFERENCES member(id);
 ALTER TABLE auction_compliance_acknowledgment ADD CONSTRAINT fk_auction_compliance_acknowledgment_acknowledged_by_member_id FOREIGN KEY (acknowledged_by_member_id) REFERENCES member(id);
+ALTER TABLE session ADD CONSTRAINT fk_session_member_id FOREIGN KEY (member_id) REFERENCES member(id);
 
 -- Indexes
 
@@ -1149,6 +1164,9 @@ CREATE UNIQUE INDEX uq_auction_bid_auction_bidder ON auction_bid (auction_id, bi
 CREATE INDEX idx_auction_bid_auction ON auction_bid (auction_id);
 CREATE INDEX idx_auction_bid_bidder ON auction_bid (bidder_member_id);
 CREATE INDEX idx_auction_compliance_ack_at ON auction_compliance_acknowledgment (acknowledged_at);
+CREATE UNIQUE INDEX uq_session_token_hash ON session (token_hash);
+CREATE INDEX idx_session_member_id ON session (member_id);
+CREATE INDEX idx_session_expires_at ON session (expires_at);
 
 CREATE INDEX idx_price_oracle_conversion_member ON price_oracle_conversion (member_id);
 

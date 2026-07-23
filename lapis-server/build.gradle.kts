@@ -55,6 +55,9 @@ dependencies {
     implementation(libs.hikaricp)
     implementation(libs.pdfbox)
 
+    // V0.7.1 Authentifizierung — see PasswordHasher KDoc for why bcrypt over Argon2id.
+    implementation(libs.bcrypt)
+
     testImplementation(libs.ktor.server.test.host)
     testImplementation(libs.kotest.runner.junit5)
     testImplementation(libs.kotest.assertions.core)
@@ -87,6 +90,24 @@ dependencies {
     testImplementation(libs.kotlin.scripting.jvm)
 }
 
+// V0.7.1 Authentifizierung -- operator-run, one-time admin-password bootstrap for a fresh REAL
+// deployment (no member-onboarding workflow exists yet, see AdminBootstrap KDoc). Reads
+// LAPIS_BOOTSTRAP_ADMIN_EMAIL/LAPIS_BOOTSTRAP_ADMIN_PASSWORD/LAPIS_DB_URL (etc.) from the
+// environment, never from Gradle properties (keeps the password out of the Gradle invocation /
+// shell history / `ps` output): `LAPIS_BOOTSTRAP_ADMIN_EMAIL=... LAPIS_BOOTSTRAP_ADMIN_PASSWORD=...
+// ./gradlew :lapis-server:bootstrapAdmin`.
+tasks.register<JavaExec>("bootstrapAdmin") {
+    group = "application"
+    description = "One-time CLI to set an existing member's initial admin password (V0.7.1 Authentifizierung)."
+    mainClass.set("network.lapis.cloud.server.bootstrap.AdminBootstrapKt")
+    classpath = sourceSets["main"].runtimeClasspath
+}
+
 tasks.test {
     useJUnitPlatform()
+    // V0.7.1 Authentifizierung -- the ONLY place that sets this JVM system property. Read once by
+    // network.lapis.cloud.server.security.AuthTestMode at class-init time to gate the legacy
+    // X-Member-Id trusted-header fallback (see that object's KDoc "Two independent locks"). A real
+    // server process started outside this Gradle `test` task JVM never has this property set.
+    systemProperty("lapis.test.mode", "true")
 }

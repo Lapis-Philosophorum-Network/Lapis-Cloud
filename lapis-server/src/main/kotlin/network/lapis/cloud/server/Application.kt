@@ -20,6 +20,7 @@ import network.lapis.cloud.server.db.DevSeedData
 import network.lapis.cloud.server.economy.oracle.PriceOracleOrchestrator
 import network.lapis.cloud.server.economy.oracle.defaultBitcoinOracleSources
 import network.lapis.cloud.server.postal.LetterxpressPostalMailProvider
+import network.lapis.cloud.server.routes.registerAuthRoutes
 import network.lapis.cloud.server.routes.registerBackupRoutes
 import network.lapis.cloud.server.routes.registerDocumentRoutes
 import network.lapis.cloud.server.routes.registerDsgvoRoutes
@@ -27,6 +28,7 @@ import network.lapis.cloud.server.routes.registerMailmergeRoutes
 import network.lapis.cloud.server.rpc.AccountingService
 import network.lapis.cloud.server.rpc.AuctionService
 import network.lapis.cloud.server.rpc.AuditLogService
+import network.lapis.cloud.server.rpc.AuthService
 import network.lapis.cloud.server.rpc.BackupService
 import network.lapis.cloud.server.rpc.BoardMembershipService
 import network.lapis.cloud.server.rpc.ContributionService
@@ -48,11 +50,13 @@ import network.lapis.cloud.server.rpc.PostalMailService
 import network.lapis.cloud.server.rpc.PriceOracleService
 import network.lapis.cloud.server.rpc.SystemicConsensusService
 import network.lapis.cloud.server.security.ForbiddenException
+import network.lapis.cloud.server.security.LoginRateLimiter
 import network.lapis.cloud.server.security.UnauthenticatedException
 import network.lapis.cloud.shared.Greeting
 import network.lapis.cloud.shared.rpc.IAccountingService
 import network.lapis.cloud.shared.rpc.IAuctionService
 import network.lapis.cloud.shared.rpc.IAuditLogService
+import network.lapis.cloud.shared.rpc.IAuthService
 import network.lapis.cloud.shared.rpc.IBackupService
 import network.lapis.cloud.shared.rpc.IBoardMembershipService
 import network.lapis.cloud.shared.rpc.IContributionService
@@ -103,6 +107,14 @@ fun Application.module() {
     // lifecycle"), same lifecycle as postalMailProvider/documentStorageRoot above.
     val priceOracleOrchestrator = PriceOracleOrchestrator(sources = defaultBitcoinOracleSources())
 
+    // V0.7.1 Authentifizierung -- constructed once here (owns the per-instance in-memory failure
+    // map, see LoginRateLimiter KDoc "Known scope-cut"), same lifecycle as the other singletons
+    // above. cookieSecure is `true` (Secure cookie attribute set) unless explicitly opted out via
+    // LAPIS_COOKIE_SECURE=false -- ONLY for local plaintext-HTTP dev, see registerAuthRoutes KDoc
+    // "Cookie transport".
+    val loginRateLimiter = LoginRateLimiter()
+    val cookieSecure = System.getenv("LAPIS_COOKIE_SECURE")?.equals("false", ignoreCase = true) != true
+
     install(CallLogging)
     install(Compression)
     install(StatusPages) {
@@ -141,6 +153,7 @@ fun Application.module() {
         registerService(IPriceOracleService::class) { call -> PriceOracleService(call, priceOracleOrchestrator) }
         registerService(IPoliticianService::class) { call -> PoliticianService(call) }
         registerService(IAuctionService::class) { call -> AuctionService(call) }
+        registerService(IAuthService::class) { call -> AuthService(call) }
     }
 
     routing {
@@ -151,6 +164,7 @@ fun Application.module() {
         registerDsgvoRoutes()
         registerMailmergeRoutes(documentStorageRoot)
         registerBackupRoutes(DatabaseConfig.connect(), documentStorageRoot)
+        registerAuthRoutes(loginRateLimiter, cookieSecure)
         getAllServiceManagers().forEach { applyRoutes(it) }
     }
 }

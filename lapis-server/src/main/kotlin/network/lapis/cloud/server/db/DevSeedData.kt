@@ -5,6 +5,8 @@ import network.lapis.cloud.server.db.generated.AccountTable
 import network.lapis.cloud.server.db.generated.LedgerAccountTable
 import network.lapis.cloud.server.db.generated.MemberTable
 import network.lapis.cloud.server.db.generated.MembershipTierTable
+import network.lapis.cloud.server.security.DeploymentMode
+import network.lapis.cloud.server.security.PasswordHasher
 import network.lapis.cloud.shared.domain.AccountRole
 import network.lapis.cloud.shared.domain.BillingInterval
 import network.lapis.cloud.shared.domain.LedgerAccountType
@@ -18,21 +20,29 @@ import kotlin.uuid.Uuid
 
 /**
  * Foundation stub (see CLAUDE.md "Vorab-Befund"): there is no member onboarding flow yet
- * (V0.1.2-V0.1.4), so without this there would be no way to obtain a member id to put in the
- * `X-Member-Id` header (see [network.lapis.cloud.server.security.resolveCurrentMember]) and
- * exercise anything in this wave. Seeds a fixed, deterministic set of demo members/accounts —
- * one per [AccountRole] — the first time the member table is empty.
+ * (V0.1.2-V0.1.4), so without this there would be no way to obtain a member id/login for the
+ * "current member" and exercise anything in this wave. Seeds a fixed, deterministic set of demo
+ * members/accounts — one per [AccountRole] — the first time the member table is empty.
  *
  * **Secure by default: opt-IN, not opt-out.** [seedIfEmpty] is a no-op unless
  * `LAPIS_SEED_DEMO_DATA=true` is set explicitly (local/dev convenience only). Even then it
  * hard-refuses to run against anything but the H2 in-memory default — i.e. it never touches a
  * real deployment reachable via `LAPIS_DB_URL`. This matters because the seeded ADMIN account
- * has a fixed, guessable id (`00000000-0000-0000-0000-000000000001`) and a `NULL`
- * `password_hash`: with identity currently resolved from the client-supplied `X-Member-Id`
- * header, that id would otherwise be an unauthenticated full-admin login on a fresh production
- * database whose member table happens to be empty.
+ * has a fixed, guessable id (`00000000-0000-0000-0000-000000000001`) and, since V0.7.1, a real
+ * (if guessable/published-in-source) [DEMO_PASSWORD] hash: since this is opt-in, H2-only, dev/demo
+ * seed data, a guessable dev password is an acceptable, well-documented convenience — the same
+ * `check(DeploymentMode.isH2InMemory())` guard below that always applied here now also protects
+ * a real deployment from ever ending up with these hashed dev credentials.
  */
 object DevSeedData {
+    /**
+     * V0.7.1: fixed, published-in-source password for every [demoMembers] account — H2/opt-in
+     * only (see class KDoc), never usable against a real deployment. `./gradlew run` with
+     * `LAPIS_SEED_DEMO_DATA=true` therefore supports a real password login end to end without
+     * requiring a manual [network.lapis.cloud.server.bootstrap.AdminBootstrap] run first.
+     */
+    const val DEMO_PASSWORD: String = "correct-horse-battery-staple"
+
     data class SeedMember(
         val id: Uuid,
         val displayName: String,
@@ -141,17 +151,6 @@ object DevSeedData {
         )
 
     /**
-     * Returns `true` only when [network.lapis.cloud.server.db.DatabaseConfig] is (or will be)
-     * pointed at the H2 in-memory default — i.e. `LAPIS_DB_URL` is unset or explicitly an
-     * `jdbc:h2:mem:` URL. A real deployment always sets `LAPIS_DB_URL` to a `jdbc:postgresql://...`
-     * URL, so this is the same signal [DatabaseConfig] itself uses to pick a driver.
-     */
-    private fun isH2InMemory(): Boolean {
-        val jdbcUrl = System.getenv("LAPIS_DB_URL")
-        return jdbcUrl == null || jdbcUrl.startsWith("jdbc:h2:mem:")
-    }
-
-    /**
      * Seeds the fixed demo members/accounts the first time the member table is empty.
      *
      * @param force Bypasses the `LAPIS_SEED_DEMO_DATA` opt-in gate. Intended for test setup
@@ -164,10 +163,10 @@ object DevSeedData {
             val seedRequested = System.getenv("LAPIS_SEED_DEMO_DATA")?.equals("true", ignoreCase = true) == true
             if (!seedRequested) return
         }
-        check(isH2InMemory()) {
+        check(DeploymentMode.isH2InMemory()) {
             "Refusing to seed demo data: LAPIS_DB_URL points at a non-H2-in-memory database. " +
-                "Demo seeding (fixed, guessable member ids with a NULL password_hash) must never run " +
-                "against a real deployment."
+                "Demo seeding (fixed, guessable member ids with a published, hashed dev password) " +
+                "must never run against a real deployment."
         }
         // Synchronized around the whole check-then-insert body: many test Spec classes call
         // seedIfEmpty(force = true) from their own beforeSpec, and Kotest/coroutine-dispatched test
@@ -200,6 +199,10 @@ object DevSeedData {
                 it[active] = true
             }
 
+            // Hashed once, reused for every demoMembers row -- bcrypt is deliberately expensive
+            // per call (see PasswordHasher KDoc), no need to pay that cost N times for the same
+            // fixed DEMO_PASSWORD.
+            val demoPasswordHash = PasswordHasher.hash(DEMO_PASSWORD)
             demoMembers.forEach { seed ->
                 MemberTable.insert {
                     it[id] = seed.id
@@ -213,6 +216,7 @@ object DevSeedData {
                     it[id] = Uuid.random()
                     it[memberId] = seed.id
                     it[role] = seed.role
+                    it[passwordHash] = demoPasswordHash
                 }
             }
 
