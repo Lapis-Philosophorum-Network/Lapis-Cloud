@@ -64,8 +64,8 @@ this repository. This README describes only the technical scope.
 
 == Status
 
-As of *V0.7.1* (tag `v0.7.0`), seven major waves are complete, one of them partially (see
-`CHANGELOG.md` for full detail):
+As of *V0.7.3* (tag `v0.7.1`), seven major waves are complete (see `CHANGELOG.md` for full
+detail):
 
 * **V0.1 — Project foundation & standard membership management**: Gradle multi-module structure,
   Ktor server, KVision client, Kilua RPC wiring, CI/CD, member master data, join/leave workflow,
@@ -95,11 +95,15 @@ As of *V0.7.1* (tag `v0.7.0`), seven major waves are complete, one of them parti
   granted politician status, computed as a single shared LTR pool apportioned proportionally across
   all active politicians), and a Price-Oracle for the anchor-asset peg with a load-bearing donation
   → LTR conversion boundary.
-* **V0.7 — Authentication, membership & usable UI (in progress, tag `v0.7.0`)**: real password
-  login and server-side revocable sessions (bcrypt, `HttpOnly`+`Secure`+`SameSite=Strict` cookies),
-  replacing the `X-Member-Id` header stand-in every prior version ran on. The join/registration
-  workflow (V0.7.2) and a real multi-screen web UI beyond the existing four-service tech demo
-  (V0.7.3) are still open — see "What doesn't work yet" below.
+* **V0.7 — Authentication, membership & usable UI (complete, tag `v0.7.1`)**: real password login
+  and server-side revocable sessions (bcrypt, `HttpOnly`+`Secure`+`SameSite=Strict` cookies),
+  replacing the `X-Member-Id` header stand-in every prior version ran on. Self-registration with
+  board approval (a real Beitrittsvertrag/Satzungs-acceptance step, never silence-is-approval),
+  admin-side direct member creation, a member-initiated exit workflow (`AUSGETRETEN`), and a real
+  password-reset token mechanism (email delivery honestly not wired to any real SMTP transport —
+  see "What doesn't work yet"). A real multi-screen web UI (login, registration, dashboard, member
+  administration, contributions, documents, mailing/direct-messages) replacing the previous
+  four-service tech demo, served same-origin from the Ktor server.
 
 Every wave went through this project's mandatory plan → implement → independent review →
 independent security audit pipeline before merging. Known limitations (Letterxpress wire format
@@ -131,17 +135,24 @@ legal counsel — not something this project can decide once for everyone. See `
 
 === What doesn't work yet
 
-* **No join/registration workflow.** No `createMember`/`registerMember` RPC exists — members are
-  currently created only via `DevSeedData` (dev/test) or the `AdminBootstrap` CLI task (first admin
-  only). Planned for V0.7.2.
-* **No real multi-screen web UI.** `lapis-client` is a single-page, four-service tech demo dating
-  back to V0.1.5 (member switcher, Contributions/Documents/Mailing/Direct-Messages). Governance,
-  accounting, compliance, and the entire LTR economy have no UI yet — they are reachable only via
-  Kilua RPC / the HTTP routes. Planned for V0.7.3 (core domains) and later waves (the rest).
+* **No real email delivery anywhere in this codebase.** Password-reset tokens are real
+  (hash-only-persisted, single-use, short-TTL) but `NoOpPasswordResetMailer` only logs that a
+  reset "would be sent" — same honestly-disclosed-stub posture `MailingService.sendMailingMessage`
+  has had since V0.4/V0.1.5. A real SMTP-backed implementation is a drop-in replacement whenever an
+  operator can verify one end to end.
+* **UI coverage beyond the core domains.** Governance, accounting, compliance, and the entire LTR
+  economy have no UI yet — reachable only via Kilua RPC / the HTTP routes. Needs its own future
+  prioritization decision, not yet scheduled as a numbered wave.
 * **Federation (multi-server operation) is not built** — planned for V0.8.
+* **Two known, disclosed, not-yet-fixed gaps found during review** (tracked as follow-up waves):
+  `PeerTransferService.transferLtr`/`GovernanceService.castVoteBallot` don't gate on active
+  membership (an `ANTRAG` applicant could in principle stake/transfer LTR before board approval);
+  and RPC error responses for `@RpcServiceException` subclasses (defined in the JVM-only
+  `lapis-server` module) fail to deserialize cleanly on the Kotlin/JS client — the authorization
+  boundary itself is unaffected, only the error's wire shape is wrong.
 
-None of this is a secret gap: it is exactly why this project is not yet deployed anywhere, despite
-the backend's depth. See the project vault's Lapis Cloud roadmap for the up-to-date wave plan.
+None of this is a secret gap. See the project vault's Lapis Cloud roadmap for the up-to-date wave
+plan.
 
 == Documentation Convention
 
